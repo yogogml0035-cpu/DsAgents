@@ -1,6 +1,6 @@
 # 接口边界 (INTERFACES)
 
-> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成）
+> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**接口与集成边界**文档，描述已确认的接口边界、未证实的跨系统关系、任务排查建议与可扩展集成入口。系统级架构见 `ARCHITECTURE.md`；全局原则与入口见 `AGENTS.md`。
 
@@ -67,10 +67,9 @@
 ### 1.6 MiniMax LLM（Anthropic 兼容，默认 LLM 提供方）
 
 - **边界位置**：`backend/harness.py::DeepAgentsBrainFactory.__init__`。
-- **默认模型**：`anthropic:{MINIMAX_MODEL or "MiniMax-M3"}`，默认 base url `https://api.minimaxi.com/anthropic`。
-- **初始化方式**：`DeepAgentsBrainFactory` 通过 `langchain.chat_models.init_chat_model(...)` 构造 LangChain `ChatAnthropic` 模型对象，再交给 `create_deep_agent(...)`。项目不再手工覆写 `OPENAI_*` 环境变量，也不再依赖 OpenAI 兼容路径。
-- **配置来源**：优先读取 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`；若存在 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`，也会作为 fallback 使用。
-- **配置加载**：`.env` 由 `backend/session.py:15` 在导入时 `load_dotenv` 加载（不是 `__init__.py`，因为没有 `__init__.py`）。
+- **初始化方式**：当 `model is None` 时执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))`，构造 LangChain `ChatAnthropic` 模型对象（经 MiniMax 的 Anthropic 兼容端点、走 Anthropic 协议），再交给 `create_deep_agent(...)`。复用 LangChain 的 Anthropic provider 适配，**不**自行包装 `anthropic` SDK，也**不**再手工覆写 `OPENAI_*` 环境变量。
+- **配置来源（单一、无 fallback）**：**仅**读取 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 三个 env（commit `a30bb99` 切换 Anthropic 兼容协议、`9c78cf2` 移除 fallback）。**无默认值、无 fallback**：既无 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` 回退，也无 `MINIMAX_*` → `OPENAI_*` 复制；env 未设置时 `os.getenv` 返回 `None` 直传 provider，行为由 provider 决定（fail-forward，缺失配置的诊断推迟到首次模型调用）。
+- **配置加载**：`.env` 由 `backend/session.py:15` 在导入时 `load_dotenv` 加载（`tools.py` 也在导入时同样加载；不是 `__init__.py`，因为没有 `__init__.py`）。
 
 ---
 

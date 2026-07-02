@@ -1,6 +1,6 @@
 # 系统架构 (ARCHITECTURE)
 
-> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成）
+> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**系统级架构总览**，描述系统边界、子系统职责、推荐理解路径与稳定目录职责。底层实现细节请直接查阅 `backend/.planning/codebase/` 下的对应事实文档，本文不复制。接口与集成边界见根级 `INTERFACES.md`；跨项目导航见 `coding_maps/SYSTEM_MAP.md`；全局入口与原则见根级 `AGENTS.md`。
 

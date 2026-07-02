@@ -1,6 +1,6 @@
 # 系统地图 (SYSTEM_MAP)
 
-> 系统地图 · 事实来源：根 AGENTS.md 与 backend/.planning/codebase/（2026-07-02 生成）
+> 系统地图 · 事实来源：根 AGENTS.md 与 backend/.planning/codebase/（2026-07-02 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**系统层**导航，综合根级与子项目事实文档，描述多个子项目如何组成一个整体。底层实现细节请直接查阅 `backend/.planning/codebase/` 下的对应文档，本文不复制。证据不足处以"当前源文档未确认"或"需确认"标注，不编造依赖。
 
@@ -8,7 +8,7 @@
 
 ## 1. 系统目的和仓库形态
 
-DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，使能力（Brain、执行器、工具）可插拔，而**不被硬编码到某个 runner、容器、模型或工作流**。DeepAgents 在这里只是可插拔的 Brain / 子 Harness，本地确定性分析器是可插拔执行器；项目自身拥有 Session、事件、资源、工具路由与运行时状态。
+DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，使能力（Brain、执行器、工具）可插拔，而**不被硬编码到某个 runner、容器、模型或工作流**。DeepAgents 在这里只是可插拔的 Brain / 子 Harness（经 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明可替换）；文档解析作为可插拔工具（`ToolCatalog`）由 Harness 注入；项目自身拥有 Session、事件、资源、工具路由与运行时状态。
 
 - **仓库形态**：单子项目仓库，当前只有一个 Python 子项目 `backend/`，五大模块边界全部落在该子项目内。
 - **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
@@ -129,7 +129,7 @@ return HarnessTurn(session_id, context, result)
 | Provider | 状态 | 边界位置 | 关键事实 |
 |----------|------|----------|----------|
 | **MinerU**（当前文档解析 provider） | 已确认 | `backend/tools.py::parse_document`（私有 `_submit_mineru_task` / `_wait_for_mineru_result`） | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` 在调用时读取；`.env.example` 当前示例地址是内网 `http://10.11.0.110:6006`；三步同步任务 API：`POST /tasks` → 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result`；源码未携带鉴权头，需确认内网是否需鉴权；明文 HTTP 无 TLS |
-| **MiniMax**（默认 LLM） | 已确认 | `backend/harness.py::DeepAgentsBrainFactory` | 默认模型 `openai:MiniMax-M3`，base url `https://api.minimaxi.com/v1`，OpenAI 兼容；`MINIMAX_API_KEY` 存在时以**直接赋值**写入 `OPENAI_API_KEY`/`OPENAI_API_BASE`（**覆盖**旧值，避免残留的 DeepSeek 等 key 导致 MiniMax 401） |
+| **MiniMax**（默认 LLM） | 已确认 | `backend/harness.py::DeepAgentsBrainFactory` | 经 **Anthropic 兼容协议**接入：`DeepAgentsBrainFactory.__init__`（当 `model is None` 时）执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))` 落到 LangChain `ChatAnthropic`。**仅**读取 `MINIMAX_MODEL`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL`，**无默认值、无 fallback**（commit `a30bb99` 切换协议、`9c78cf2` 移除 fallback；env 未设置时 `os.getenv` 返回 `None`，行为由 provider 决定）。**不再**复制到 `OPENAI_API_KEY`/`OPENAI_API_BASE`，也**无** `ANTHROPIC_*` 回退 |
 | **DeepSeek** | 仅 `.env.example`，需确认 | — | `.env.example` 有 `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL`，但 backend 源码**零引用**，归属需确认（疑似可切换 LLM 提供方） |
 | **LangSmith** | 仅 `.env.example`，需确认 | — | `LANGSMITH_TRACING=false` 默认关闭，backend 源码无直接引用，经 LangChain/LangGraph 运行时间接生效；若误开启会上传 trace 到外部服务 |
 | **Oracle** | 仅 `.env.example`，需确认 | — | `ORACLE_DSN` 等键已进 `.env.example`，`backend/instantclient/` 已入库，但 backend 源码**零引用**，`backend/pyproject.toml` 的 `[project.dependencies]` 也未列 `oracledb`/`cx_Oracle`（疑似范围蔓延前兆，见 §8） |

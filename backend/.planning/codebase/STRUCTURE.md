@@ -1,6 +1,6 @@
 # STRUCTURE
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 生成）
+> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 生成；本轮刷新：按 commit a30bb99 / 9c78cf2 修正 MiniMax 模型接入为 Anthropic 兼容协议、移除全部 fallback/默认值描述）
 
 ## 1. backend/ 目录树
 
@@ -53,7 +53,7 @@ backend/
   ```
   `self_check.main()` 用 FakeBrain 端到端跑 Harness、验证 trace 事件与错误透传，结尾打印 `self-check passed`。
 
-- **冒烟入口**（需真实 MiniMax key 与网络）：
+- **冒烟入口**（需真实 `MINIMAX_API_KEY` / `MINIMAX_MODEL` / `MINIMAX_BASE_URL` 与网络）：
   ```bash
   python backend/session.py           # 或 cd backend && python -m session
   ```

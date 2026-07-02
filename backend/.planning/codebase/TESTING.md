@@ -1,12 +1,12 @@
 # 测试与验证 (TESTING)
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 生成）
+> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 本轮刷新：更正 brain factory 接线断言为 ChatAnthropic / Anthropic 协议）
 
 本文档如实反映"首个里程碑早期"的测试现状。当前**没有正式的自动化测试套件**，唯一的验证手段是 `self_check.py` 自检脚本。
 
 ## 1. 测试框架与依赖
 
-- **backend/pyproject.toml 的 `[project.dependencies]` 不包含任何测试/lint/类型工具**：无 `pytest`、`unittest`(显式依赖)、`ruff`、`black`、`mypy`、`coverage` 等（亦无 `[project.optional-dependencies]` / `[dependency-groups]` 声明 dev 工具）。
+- **backend/pyproject.toml 的 `[project.dependencies]` 不包含任何测试/lint/类型工具**：无 `pytest`、`unittest`(显式依赖)、`ruff`、`black`、`mypy`、`coverage` 等。亦无 `[project.optional-dependencies]` / `[dependency-groups]` 声明 dev 工具。
 - 仓库内无 `pytest.ini` / `setup.cfg` / `tox.ini` 等测试配置文件。`backend/pyproject.toml` 仅定义运行时依赖与打包元数据，未含 `[tool.pytest]` / `[tool.ruff]` 等测试/lint 配置节。
 - backend 业务源码中无 `test_*.py` / `*_test.py` / `conftest.py`。
 - 唯一引入的"测试相关"导入是标准库 `unittest.mock.patch`（`self_check.py`）和 `types.SimpleNamespace`（`self_check.py`），用于构造假对象，不走任何测试框架 runner。
@@ -17,25 +17,25 @@
 
 `backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document` 真实网络成功路径外的几乎所有核心逻辑。它通过 `python self_check.py` 或 `cd backend && python -m self_check` 运行（`if __name__ == "__main__": main()`）。
 
-### 它验证什么（`main()` 函数）
+### 它验证什么（`main()` 函数，均通过裸 `assert`）
 
 | 验证项 | 覆盖的代码 |
 |--------|-----------|
 | `_find_value` 递归取值 / `_extract_markdown` 提取 md | `tools._find_value` / `_extract_markdown` |
-| `.env` → 环境变量映射（`MINIMAX_*` → `OPENAI_*`）与默认模型拼装 | `harness.DeepAgentsBrainFactory.__init__` |
+| brain factory 模型接线：注入 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL=https://minimax.example/anthropic` / `MINIMAX_MODEL=test-minimax`，断言产物为 `ChatAnthropic` 且 `model == "test-minimax"` | `harness.DeepAgentsBrainFactory.__init__` |
+| 缺失 `MINERU_BASE_URL` 时 fail-fast（抛 `RuntimeError`） | `tools.parse_document` / `_required_env` |
 | `AgentResources` 初始化：建库、建目录、CompositeBackend 就绪 | `resources.AgentResources` |
-| Session 事件 append + 读取 | `session.SqliteSessionStore.emit_event/get_events` |
-| 上下文窗口派生（仅取 user/assistant 对话） | `session.context_window` / `_event_to_message` |
-| TraceMiddleware 记录 model_request/response、tool_request/response | `hands.TraceMiddleware` |
-| **错误透传契约**：model/tool 异常必须被 re-raise 且记为 model_error/tool_error | `hands.TraceMiddleware` + 根 AGENTS.md 原则 |
-| `HarnessRuntime.run_turn` 单轮 + 多轮（用 `_FakeBrain` 替身）+ 事件序列正确 | `harness.HarnessRuntime.run_turn` |
-| 大 payload 超阈值时落盘为 artifact 文件 | `session.SqliteSessionStore`（`max_inline_bytes`） |
+| Session 事件 append + 读取 round-trip | `session.SqliteSessionStore.emit_event/get_events` |
+| 上下文窗口派生（20 上限裁剪、剔除 leading 非 user 消息） | `session.context_window` |
+| TraceMiddleware 记录 model_request / tool_response，且异常被 re-raise | `hands.TraceMiddleware` |
+| `HarnessRuntime.run_turn` 单轮 + 多轮事件序列 `["user_message","assistant_message","user_message","assistant_message"]` | `harness.HarnessRuntime.run_turn` |
+| 超大 payload 落盘 round-trip（`max_inline_bytes=10` → `artifacts/session-events/*.json`） | `session.SqliteSessionStore`（`max_inline_bytes`） |
 
 ### 它如何替身真实 Brain
 
-- `_FakeBrain`：断言首条消息是 `RemoveMessage(id=REMOVE_ALL_MESSAGES)`（对应 harness 的 `_reset_messages`），返回 `echo: {原文}`，绕开真实 LLM 调用。
+- `_FakeBrain`：断言首条消息是 `RemoveMessage(REMOVE_ALL_MESSAGES)`（对应 harness 的 `_reset_messages`），返回 `echo: {原文}`，绕开真实 LLM 调用。
 - `_FakeBrainFactory`：返回 `_FakeBrain`，注入 `HarnessRuntime`。
-- 用 `patch.dict(os.environ, {}, clear=True)` 保证环境变量测试的纯净。
+- 用 `patch.dict(os.environ, {}, clear=True)` 保证环境变量测试的纯净（env-purity）。
 
 ### 输出
 
@@ -56,7 +56,7 @@ python backend/session.py
 # 或：cd backend && python -m session
 ```
 
-`session.main()`（`session.py:222-226`）硬编码 `message = "你好"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。**没有 `args` 未定义 bug**——`session.py:3` 的 `import argparse` 只是遗留未使用 import，`main()` 并未引用 `args`。
+`session.main()`（`session.py`）硬编码 `message = "你好"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。**不是 `args` 未定义 bug**——`session.py:3` 的 `import argparse` 只是遗留未使用 import，`main()` 并未引用 `args`。
 
 > 没有 `python -m backend`（无 `__main__.py`）；也没有 `python -m backend.self_check` / `python -m backend.session`（无 `backend` 包）。
 
@@ -75,8 +75,7 @@ python backend/session.py
    result = run_session("你好")
    print(result["messages"][-1].content)
    ```
-   （`run_session` 在 `session.py:213`，会创建临时 `AgentResources` 并跑一轮 `run_turn`。）
-   前提：`backend/.env` 中配置了有效的 `MINIMAX_API_KEY`。
+   前提：`backend/.env` 中配置了有效的 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`。
 
 > 没有独立的"健康检查"端点——本项目是库/运行时，无 HTTP server。验证以 `self_check` + `run_session` 为主。
 
@@ -88,8 +87,7 @@ python backend/session.py
 
 | 缺口 | 说明 | 建议 |
 |------|------|------|
-| 当前 provider 的真实网络交互 | `tools.parse_document` / `_submit_mineru_task` / `_wait_for_mineru_result` 的成功路径未测试（需可达服务） | 引入 `requests` mock（如 `responses`/`unittest.mock`）覆盖成功/失败状态/超时分支 |
-| `session.main()` 冒烟入口 | 硬编码 `message = "你好"` + 随机 `session_id`，不可参数化；`import argparse` 未使用 | 如需 CLI，补 `argparse` 并接入；否则删除未使用 import |
+| 当前 provider 的真实网络交互 | `tools.parse_document` / `_submit_mineru_task` / `_wait_for_mineru_result` 的成功路径未测试（需 mock `requests`） | 引入 `requests` mock（如 `responses`/`unittest.mock`）覆盖成功/失败状态/超时分支 |
 | 缺乏正式测试框架 | 无 pytest、无 fixture、无 CI | 可选：引入 `pytest` + `tests/` 目录，把 `self_check.py` 的断言拆为 pytest 用例以便细分失败定位 |
 | 无类型检查 / lint | 未配置 mypy/ruff | 可选：加 `mypy`/`ruff` 到 dev 依赖，CI 中跑（代码已全量类型注解，mypy 成本低） |
 | 多 session / 并发 | 仅测单 session 顺序轮次 | 后续若引入并发或 async，需补 |

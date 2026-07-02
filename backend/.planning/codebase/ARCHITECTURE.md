@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-> 事实来源：backend/ 源码与 backend/pyproject.toml（2026-07-02 生成）
+> 事实来源：backend/ 源码与 backend/pyproject.toml（2026-07-02 生成；本轮刷新：按 commit a30bb99 / 9c78cf2 修正 MiniMax 模型接入为 Anthropic 兼容协议、移除全部 fallback/默认值描述）
 
 ## 1. 系统目的
 
@@ -69,7 +69,7 @@ run_session(message, session_id)
 | 里程碑项 | 实现位置 | 状态 |
 |----------|----------|------|
 | 一个通用文档解析工具 | `backend/tools.py::parse_document` + `default_tool_catalog()` | 已实现：模型可见工具名为 `parse_document`，内部当前仍走 MinerU `POST /tasks` → 轮询 `GET /tasks/{id}` → 取 `GET /tasks/{id}/result`；调用时读取 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS`，输出写 `backend/data/document_outputs/{stem}.md` |
-| 一个 DeepAgents 工厂 | `backend/harness.py::DeepAgentsBrainFactory`（实现 `BrainFactory` Protocol） | 已实现：默认模型 `openai:MiniMax-M3`，从环境派生 `OPENAI_API_KEY` / `OPENAI_API_BASE` |
+| 一个 DeepAgents 工厂 | `backend/harness.py::DeepAgentsBrainFactory`（实现 `BrainFactory` Protocol） | 已实现：默认模型经 MiniMax 的 **Anthropic 兼容协议**接入（`init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))`），直接读取 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 三个环境变量，**无默认值、无 fallback** |
 | 一个 `CompositeBackend` 配置 | `backend/resources.py::AgentResources.__enter__` | 已实现：`default=StateBackend()`；`/memories/`、`/conversation_history/`、`/logs/` 路由到 `StoreBackend`；`/artifacts/`、`/large_tool_results/` 路由到 `FilesystemBackend` |
 | 一个最小 session runner | `backend/session.py::run_session` | 已实现：`with AgentResources(ResourceConfig()): create_harness(resources).run_turn(...).result` |
 
