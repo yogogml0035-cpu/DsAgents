@@ -2,6 +2,10 @@
 .codex/
 /scripts/ralph/
 .review-push/
+.venv/
 data/
 __pycache__/
 *.pyc
+
+
+backend/.env
