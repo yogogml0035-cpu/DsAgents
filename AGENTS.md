@@ -69,7 +69,7 @@ MinerU 走 `http://10.11.0.110:6006` 异步任务三步 API，固定参数 `back
 
 ## 8. 命令与入口
 
-`backend/` 采用扁平顶层模块（无包前缀），模块间绝对导入（`from hands import ...`）。因为脚本所在目录会自动加入 `sys.path`，直接运行 `backend/` 内脚本即可让这些绝对导入正确解析。
+`backend/` 不是常规包（无 `__init__.py` / `__main__.py`），故**没有** `python -m backend.*`；脚本所在目录会自动加入 `sys.path`，直接运行即可。
 
 ```bash
 # 安装依赖（在 backend/ 下，用 uv 同步）
@@ -79,8 +79,8 @@ cd backend && uv sync
 python backend/self_check.py
 # 或：cd backend && python -m self_check
 
-# 通过 Python API 调用（无独立 CLI 入口）
+# 通过 Python API 调用（无独立 CLI 入口，需在 backend/ 下或加入 PYTHONPATH）
 cd backend && python -c "from session import run_session; run_session('帮我解析 xxx.pdf')"
 ```
 
-> 注意：导入入口是 `from session import run_session`（扁平顶层，无 `backend.` 前缀）。`self_check` / `run_session` 等模块内部用绝对导入；从仓库根直接 `import session` 会失败，需先把 `backend/` 加入 `PYTHONPATH` 或在该目录下运行。
+> 导入入口是 `from session import run_session`（扁平顶层，无 `backend.` 前缀）。从仓库根直接 `import session` 会失败，需先把 `backend/` 加入 `PYTHONPATH` 或在该目录下运行。

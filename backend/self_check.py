@@ -36,14 +36,16 @@ def main() -> None:
             env_path = Path(tmp) / ".env"
             env_path.write_text(
                 "MINIMAX_API_KEY=test-key\n"
-                "MINIMAX_BASE_URL=https://minimax.example/v1\n"
+                "MINIMAX_BASE_URL=https://minimax.example/anthropic\n"
                 "MINIMAX_MODEL=test-minimax\n",
                 encoding="utf-8",
             )
             load_dotenv(env_path)
-            assert DeepAgentsBrainFactory().model == "openai:test-minimax"
-            assert os.environ["OPENAI_API_KEY"] == "test-key"
-            assert os.environ["OPENAI_API_BASE"] == "https://minimax.example/v1"
+            factory = DeepAgentsBrainFactory()
+            assert factory.model.__class__.__name__ == "ChatAnthropic"
+            assert getattr(factory.model, "model", None) == "test-minimax"
+            assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
+            assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
 
         data_dir = Path(tmp) / "data"
         with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:

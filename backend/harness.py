@@ -6,7 +6,9 @@ from typing import Any, Protocol, Sequence
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import AgentMiddleware
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import RemoveMessage
+from langchain_core.language_models import BaseChatModel
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from hands import Hands, TraceHands
@@ -14,7 +16,7 @@ from resources import AgentResources
 from session import ContextWindow
 from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
-DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/anthropic"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M3"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a document-processing agent. Use MinerU when a user asks to parse "
@@ -39,12 +41,14 @@ class BrainFactory(Protocol):
 
 
 class DeepAgentsBrainFactory:
-    def __init__(self, model: str | None = None, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> None:
+    def __init__(self, model: str | BaseChatModel | None = None, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> None:
         if model is None:
-            if api_key := os.getenv("MINIMAX_API_KEY"):
-                os.environ.setdefault("OPENAI_API_KEY", api_key)
-            os.environ.setdefault("OPENAI_API_BASE", os.getenv("MINIMAX_BASE_URL") or DEFAULT_MINIMAX_BASE_URL)
-            model = f"openai:{os.getenv('MINIMAX_MODEL') or DEFAULT_MINIMAX_MODEL}"
+            # ponytail: keep existing MINIMAX_* keys and adapt them onto LangChain's Anthropic client.
+            model = init_chat_model(
+                f"anthropic:{os.getenv('MINIMAX_MODEL') or DEFAULT_MINIMAX_MODEL}",
+                api_key=os.getenv("MINIMAX_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
+                base_url=os.getenv("MINIMAX_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL") or DEFAULT_MINIMAX_BASE_URL,
+            )
         self.model = model
         self.system_prompt = system_prompt
 

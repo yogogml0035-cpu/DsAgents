@@ -19,7 +19,7 @@
   2. **轮询状态** `GET /tasks/{task_id}`：`timeout=30`，读 `status / state`；命中失败态抛错，命中成功态进入取结果，否则 `time.sleep(poll_interval_seconds)`（默认 2.0s）继续，直到 `timeout_seconds`（默认 900s）超时抛 `TimeoutError`。
   3. **取结果** `GET /tasks/{task_id}/result`：`timeout=120`；递归查找 `md / markdown / md_content / markdown_content`，写出本地 Markdown。
 - **固定参数**：`backend=hybrid-engine`、`effort=high` 不可由调用方更改（里程碑约束）。
-- **产出落点**：默认 `data/mineru_outputs/{stem}.md`，可经 `output_path` 覆盖。
+- **产出落点**：默认 `backend/data/mineru_outputs/{stem}.md`，可经 `output_path` 覆盖。
 - **认证**：源码未携带任何鉴权头/token；需确认该内网端点是否需要鉴权。
 - **传输**：明文 HTTP 无 TLS。
 
@@ -38,38 +38,40 @@
 - **边界位置**：`backend/resources.py::AgentResources.__enter__`。
 - **路由规则**（`CompositeBackend`，`default=StateBackend()`）：
   - `/memories/`、`/conversation_history/`、`/logs/` → `StoreBackend(store=SqliteStore, namespace=("dsagents",))`（持久，落 SQLite）。
-  - `/artifacts/`、`/large_tool_results/` → `FilesystemBackend(root_dir=data/artifacts, virtual_mode=True)`（落盘）。
+  - `/artifacts/`、`/large_tool_results/` → `FilesystemBackend(root_dir=backend/data/artifacts, virtual_mode=True)`（落盘）。
   - 其余路径 → `StateBackend()`（图状态/内存，默认）。
 - **作用**：模型写"记忆/历史/日志"落 SQLite Store，写"大产物/大工具结果"落本地磁盘，写一般内容随图状态保存。遵循根 `AGENTS.md`"使用 DeepAgents 内置虚拟文件系统，不另加包装"。
 
 ### 1.4 Python 导入 API（对外主接口）
 
-`backend/` 通过 `__init__.py` re-export 四个顶层 API（当前**唯一**对外形态，非 HTTP）：
+`backend/` **不是常规 Python 包**（没有 `__init__.py` / `__main__.py`），而是扁平顶层模块（`pyproject.toml` 的 `py-modules`）。模块之间用绝对导入（`from session import ...`），因此对外 API 也是**扁平顶层**导入（**不带** `backend.` 前缀）：
 
 | API | 位置 | 用途 |
 |-----|------|------|
-| `run_session(message, session_id=None)` | `backend/session.py` | 最小 session runner：装配资源 → 单轮执行 → 返回 `HarnessTurn` |
-| `create_mineru_agent(resources)` | `backend/harness.py` | 便捷装配：resources → mineru harness → agent |
+| `run_session(message, session_id=None)` | `backend/session.py` | 最小 session runner：装配资源 → 单轮执行 → 返回 `result` |
+| `create_mineru_agent(resources, session_id)` | `backend/harness.py` | 便捷装配：resources → mineru harness → agent |
 | `create_mineru_harness(resources)` | `backend/harness.py` | 由 resources 构造 MinerU 工具 + DeepAgents Brain 的 `HarnessRuntime` |
 | `parse_document_with_mineru(...)` | `backend/tools.py` | MinerU 解析工具（亦可直接调用） |
 
-典型用法：`from backend import run_session; run_session("帮我解析 xxx.pdf")`。无 `backend/__main__.py`，故 `python -m backend`（无子模块名）当前不可用，需确认是否计划补全。可用命令入口为 `python -m backend.self_check`（自检）。
+典型用法：`from session import run_session; run_session("帮我解析 xxx.pdf")`（需在 `backend/` 目录下或把 `backend/` 加入 `PYTHONPATH`）。**没有** `python -m backend` / `python -m backend.self_check` / `python -m backend.session`（无 `backend` 包）。可用命令入口为 `python backend/self_check.py`（自检）与 `python backend/session.py`（冒烟）。
 
 ### 1.5 三条独立 SQLite 持久化通道
 
 | 用途 | 路径 | 谁建/写 |
 |------|------|---------|
-| 会话事件库（append-only） | `data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） |
-| LangGraph Store（持久记忆/历史/日志） | `data/dsagents_store.db` | `SqliteStore.from_conn_string` + `.setup()`（`backend/resources.py`） |
-| LangGraph Checkpoint（线程状态检查点） | `data/dsagents_checkpoints.db` | `SqliteSaver.from_conn_string` + `.setup()`（`backend/resources.py`） |
+| 会话事件库（append-only） | `backend/data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） |
+| LangGraph Store（持久记忆/历史/日志） | `backend/data/dsagents_store.db` | `SqliteStore.from_conn_string` + `.setup()`（`backend/resources.py`） |
+| LangGraph Checkpoint（线程状态检查点） | `backend/data/dsagents_checkpoints.db` | `SqliteSaver.from_conn_string` + `.setup()`（`backend/resources.py`） |
 
-三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。均为本地文件 SQLite，无连接串/网络、无远程 DB。会话事件库为 append-only，超大 payload（> 256KiB）外溢到 `data/artifacts/session-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
+三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。均为本地文件 SQLite，无连接串/网络、无远程 DB。会话事件库为 append-only，超大 payload（> 256KiB）外溢到 `backend/data/artifacts/session-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
 
-### 1.6 MiniMax LLM（OpenAI 兼容，默认 LLM 提供方）
+### 1.6 MiniMax LLM（Anthropic 兼容，默认 LLM 提供方）
 
 - **边界位置**：`backend/harness.py::DeepAgentsBrainFactory.__init__`。
-- **默认模型**：`openai:{MINIMAX_MODEL or "MiniMax-M3"}`，默认 base url `https://api.minimaxi.com/v1`。
-- **凭据映射**：当 `MINIMAX_API_KEY` 存在时 `os.environ.setdefault("OPENAI_API_KEY", api_key)`，并把 `MINIMAX_BASE_URL`（或默认）`setdefault` 到 `OPENAI_API_BASE`。即以 OpenAI 兼容协议调用 MiniMax。`setdefault` 不覆盖已显式设置的值。
+- **默认模型**：`anthropic:{MINIMAX_MODEL or "MiniMax-M3"}`，默认 base url `https://api.minimaxi.com/anthropic`。
+- **初始化方式**：`DeepAgentsBrainFactory` 通过 `langchain.chat_models.init_chat_model(...)` 构造 LangChain `ChatAnthropic` 模型对象，再交给 `create_deep_agent(...)`。项目不再手工覆写 `OPENAI_*` 环境变量，也不再依赖 OpenAI 兼容路径。
+- **配置来源**：优先读取 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`；若存在 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`，也会作为 fallback 使用。
+- **配置加载**：`.env` 由 `backend/session.py:15` 在导入时 `load_dotenv` 加载（不是 `__init__.py`，因为没有 `__init__.py`）。
 
 ---
 
@@ -82,7 +84,7 @@
 | **DeepSeek** | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL=https://api.deepseek.com`、`DEEPSEEK_MODEL=deepseek-v4-flash` | backend 源码零引用，疑似预留为可切换 LLM 提供方，需确认。 |
 | **Oracle** | `ORACLE_DSN`、`ORACLE_USERNAME`、`ORACLE_PASSWORD`、`ORACLE_CLIENT_LIB_DIR`、`ORACLE_TIMEOUT_SECONDS` | backend 源码零引用；`backend/pyproject.toml` 的 `[project.dependencies]` 未列 `oracledb`/`cx_Oracle`；但 `backend/instantclient/` Oracle 二进制已提交进 git。配置先于实现进入仓库，疑似范围蔓延前兆，需确认是否有未列入里程碑的 Oracle 数据源需求。 |
 | **LangSmith** | `LANGSMITH_TRACING=false`、`LANGSMITH_ENDPOINT`、`LANGSMITH_PROJECT=DsAgents` | 默认关闭，backend 源码无直接引用，经 LangChain/LangGraph 运行时间接生效。若误开启会把 trace 上传外部服务。需确认是否计划启用。 |
-| **CORS / 前端** | `CORS_ORIGINS=http://localhost:8500,8500` | 端口 8500 暗示 Streamlit。backend 无 FastAPI/uvicorn 等 web 框架、无 HTTP server，源码未引用。属预留 / 前端边界，服务层归属需确认。 |
+| **CORS / 前端** | `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500` | 端口 8500 暗示 Streamlit。backend 无 FastAPI/uvicorn 等 web 框架、无 HTTP server，源码未引用。属预留 / 前端边界，服务层归属需确认。 |
 
 ---
 
@@ -92,8 +94,8 @@
 
 - **改 MinerU 工具**：读 `backend/.planning/codebase/INTEGRATIONS.md` §1（三步 API、固定参数、字段模糊匹配）、`CONCERNS.md` §1（地址硬编码、无重试/降级、明文 HTTP）。提醒：`backend=hybrid-engine`/`effort=high` 固定不可配；MinerU 协议字段变更会冲击 `tools.py::_find_value` 模糊匹配；服务不可用为硬失败。
 - **改存储 / 持久化**：读 `backend/.planning/codebase/STRUCTURE.md` §4（资源目录约定）、`INTEGRATIONS.md` §3-4（三 SQLite 库 + CompositeBackend 路由）。提醒：会话事件 append-only、不可 update/delete；三库相互独立；超大 payload 外溢机制需保持。
-- **加 / 改 Provider（LLM 或外部服务）**：读本文件 §1.6 / §2、`backend/.planning/codebase/STACK.md`。提醒：当前唯一外部网络依赖是 MinerU 内网端点；MiniMax 经 OpenAI 兼容协议、`setdefault` 不覆盖显式值；DeepSeek/Oracle/LangSmith/CORS 均需先确认归属再动。
-- **改 Brain / Harness 执行**：读 `backend/.planning/codebase/ARCHITECTURE.md` §3-4（运行时数据流、关键设计决策）、本文件 §1.2。提醒：保持 `BrainFactory` Protocol 可替换、Harness 薄、真实错误透传。
+- **加 / 改 Provider（LLM 或外部服务）**：读本文件 §1.6 / §2、`backend/.planning/codebase/STACK.md`。提醒：当前唯一外部网络依赖是 MinerU 内网端点；MiniMax 默认经 Anthropic 兼容协议接入，优先走 `MINIMAX_*` 配置并兼容 `ANTHROPIC_*` fallback；DeepSeek/Oracle/LangSmith/CORS 均需先确认归属再动。
+- **改 Brain / Harness 执行**：读 `backend/.planning/codebase/ARCHITECTURE.md` §4-5（运行时数据流、关键设计决策）、本文件 §1.2。提醒：保持 `BrainFactory` Protocol 可替换、Harness 薄、真实错误透传。
 - **改可观测 / trace**：读 `backend/.planning/codebase/CONCERNS.md` §4。提醒：middleware 仅记录模型可见层，不触碰隐藏思维链；trace 写入 SQLite 的错误事件含 `repr(exc)`，当前无脱敏。
 
 ---
@@ -105,7 +107,7 @@
 - **新增前端 / 服务层**：当前 backend 是 Python API 而非 HTTP 服务。新增前端须同时决定"是否引入服务层"——根 `AGENTS.md` 明确服务层只在真实 caller 需要时才加，每个新抽象必须保护五大边界之一。`.env.example` 的 `CORS_ORIGINS=http://localhost:8500` 已预留前端端口（疑似 Streamlit），属未实现边界。新增子项目后须在 `coding_maps/SYSTEM_MAP.md` §2-4 同步子项目职责表、调用链、接口边界。
 - **新增可插拔 Brain / runner**：实现 `BrainFactory` Protocol 即可（参照 `DeepAgentsBrainFactory` 与 `self_check.py::_FakeBrainFactory`），不要把新 runner 硬绑到现有工具/资源。
 - **新增工具**：实现 `ToolHandler` 并加入 `ToolCatalog`，由 Harness 注入；工具不绑定单一 runner。
-- **新增 LLM Provider**：参照 `DeepAgentsBrainFactory` 的 OpenAI 兼容映射方式（`setdefault` 回填 `OPENAI_API_KEY`/`OPENAI_API_BASE`）；DeepSeek 等 `.env.example` 预留键的归属需先确认。
+- **新增 LLM Provider**：参照 `DeepAgentsBrainFactory` 的 LangChain provider 初始化方式（`init_chat_model("provider:model", ...)` 直接构造模型对象）；DeepSeek 等 `.env.example` 预留键的归属需先确认。
 - **新增持久化通道**：当前三 SQLite 库 + 文件系统产物均由 `AgentResources` / `ResourceConfig` 集中管理。新增存储应经同一资源装配层，保持会话事件 append-only 语义。
 - **新增子项目访问 backend 数据**：应通过明确接口访问而非直连 SQLite 库；事件 / 产物 / 三库归属 backend。
 

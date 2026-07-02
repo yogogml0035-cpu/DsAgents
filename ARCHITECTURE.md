@@ -8,8 +8,9 @@
 
 ## 1. 系统边界
 
-- **形态**：单子项目仓库，当前唯一产品子项目为 Python 包 `backend/`。五大模块边界（Session / Harness / Hands / Resources / Tools）全部落在该包内。
+- **形态**：单子项目仓库，当前唯一产品子项目为 Python 项目 `backend/`。五大模块边界（Session / Harness / Hands / Resources / Tools）全部落在该项目内。
 - **对外形态**：`backend/` 暴露的是 **Python 导入 API**（`run_session`、`create_mineru_agent` 等），**不是 HTTP 服务**。无 FastAPI / uvicorn / Flask 等 web 框架，无 HTTP server、无健康检查端点、无 SSE / WebSocket 通道。
+- **模块形态**：`backend/` **不是常规 Python 包**——没有 `__init__.py` / `__main__.py`，而是以**扁平顶层模块**形式（`pyproject.toml` 的 `[tool.setuptools] package-dir = {"" = "."}` + `py-modules = [...]`）安装；模块间用绝对导入（`from session import ...`），**不带** `backend.` 前缀。
 - **无前端**：当前无前端子项目。`.env.example` 中的 `CORS_ORIGINS` 属预留边界，需确认（详见 `INTERFACES.md` §2）。
 - **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个 MinerU 解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
 
@@ -27,7 +28,7 @@
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` |
 | **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document_with_mineru`、`default_tool_catalog` |
 
-> `backend/__init__.py` 是装配层入口（加载 `.env` 后 re-export 顶层 API），本身不属于五大边界。DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。
+> DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。没有 `backend/__init__.py` 装配层。
 
 ### 五大边界协作（运行时数据流）
 
@@ -46,7 +47,7 @@ run_session(message, session_id)
         → return HarnessTurn(session_id, context, result)
 ```
 
-要点：上下文窗口（步骤③）是从 append-only 事件历史**派生**的视图，派生前先写入了用户事件（步骤②），执行 trace 由 Hands 的 middleware 产生（步骤⑤内 emit），最终助手回复再写回事件（步骤⑥）。`brain.invoke` 前用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 重置 langgraph 内部消息，再用 Session 派生的上下文重建——Session 是"单一事实源"而非 langgraph thread 状态。完整调用链与字段细节见 `backend/.planning/codebase/ARCHITECTURE.md` §3 与 `coding_maps/SYSTEM_MAP.md` §3。
+要点：上下文窗口（步骤③）是从 append-only 事件历史**派生**的视图，派生前先写入了用户事件（步骤②），执行 trace 由 Hands 的 middleware 产生（步骤⑤内 emit），最终助手回复再写回事件（步骤⑥）。`brain.invoke` 前用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 重置 langgraph 内部消息，再用 Session 派生的上下文重建——Session 是"单一事实源"而非 langgraph thread 状态。完整调用链与字段细节见 `backend/.planning/codebase/ARCHITECTURE.md` §4 与 `coding_maps/SYSTEM_MAP.md` §3。
 
 ---
 
@@ -70,13 +71,12 @@ run_session(message, session_id)
 
 | 文件 | 职责 |
 |------|------|
-| `backend/__init__.py` | 加载 `.env` 并 re-export 顶层装配 API（`run_session` 等） |
-| `backend/session.py` | append-only 事件存储 + 上下文窗口派生 + 最小 runner |
+| `backend/session.py` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；导入时 `load_dotenv` 加载 `backend/.env` |
 | `backend/harness.py` | 读历史 → 派生上下文 → 请求执行 → 写回事件（Brain 工厂 + 单轮运行时） |
 | `backend/hands.py` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
-| `backend/resources.py` | 持有 SQLite store/checkpointer + `CompositeBackend` 路由 |
+| `backend/resources.py` | 持有 SQLite store/checkpointer + `CompositeBackend` 路由；`data_dir` 锁定在 `backend/data/` |
 | `backend/tools.py` | MinerU 解析工具与工具注册（`ToolCatalog`） |
-| `backend/self_check.py` | 端到端自检五大边界与约束（FakeBrain，可作 `python -m backend.self_check` 运行） |
+| `backend/self_check.py` | 端到端自检五大边界与约束（FakeBrain，可作 `python self_check.py` 运行） |
 
 **非产品知识目录**（不纳入架构理解，修改时不必联动本文档）：
 
@@ -84,7 +84,7 @@ run_session(message, session_id)
 - `backend/instantclient/` —— Oracle Instant Client 19.31（Windows 二进制依赖产物，已提交进 git，无任何 Python 代码 import 它，与 MinerU 里程碑无关）。
 - `.agents/`、`.codex/`、`.review-push/` —— 本地 agent / 工具配置元数据。
 
-**运行时产物**（`.gitignore` 忽略，首次运行自动创建，不入库）：`data/`（三 SQLite 库 + artifacts + MinerU 输出）、`.venv/`、`.env`、`__pycache__/`。
+**运行时产物**（`.gitignore` 忽略，首次运行自动创建，不入库）：`backend/data/`（三 SQLite 库 + artifacts + MinerU 输出）、`.venv/`、`.env`、`__pycache__/`。
 
 ---
 
@@ -99,6 +99,7 @@ run_session(message, session_id)
 - **真实错误透传**：`TraceMiddleware` 在 `except` 中 emit `*_error` 事件后 `raise`，`self_check.py` 断言错误必须穿透。改动错误处理时不得吞掉异常或包装失真。
 - **Tools 不绑定 runner**：工具能力可被任意 Brain 复用，经 `ToolCatalog` 注入。新增工具应走同一注册机制。
 - **Brain 可替换**：`BrainFactory` 是 Protocol，DeepAgents 并非硬绑定。改动 Brain 相关代码时保持 Protocol 边界，不要把 DeepAgents 耦合成唯一实现。
+- **资源路径与 CWD 无关**：`resources.py` 用 `_BACKEND_DIR = Path(__file__).resolve().parent` 把数据目录锁定在 `backend/data/`，脚本可从任意工作目录运行。
 - **改代码后同步事实层**：修改 `backend/` 实现后，应同步更新 `backend/.planning/codebase/` 下对应事实文档，再视影响范围回看本文件与 `INTERFACES.md`、`coding_maps/SYSTEM_MAP.md`。
 
 > 接口明细、Provider 边界、未证实关系与扩展入口见 `INTERFACES.md`。
