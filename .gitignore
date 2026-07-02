@@ -2,3 +2,6 @@
 .codex/
 /scripts/ralph/
 .review-push/
+data/
+__pycache__/
+*.pyc
