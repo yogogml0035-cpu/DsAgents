@@ -10,20 +10,20 @@
 
 ## 1. 已确认接口边界
 
-### 1.1 MinerU 异步任务 API（文档解析）
+### 1.1 MinerU 异步任务 API（当前文档解析 provider）
 
-- **边界位置**：`backend/tools.py::parse_document_with_mineru`（经 `default_tool_catalog()` 注册为工具）。
-- **服务地址**：`MINERU_BASE_URL = "http://10.11.0.110:6006"`（`backend/tools.py:12`，源码**硬编码**）。
+- **边界位置**：公开入口是 `backend/tools.py::parse_document`（经 `default_tool_catalog()` 注册为工具）；实际 HTTP 调用留在私有 helper `_submit_mineru_task` / `_wait_for_mineru_result`。
+- **服务地址**：`parse_document` 在调用时读取 `MINERU_BASE_URL`；`.env.example` 当前示例值为 `http://10.11.0.110:6006`。
 - **三步调用流程**（均为同步阻塞的 `requests`）：
-  1. **提交任务** `POST /tasks`：multipart 上传文件，表单字段固定 `backend=hybrid-engine`、`effort=high`、`return_md=true`、`response_format_zip=false`；`timeout=60`。从响应递归查找 `task_id / taskId / id` 得到 `task_id`。
-  2. **轮询状态** `GET /tasks/{task_id}`：`timeout=30`，读 `status / state`；命中失败态抛错，命中成功态进入取结果，否则 `time.sleep(poll_interval_seconds)`（默认 2.0s）继续，直到 `timeout_seconds`（默认 900s）超时抛 `TimeoutError`。
+  1. **提交任务** `POST /tasks`：multipart 上传文件，`backend` / `effort` 分别来自 `MINERU_BACKEND` / `MINERU_EFFORT`，其余表单字段仍固定 `return_md=true`、`response_format_zip=false`；`timeout=60`。从响应递归查找 `task_id / taskId / id` 得到 `task_id`。
+  2. **轮询状态** `GET /tasks/{task_id}`：`timeout=30`，读 `status / state`；命中失败态抛错，命中成功态进入取结果，否则 `time.sleep(2.0)` 继续，直到 `MINERU_TIMEOUT_SECONDS`（经 `int(...)` 转换）超时抛 `TimeoutError`。
   3. **取结果** `GET /tasks/{task_id}/result`：`timeout=120`；递归查找 `md / markdown / md_content / markdown_content`，写出本地 Markdown。
-- **固定参数**：`backend=hybrid-engine`、`effort=high` 不可由调用方更改（里程碑约束）。
-- **产出落点**：默认 `backend/data/mineru_outputs/{stem}.md`，可经 `output_path` 覆盖。
+- **公开参数**：工具只暴露 `file_path` 与可选 `output_path`；provider 参数全部走 `MINERU_*` 环境变量。
+- **产出落点**：默认 `backend/data/document_outputs/{stem}.md`，可经 `output_path` 覆盖。
 - **认证**：源码未携带任何鉴权头/token；需确认该内网端点是否需要鉴权。
 - **传输**：明文 HTTP 无 TLS。
 
-> `.env.example` 虽有 `MINERU_BASE_URL=`、`MINERU_BACKEND=`、`MINERU_TIMEOUT_SECONDS=` 三个键，但 `backend/tools.py` 当前**未读取**这些环境变量——地址与参数均硬编码。属于配置键与实现脱节（死配置）。
+> `.env.example` 当前提供 `MINERU_BASE_URL`、`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS` 示例值；`parse_document` 在调用路径读取它们。缺失会抛 `RuntimeError`，非法 `MINERU_TIMEOUT_SECONDS` 直接暴露原生 `ValueError`。
 
 ### 1.2 DeepAgents BrainFactory Protocol（可插拔 Brain）
 
@@ -49,9 +49,8 @@
 | API | 位置 | 用途 |
 |-----|------|------|
 | `run_session(message, session_id=None)` | `backend/session.py` | 最小 session runner：装配资源 → 单轮执行 → 返回 `result` |
-| `create_mineru_agent(resources, session_id)` | `backend/harness.py` | 便捷装配：resources → mineru harness → agent |
-| `create_mineru_harness(resources)` | `backend/harness.py` | 由 resources 构造 MinerU 工具 + DeepAgents Brain 的 `HarnessRuntime` |
-| `parse_document_with_mineru(...)` | `backend/tools.py` | MinerU 解析工具（亦可直接调用） |
+| `create_harness(resources)` | `backend/harness.py` | 由 resources 构造通用文档解析工具 + DeepAgents Brain 的 `HarnessRuntime` |
+| `parse_document(file_path, output_path=None)` | `backend/tools.py` | 通用文档解析工具（当前 provider 为 MinerU，亦可直接调用） |
 
 典型用法：`from session import run_session; run_session("帮我解析 xxx.pdf")`（需在 `backend/` 目录下或把 `backend/` 加入 `PYTHONPATH`）。**没有** `python -m backend` / `python -m backend.self_check` / `python -m backend.session`（无 `backend` 包）。可用命令入口为 `python backend/self_check.py`（自检）与 `python backend/session.py`（冒烟）。
 
@@ -92,9 +91,9 @@
 
 按任务类型，应**先读**下列事实文档（路径相对仓库根），再到本文件定位接口边界：
 
-- **改 MinerU 工具**：读 `backend/.planning/codebase/INTEGRATIONS.md` §1（三步 API、固定参数、字段模糊匹配）、`CONCERNS.md` §1（地址硬编码、无重试/降级、明文 HTTP）。提醒：`backend=hybrid-engine`/`effort=high` 固定不可配；MinerU 协议字段变更会冲击 `tools.py::_find_value` 模糊匹配；服务不可用为硬失败。
+- **改文档解析工具**：读 `backend/.planning/codebase/INTEGRATIONS.md` §1（三步 API、`MINERU_*` 配置、字段模糊匹配）、`CONCERNS.md` §1（硬失败、明文 HTTP、无重试/降级）。提醒：模型侧公开工具名是 `parse_document`；当前 provider 仍是 MinerU，协议字段变更会冲击 `tools.py::_find_value` 模糊匹配。
 - **改存储 / 持久化**：读 `backend/.planning/codebase/STRUCTURE.md` §4（资源目录约定）、`INTEGRATIONS.md` §3-4（三 SQLite 库 + CompositeBackend 路由）。提醒：会话事件 append-only、不可 update/delete；三库相互独立；超大 payload 外溢机制需保持。
-- **加 / 改 Provider（LLM 或外部服务）**：读本文件 §1.6 / §2、`backend/.planning/codebase/STACK.md`。提醒：当前唯一外部网络依赖是 MinerU 内网端点；MiniMax 默认经 Anthropic 兼容协议接入，优先走 `MINIMAX_*` 配置并兼容 `ANTHROPIC_*` fallback；DeepSeek/Oracle/LangSmith/CORS 均需先确认归属再动。
+- **加 / 改 Provider（LLM 或外部服务）**：读本文件 §1.6 / §2、`backend/.planning/codebase/STACK.md`。提醒：当前唯一已接入的外部文档解析 provider 是 MinerU；MiniMax 默认经 Anthropic 兼容协议接入，优先走 `MINIMAX_*` 配置；DeepSeek/Oracle/LangSmith/CORS 均需先确认归属再动。
 - **改 Brain / Harness 执行**：读 `backend/.planning/codebase/ARCHITECTURE.md` §4-5（运行时数据流、关键设计决策）、本文件 §1.2。提醒：保持 `BrainFactory` Protocol 可替换、Harness 薄、真实错误透传。
 - **改可观测 / trace**：读 `backend/.planning/codebase/CONCERNS.md` §4。提醒：middleware 仅记录模型可见层，不触碰隐藏思维链；trace 写入 SQLite 的错误事件含 `repr(exc)`，当前无脱敏。
 

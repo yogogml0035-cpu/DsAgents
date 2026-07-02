@@ -11,7 +11,7 @@
 DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，使能力（Brain、执行器、工具）可插拔，而**不被硬编码到某个 runner、容器、模型或工作流**。DeepAgents 在这里只是可插拔的 Brain / 子 Harness，本地确定性分析器是可插拔执行器；项目自身拥有 Session、事件、资源、工具路由与运行时状态。
 
 - **仓库形态**：单子项目仓库，当前只有一个 Python 子项目 `backend/`，五大模块边界全部落在该子项目内。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个 MinerU 解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
+- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
 - **根级原则**（见 `AGENTS.md`）：稳定接口而非实现；Session 存 append-only 完整持久任务事实、不是上下文窗口；真实错误透传；保持 Harness 薄；每个新抽象必须保护五大边界之一否则移除。
 
 ---
@@ -20,7 +20,7 @@ DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session
 
 | 子项目 | 路径 | 主要职责 | 关键依赖 | 可独立运行 |
 |--------|------|----------|----------|------------|
-| backend | `backend/` | Harness 级 agent 运行时底座：五大模块边界（Session/Harness/Hands/Resources/Tools）全部在此；DeepAgents 作为可插拔 Brain；MinerU 解析工具 | `deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-core>=1.4.8`、`langchain-openai>=0.3.0`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-dotenv>=1.2.2`、`requests>=2.34.2`（来源 `backend/pyproject.toml`，uv 管理） | 是：`python backend/self_check.py`（自检）/ `python backend/session.py`（冒烟）/ `from session import run_session`（导入调用）；**没有** `python -m backend.*`（`backend/` 不是包，无 `__init__.py` / `__main__.py`） |
+| backend | `backend/` | Harness 级 agent 运行时底座：五大模块边界（Session/Harness/Hands/Resources/Tools）全部在此；DeepAgents 作为可插拔 Brain；通用文档解析工具 | `deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-dotenv>=1.2.2`、`requests>=2.34.2`（来源 `backend/pyproject.toml`，uv 管理） | 是：`python backend/self_check.py`（自检）/ `python backend/session.py`（冒烟）/ `from session import run_session`（导入调用）；**没有** `python -m backend.*`（`backend/` 不是包，无 `__init__.py` / `__main__.py`） |
 
 > **模块形态**：`backend/` **不是常规 Python 包**，没有 `__init__.py` / `__main__.py`。它在 `pyproject.toml` 中以**扁平顶层模块**（`[tool.setuptools] package-dir = {"" = "."}` + `py-modules = ["hands","harness","resources","session","tools","self_check"]`）声明，模块间用绝对导入（`from session import ...`），导入入口为 `from session import run_session`（**不带** `backend.` 前缀）。
 >
@@ -45,7 +45,7 @@ with AgentResources() 装配资源                 [backend/resources.py]
   │  · 装配 CompositeBackend（StateBackend + StoreBackend + FilesystemBackend）
   │
   ▼
-create_mineru_harness(resources).run_turn()    [backend/harness.py]
+create_harness(resources).run_turn()           [backend/harness.py]
   │
   ├─① ensure_session(session_id)              写 sessions 表
   ├─② emit_event("user_message")              写会话事件库（append-only）
@@ -61,11 +61,11 @@ create_mineru_harness(resources).run_turn()    [backend/harness.py]
   │     │   · wrap_model_call → model_request/model_response（出错 model_error 并 raise）
   │     │   · wrap_tool_call  → tool_request/tool_response（出错 tool_error 并 raise）
   │     │
-  │     └─ 若模型决定解析文档 → Tools.parse_document_with_mineru  [backend/tools.py]
-  │           POST http://10.11.0.110:6006/tasks (固定 backend=hybrid-engine, effort=high)
+  │     └─ 若模型决定解析文档 → Tools.parse_document              [backend/tools.py]
+  │           POST ${MINERU_BASE_URL}/tasks (backend/effort 来自 MINERU_* env)
   │             → 轮询 GET /tasks/{task_id}
   │             → 取 GET /tasks/{task_id}/result
-  │             → 写 backend/data/mineru_outputs/{stem}.md
+  │             → 写 backend/data/document_outputs/{stem}.md
   │
   │     └─ 大产物经 CompositeBackend 路由：/artifacts/、/large_tool_results/ → backend/data/artifacts/；
   │        /memories/、/conversation_history/、/logs/ → SqliteStore (dsagents_store.db)；
@@ -82,7 +82,7 @@ return HarnessTurn(session_id, context, result)
 
 ## 4. 后端到前端的接口边界
 
-**当前无前端子项目。** 本仓库仅含 `backend/`，backend 暴露的是 **Python 导入 API**（`from session import run_session`、`from harness import create_mineru_agent`、`from tools import parse_document_with_mineru`），**而非 HTTP 服务**：
+**当前无前端子项目。** 本仓库仅含 `backend/`，backend 暴露的是 **Python 导入 API**（`from session import run_session`、`from harness import create_harness`、`from tools import parse_document`），**而非 HTTP 服务**：
 
 - 无 FastAPI / uvicorn / Flask 等 web 框架依赖（`backend/pyproject.toml` 的 `[project.dependencies]` 未声明，源码无引用）。
 - 无 HTTP server、无健康检查端点、无 SSE/WebSocket 通道。
@@ -114,7 +114,7 @@ return HarnessTurn(session_id, context, result)
 | 数据根目录 | `backend/data/` | `ResourceConfig.data_dir = _BACKEND_DIR/"data"`，运行时创建，`.gitignore` 忽略 |
 | 大产物根目录 | `backend/data/artifacts/` | `ResourceConfig.artifacts_dir`；DeepAgents `FilesystemBackend` 根 |
 | 超大事件外溢 JSON | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore` |
-| MinerU 解析输出 | `backend/data/mineru_outputs/<stem>.md` | `backend/tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"mineru_outputs"`） |
+| 文档解析输出 | `backend/data/document_outputs/<stem>.md` | `backend/tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"document_outputs"`） |
 
 ### 5.3 DeepAgents `CompositeBackend` 路由（`backend/resources.py`）
 
@@ -128,7 +128,7 @@ return HarnessTurn(session_id, context, result)
 
 | Provider | 状态 | 边界位置 | 关键事实 |
 |----------|------|----------|----------|
-| **MinerU**（文档解析） | 已确认 | `backend/tools.py::parse_document_with_mineru` | 内网 `http://10.11.0.110:6006`，**源码硬编码**；三步同步任务 API：`POST /tasks` → 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result`；`backend=hybrid-engine`、`effort=high` **固定且不可配置**（里程碑约束）；源码未携带鉴权头，需确认内网是否需鉴权；明文 HTTP 无 TLS |
+| **MinerU**（当前文档解析 provider） | 已确认 | `backend/tools.py::parse_document`（私有 `_submit_mineru_task` / `_wait_for_mineru_result`） | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` 在调用时读取；`.env.example` 当前示例地址是内网 `http://10.11.0.110:6006`；三步同步任务 API：`POST /tasks` → 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result`；源码未携带鉴权头，需确认内网是否需鉴权；明文 HTTP 无 TLS |
 | **MiniMax**（默认 LLM） | 已确认 | `backend/harness.py::DeepAgentsBrainFactory` | 默认模型 `openai:MiniMax-M3`，base url `https://api.minimaxi.com/v1`，OpenAI 兼容；`MINIMAX_API_KEY` 存在时以**直接赋值**写入 `OPENAI_API_KEY`/`OPENAI_API_BASE`（**覆盖**旧值，避免残留的 DeepSeek 等 key 导致 MiniMax 401） |
 | **DeepSeek** | 仅 `.env.example`，需确认 | — | `.env.example` 有 `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL`，但 backend 源码**零引用**，归属需确认（疑似可切换 LLM 提供方） |
 | **LangSmith** | 仅 `.env.example`，需确认 | — | `LANGSMITH_TRACING=false` 默认关闭，backend 源码无直接引用，经 LangChain/LangGraph 运行时间接生效；若误开启会上传 trace 到外部服务 |
@@ -146,7 +146,7 @@ return HarnessTurn(session_id, context, result)
 - **打包配置**：`backend/pyproject.toml` 用 `[tool.setuptools] package-dir = {"" = "."}` + `py-modules = [...]` 声明扁平顶层模块（不是常规包，无 `__init__.py`）。
 - **非产品知识目录**（不纳入系统层理解，修改时不必联动地图）：
   - `scripts/ralph/` —— 被 `.gitignore` 忽略的自动化脚本。
-  - `backend/instantclient/` —— Oracle Instant Client 19.31（Windows `.dll/.exe/.jar`），属**已提交进 git 的依赖产物**，无任何 Python 代码 import 它，与 MinerU 里程碑无关。
+  - `backend/instantclient/` —— Oracle Instant Client 19.31（Windows `.dll/.exe/.jar`），属**已提交进 git 的依赖产物**，无任何 Python 代码 import 它，与当前里程碑无关。
   - `.agents/`、`.codex/`、`.review-push/` —— 本地 agent / 工具配置元数据。
 - **数据/产物不入库**：`backend/data/`、`.venv/`、`.env`、`__pycache__/` 均被 `.gitignore` 忽略，首次运行自动创建。
 
@@ -160,13 +160,13 @@ return HarnessTurn(session_id, context, result)
 - 先读：`backend/.planning/codebase/ARCHITECTURE.md`（五大边界 + 运行时数据流 + 关键设计决策）、`STRUCTURE.md`（模块清单 + 入口 + 资源目录约定）、`CONVENTIONS.md`（命名 / 类型 / 持久化约定）。
 - 系统层提醒：Session 是 append-only 单一事实源，不是上下文窗口；改动持久化须保持"事件不 update/delete"；新增抽象必须保护五大边界之一。
 
-### 7.2 MinerU 工具或 DeepAgents Brain 修改
-- 先读：`backend/.planning/codebase/INTEGRATIONS.md`（MinerU 三步 API、固定参数、CompositeBackend 路由）、`STACK.md`（DeepAgents/LangChain/LangGraph 版本与用法）。
-- 系统层提醒：MinerU `backend=hybrid-engine`/`effort=high` 固定不可配置；Brain 经 `BrainFactory` Protocol 可替换（`self_check.py` 用 `_FakeBrain` 证明）；改 MinerU 协议字段会冲击 `_find_value` 模糊匹配。
+### 7.2 文档解析工具或 DeepAgents Brain 修改
+- 先读：`backend/.planning/codebase/INTEGRATIONS.md`（当前 provider 的三步 API、`MINERU_*` 配置、CompositeBackend 路由）、`STACK.md`（DeepAgents/LangChain/LangGraph 版本与用法）。
+- 系统层提醒：模型侧公开工具名是 `parse_document`；当前 provider 仍是 MinerU；Brain 经 `BrainFactory` Protocol 可替换（`self_check.py` 用 `_FakeBrain` 证明）；改当前 provider 的协议字段会冲击 `_find_value` 模糊匹配。
 
 ### 7.3 跨系统接口 / 集成修改
 - 先读：`backend/.planning/codebase/INTEGRATIONS.md`（全部 provider 边界 + 集成调用链）、`STACK.md`（外部服务清单）。
-- 系统层提醒：当前唯一外部网络依赖是 MinerU 内网端点；MiniMax 经 OpenAI 兼容协议；DeepSeek / Oracle / LangSmith / CORS 均为 `.env.example` 预留、源码未引用，改它们前先确认归属（见 §5.4 / §8）。
+- 系统层提醒：当前唯一已接入的外部文档解析网络依赖是 provider 端点；MiniMax 经 Anthropic 兼容协议；DeepSeek / Oracle / LangSmith / CORS 均为 `.env.example` 预留、源码未引用，改它们前先确认归属（见 §5.4 / §8）。
 
 ### 7.4 新增子项目（如未来加 frontend）时应注意的边界
 - 先读：根 `AGENTS.md`（简洁约束、Harness 边界）、本地图 §4（当前无前端）、§6（依赖归属）。
@@ -184,9 +184,9 @@ return HarnessTurn(session_id, context, result)
 
 | # | 风险 | 验证入口 |
 |---|------|----------|
-| 1 | **MinerU 地址硬编码内网 IP，部署到其它网络即不可用**；明文 HTTP 无 TLS；服务不可用时硬失败、无重试/降级。 | `backend/tools.py:12`（`MINERU_BASE_URL` 常量）、`tools.py:64/86/93`（拼 URL 处）、`tools.py:74/87/94`（`raise_for_status`）、`tools.py:97`（`TimeoutError` 默认 900s） |
-| 2 | **`.env.example` 键与实现脱节（死配置）**：`MINERU_BASE_URL`/`MINERU_BACKEND`/`MINERU_TIMEOUT_SECONDS` 已定义但 `tools.py` 全程不 `os.getenv` 读取，地址与参数均硬编码。 | `backend/tools.py` grep `os.getenv`（无 MinerU 相关命中）对照 `backend/.env.example` |
-| 3 | **范围蔓延前兆：Oracle 预埋与 MinerU 里程碑无关**。`.env.example` 已含 5 个 `ORACLE_*` 键、`backend/instantclient/` 二进制已提交进 git，但 backend 源码零 Oracle 引用、`backend/pyproject.toml` 未列 `oracledb`/`cx_Oracle`。配置先于实现进入仓库。 | `backend/.env.example`、`git ls-files backend/instantclient/`、grep `oracle/cx_Oracle/oracledb` 在 `backend/*.py`（零命中） |
+| 1 | **当前文档解析 provider 仍依赖 MinerU 内网 HTTP**；若运行环境继续使用 `.env.example` 示例地址，则部署到其它网络即不可用；明文 HTTP 无 TLS；服务不可用时硬失败、无重试/降级。 | `backend/tools.py::_submit_mineru_task` / `_wait_for_mineru_result`、`backend/.env.example` |
+| 2 | **`MINERU_*` 仅在工具调用时校验**：缺失会在 `parse_document(...)` 路径抛 `RuntimeError`，非法 `MINERU_TIMEOUT_SECONDS` 直接抛原生 `ValueError`；普通聊天和 harness 创建不会预检。 | `backend/tools.py::_required_env`、`int(_required_env("MINERU_TIMEOUT_SECONDS"))` |
+| 3 | **范围蔓延前兆：Oracle 预埋与当前里程碑无关**。`.env.example` 已含 5 个 `ORACLE_*` 键、`backend/instantclient/` 二进制已提交进 git，但 backend 源码零 Oracle 引用、`backend/pyproject.toml` 未列 `oracledb`/`cx_Oracle`。配置先于实现进入仓库。 | `backend/.env.example`、`git ls-files backend/instantclient/`、grep `oracle/cx_Oracle/oracledb` 在 `backend/*.py`（零命中） |
 | 4 | **`session.py` 遗留未使用 import**：`import argparse`（`session.py:3`）未被使用——`main()` 硬编码 `message = "你好"` + 随机 `session_id`，不解析命令行参数。属轻微噪音。 | `backend/session.py:3`（`argparse`）、`session.py:222-226`（`main` 未用 `args`） |
 | 5 | **错误事件可能携带敏感信息**：`hands.py` 把 `repr(exc)` 写入 `model_error`/`tool_error` 事件并持久化到 SQLite，`repr` 可能含 URL/请求头片段，当前无脱敏。 | `backend/hands.py:41,64`（`emit_event(..., repr(exc))`） |
 
@@ -204,7 +204,7 @@ return HarnessTurn(session_id, context, result)
 | `backend/.planning/codebase/ARCHITECTURE.md` | backend 五大模块边界、运行时数据流、关键设计决策、里程碑实现状态 |
 | `backend/.planning/codebase/STRUCTURE.md` | backend 目录树、模块清单、入口、资源目录约定、与仓库根关系 |
 | `backend/.planning/codebase/STACK.md` | 技术栈清单与版本、DeepAgents/LangChain/LangGraph 用法 |
-| `backend/.planning/codebase/INTEGRATIONS.md` | MinerU/DeepAgents/SQLite/MiniMax 等集成边界与集成调用链 |
+| `backend/.planning/codebase/INTEGRATIONS.md` | 文档解析 provider / DeepAgents / SQLite / MiniMax 等集成边界与集成调用链 |
 | `backend/.planning/codebase/CONVENTIONS.md` | 命名/模块组织/类型/错误处理/日志/配置/持久化约定 |
 | `backend/.planning/codebase/TESTING.md` | self_check 角色、运行命令、验证入口、覆盖缺口 |
 | `backend/.planning/codebase/CONCERNS.md` | 外部依赖/安全/稳定性/可观测性/范围蔓延/跨平台风险 |

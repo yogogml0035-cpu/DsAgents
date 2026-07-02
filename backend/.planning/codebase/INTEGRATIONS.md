@@ -4,16 +4,16 @@
 
 本文描述 `backend/` 与外部系统/服务的集成边界。证据强度以"已确认 / 需确认"区分：**已确认** = 直接见于 `backend/` 源码或 `backend/pyproject.toml`；**需确认** = 仅见于 `.env.example` 或规划文档、源码无直接引用。
 
-## 1. MinerU 异步任务 API（已确认）
+## 1. MinerU 异步任务 API（当前文档解析 provider，已确认）
 
-- **边界位置**：`backend/tools.py` 中的 `parse_document_with_mineru`（被 `default_tool_catalog()` 注册为工具）。
-- **服务地址**：`MINERU_BASE_URL = "http://10.11.0.110:6006"`（`backend/tools.py:12`，源码硬编码）。注：`.env.example` 有 `MINERU_BASE_URL=`、`MINERU_BACKEND=`、`MINERU_TIMEOUT_SECONDS=` 三个键，但 `backend/tools.py` 当前**未读取**这些环境变量——base url 为常量、`backend`/`effort` 为写死、timeout 为函数参数。**需确认**：环境变量键是否在后续接入。
+- **边界位置**：`backend/tools.py` 中的公开工具 `parse_document`（被 `default_tool_catalog()` 注册）；实际 HTTP 调用留在私有 helper `_submit_mineru_task` / `_wait_for_mineru_result`。
+- **服务地址**：`parse_document` 在调用时读取 `MINERU_BASE_URL`。`.env.example` 当前示例值是 `http://10.11.0.110:6006`；`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS` 也在同一路径读取。
 - **三步调用流程**（均为同步阻塞的 `requests`）：
-  1. **提交任务** `POST /tasks`（`_submit_task`）：multipart 上传文件 `files=[("files", (source.name, handle, mime))]`，表单字段固定为 `backend=hybrid-engine`、`effort=high`、`return_md=true`、`response_format_zip=false`；`timeout=60`。从响应里递归查找键 `task_id / taskId / id` 得到 `task_id`。
-  2. **轮询状态** `GET /tasks/{task_id}`（`_wait_for_result`）：`timeout=30`，读取 `status / state`；命中 `FAILURE_STATES`（`failed/error/cancelled/...`）抛错，命中 `SUCCESS_STATES`（`completed/done/success/...`）进入取结果，否则 `time.sleep(poll_interval_seconds)`（默认 2.0s）继续轮询，直到 `timeout_seconds`（默认 900s）超时抛 `TimeoutError`。
-  3. **取结果** `GET /tasks/{task_id}/result`（`_wait_for_result`）：`timeout=120`；`_extract_markdown` 从结果里递归查找键 `md / markdown / md_content / markdown_content`，写出为本地 Markdown 文件。
-- **固定参数**：`backend=hybrid-engine`、`effort=high` 不可由调用方更改（Milestone 约束）。
-- **产出落点**：默认输出 `backend/data/mineru_outputs/{stem}.md`（`_default_output_path`，`Path(__file__).resolve().parent/"data"/"mineru_outputs"`），可经 `output_path` 覆盖。
+  1. **提交任务** `POST /tasks`（`_submit_mineru_task`）：multipart 上传文件 `files=[("files", (source.name, handle, mime))]`，表单字段里的 `backend` / `effort` 来自 `MINERU_BACKEND` / `MINERU_EFFORT`，`return_md=true`、`response_format_zip=false` 仍固定；`timeout=60`。从响应里递归查找键 `task_id / taskId / id` 得到 `task_id`。
+  2. **轮询状态** `GET /tasks/{task_id}`（`_wait_for_mineru_result`）：`timeout=30`，读取 `status / state`；命中 `FAILURE_STATES`（`failed/error/cancelled/...`）抛错，命中 `SUCCESS_STATES`（`completed/done/success/...`）进入取结果，否则 `time.sleep(poll_interval_seconds)`（默认 2.0s）继续轮询，直到 `MINERU_TIMEOUT_SECONDS`（经 `int(...)` 转换）超时抛 `TimeoutError`。
+  3. **取结果** `GET /tasks/{task_id}/result`（`_wait_for_mineru_result`）：`timeout=120`；`_extract_markdown` 从结果里递归查找键 `md / markdown / md_content / markdown_content`，写出为本地 Markdown 文件。
+- **公开参数**：工具只暴露 `file_path` 与可选 `output_path`；provider 参数全部走 `MINERU_*` 环境变量。
+- **产出落点**：默认输出 `backend/data/document_outputs/{stem}.md`（`_default_output_path`，`Path(__file__).resolve().parent/"data"/"document_outputs"`），可经 `output_path` 覆盖。
 - **认证**：源码未携带任何鉴权头/token；**需确认**该内网端点是否需要鉴权。
 
 ## 2. DeepAgents（可插拔 Brain / 子 Harness）（已确认）
@@ -48,7 +48,7 @@
 - **目录**：根目录 `backend/data/`（`ResourceConfig.data_dir = _BACKEND_DIR / "data"`，与 CWD 无关），其中：
   - `backend/data/artifacts/` —— DeepAgents `FilesystemBackend` 根目录（大产物、大工具结果）。
   - `backend/data/artifacts/session-events/` —— 大事件 payload 溢出 JSON（`SqliteSessionStore`，阈值 `max_inline_bytes=262_144` 即 256KiB，超阈值把原始 payload 写成 `{uuid}.json` 并在 DB 仅存 `artifact_path`）。
-  - `backend/data/mineru_outputs/` —— MinerU 解析结果 Markdown（`backend/tools.py::_default_output_path` 默认输出）。
+  - `backend/data/document_outputs/` —— 文档解析结果 Markdown（`backend/tools.py::_default_output_path` 默认输出）。
 - **创建时机**：`AgentResources.__enter__` 与 `SqliteSessionStore.__init__` 均 `mkdir(parents=True, exist_ok=True)`，目录不存在时自动建立。
 
 ## 6. LLM 提供方（MiniMax Anthropic 兼容）（已确认）
@@ -72,15 +72,15 @@
 
 以一次用户输入触发 DeepAgents 解析文档为例的数据流（文字 + 箭头）：
 
-`run_session` (`backend/session.py`) → 构造 `AgentResources` (`backend/resources.py`，初始化 `backend/data/` 下三个 SQLite 库 + `CompositeBackend`) → `create_mineru_harness` (`backend/harness.py`) → `HarnessRuntime.run_turn(message, session_id)`：
+`run_session` (`backend/session.py`) → 构造 `AgentResources` (`backend/resources.py`，初始化 `backend/data/` 下三个 SQLite 库 + `CompositeBackend`) → `create_harness` (`backend/harness.py`) → `HarnessRuntime.run_turn(message, session_id)`：
 
 1. `Sessions.ensure_session` → 写 `backend/data/dsagents_sessions.db`；
 2. `Sessions.emit_event("user_message")` → 写会话事件库；
 3. `Sessions.context_window` → 读取最近 `CONTEXT_MESSAGE_LIMIT=20` 条消息（首条须为 user）；
-4. `DeepAgentsBrainFactory.create` → `create_deep_agent(...)`，注入 `middleware=TraceHands.middleware`、`tools=[parse_document_with_mineru]`、`backend=CompositeBackend`、`checkpointer=SqliteSaver`、`store=SqliteStore`；
+4. `DeepAgentsBrainFactory.create` → `create_deep_agent(...)`，注入 `middleware=TraceHands.middleware`、`tools=[parse_document]`、`backend=CompositeBackend`、`checkpointer=SqliteSaver`、`store=SqliteStore`；
 5. `brain.invoke({"messages": [RemoveMessage(REMOVE_ALL_MESSAGES), *ctx]}, config={"configurable": {"thread_id": session_id}})` → DeepAgents 运行图；
 6. 模型调用经 `TraceMiddleware.wrap_model_call` 拦截 → emit `model_request/model_response`（出错 emit `model_error` 并上抛）→ 经 LangChain `ChatAnthropic` 调用 MiniMax Anthropic 兼容端点完成 LLM 推理；
-7. 若模型决定解析文档 → `TraceMiddleware.wrap_tool_call` 拦截 → `parse_document_with_mineru` (`backend/tools.py`)：
-   `POST http://10.11.0.110:6006/tasks`（固定 `backend=hybrid-engine`/`effort=high`）→ 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result` → 写 `backend/data/mineru_outputs/{stem}.md` → emit `tool_request/tool_response`；
+7. 若模型决定解析文档 → `TraceMiddleware.wrap_tool_call` 拦截 → `parse_document` (`backend/tools.py`)：
+   `POST ${MINERU_BASE_URL}/tasks`（`backend`/`effort` 来自 `MINERU_*`）→ 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result` → 写 `backend/data/document_outputs/{stem}.md` → emit `tool_request/tool_response`；
 8. Brain 将大产物经 `CompositeBackend` 路由：`/artifacts/`、`/large_tool_results/` → `backend/data/artifacts/`（`FilesystemBackend`），`/memories/`、`/conversation_history/`、`/logs/` → `SqliteStore`（`backend/data/dsagents_store.db`），线程状态检查点写 `backend/data/dsagents_checkpoints.db`；
 9. `run_turn` 取 `result["messages"][-1].content` → emit `assistant_message` → 返回 `HarnessTurn`。

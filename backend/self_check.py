@@ -12,7 +12,7 @@ from hands import TraceHands
 from harness import DeepAgentsBrainFactory, HarnessRuntime
 from resources import AgentResources, ResourceConfig
 from session import SqliteSessionStore
-from tools import ToolCatalog, _extract_markdown, _find_value
+from tools import ToolCatalog, _extract_markdown, _find_value, default_tool_catalog, parse_document
 
 
 class _FakeBrain:
@@ -30,6 +30,7 @@ class _FakeBrainFactory:
 def main() -> None:
     assert _find_value({"data": {"task_id": "abc"}}, {"task_id"}) == "abc"
     assert _extract_markdown({"result": {"md_content": "# ok"}}) == "# ok"
+    assert default_tool_catalog().handlers[0].__name__ == "parse_document"
 
     with tempfile.TemporaryDirectory() as tmp:
         with patch.dict(os.environ, {}, clear=True):
@@ -46,6 +47,16 @@ def main() -> None:
             assert getattr(factory.model, "model", None) == "test-minimax"
             assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
             assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
+
+        with patch.dict(os.environ, {}, clear=True):
+            source = Path(tmp) / "sample.pdf"
+            source.write_text("demo", encoding="utf-8")
+            try:
+                parse_document(str(source))
+            except RuntimeError as exc:
+                assert str(exc) == "Missing required environment variable: MINERU_BASE_URL"
+            else:
+                raise AssertionError("parse_document must fail fast when MINERU_BASE_URL is missing")
 
         data_dir = Path(tmp) / "data"
         with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:

@@ -15,7 +15,7 @@
 
 ## 2. self_check.py 的角色
 
-`backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document_with_mineru` 真实网络调用外的几乎所有核心逻辑。它通过 `python self_check.py` 或 `cd backend && python -m self_check` 运行（`if __name__ == "__main__": main()`）。
+`backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document` 真实网络成功路径外的几乎所有核心逻辑。它通过 `python self_check.py` 或 `cd backend && python -m self_check` 运行（`if __name__ == "__main__": main()`）。
 
 ### 它验证什么（`main()` 函数）
 
@@ -47,7 +47,7 @@
 `backend/` 是扁平顶层模块（不是包），所以**不能用** `python -m backend.self_check`（没有 `backend` 包）。可用入口：
 
 ```bash
-# 自检（推荐，不需要真实 LLM / MinerU 可达）
+# 自检（推荐，不需要真实 LLM / 当前文档解析 provider 可达）
 python backend/self_check.py
 # 或：cd backend && python -m self_check
 
@@ -88,7 +88,7 @@ python backend/session.py
 
 | 缺口 | 说明 | 建议 |
 |------|------|------|
-| MinerU 真实网络交互 | `tools.parse_document_with_mineru` / `_submit_task` / `_wait_for_result` 未测试（需可达服务） | 引入 `requests` mock（如 `responses`/`unittest.mock`）覆盖成功/失败状态/超时分支 |
+| 当前 provider 的真实网络交互 | `tools.parse_document` / `_submit_mineru_task` / `_wait_for_mineru_result` 的成功路径未测试（需可达服务） | 引入 `requests` mock（如 `responses`/`unittest.mock`）覆盖成功/失败状态/超时分支 |
 | `session.main()` 冒烟入口 | 硬编码 `message = "你好"` + 随机 `session_id`，不可参数化；`import argparse` 未使用 | 如需 CLI，补 `argparse` 并接入；否则删除未使用 import |
 | 缺乏正式测试框架 | 无 pytest、无 fixture、无 CI | 可选：引入 `pytest` + `tests/` 目录，把 `self_check.py` 的断言拆为 pytest 用例以便细分失败定位 |
 | 无类型检查 / lint | 未配置 mypy/ruff | 可选：加 `mypy`/`ruff` 到 dev 依赖，CI 中跑（代码已全量类型注解，mypy 成本低） |

@@ -8,7 +8,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 
 **模块组织**：`backend/` 采用**扁平顶层模块**（无包前缀），模块间用绝对导入（`from hands import ...`）。直接运行 `backend/` 内的脚本即可，例如 `python backend/session.py`；或把 `backend/` 加入 `PYTHONPATH` 后 `from session import run_session`。
 
-**技术栈**：Python（≥3.11）；DeepAgents（可插拔 Brain）+ LangGraph（图运行时/checkpoint/store）+ LangChain（中间件/消息，含 `langchain-openai` 走 OpenAI 兼容协议接入 MiniMax）；持久化用本地 SQLite 三库 + 文件系统产物目录；HTTP 走 `requests` 调 MinerU；配置用 `python-dotenv` 加载 `.env`。依赖与版本见 `backend/.planning/codebase/STACK.md`。
+**技术栈**：Python（≥3.11）；DeepAgents（可插拔 Brain）+ LangGraph（图运行时/checkpoint/store）+ LangChain（中间件/消息，MiniMax 通过 Anthropic 兼容协议接入）；持久化用本地 SQLite 三库 + 文件系统产物目录；通用文档解析工具通过 `requests` 调当前 provider；配置用 `python-dotenv` 加载 `.env`。依赖与版本见 `backend/.planning/codebase/STACK.md`。
 
 **包管理器**：`uv`（项目元数据在 `backend/pyproject.toml`，锁文件 `backend/uv.lock`；`backend/` 是可安装包 `dsagents`）。仓库根的 `requirements.txt` 已废弃删除。
 
@@ -40,11 +40,11 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 
 ## 4. 首个里程碑
 
-最小可运行 DeepAgents 解析演示已交付（MinerU 工具 / DeepAgents 工厂 / CompositeBackend / 最小 session runner）。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md` §5。
+最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / 最小 session runner）。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md` §5。
 
 ## 5. 运行时规则
 
-MinerU 走 `http://10.11.0.110:6006` 异步任务三步 API，固定参数 `backend=hybrid-engine`、`effort=high`（本里程碑不可配）；持久历史走 StoreBackend + 本地 SQLite；大产物落 `backend/data/artifacts/`；middleware 只记录模型可见层，**不得碰隐藏思维链**。
+文档解析工具在调用 `parse_document` 时读取 `MINERU_BASE_URL`、`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS`；当前 provider 细节见 `INTERFACES.md` §1。持久历史走 StoreBackend + 本地 SQLite；大产物落 `backend/data/artifacts/`；middleware 只记录模型可见层，**不得碰隐藏思维链**。
 
 > 完整调用流程、三 SQLite 库与 provider 边界见 `INTERFACES.md` §1。
 
@@ -55,7 +55,7 @@ MinerU 走 `http://10.11.0.110:6006` 异步任务三步 API，固定参数 `back
 | 任务类型 | 先读 |
 |----------|------|
 | **改 backend 代码（业务/存储/runner）** | `backend/.planning/codebase/ARCHITECTURE.md`、`STRUCTURE.md`；改持久化回看本文件 §3 的 Session 原则 |
-| **改 MinerU 工具 / DeepAgents Brain** | `backend/.planning/codebase/INTEGRATIONS.md`、`STACK.md`；协议字段冲击见 `INTERFACES.md` §1 |
+| **改文档解析工具 / DeepAgents Brain** | `backend/.planning/codebase/INTEGRATIONS.md`、`STACK.md`；provider 边界见 `INTERFACES.md` §1 |
 | **改集成 / Provider** | `INTERFACES.md`、`backend/.planning/codebase/INTEGRATIONS.md`；未证实关系见 `INTERFACES.md` §2 |
 | **加新子项目（如 frontend）** | 本文件 §3、`ARCHITECTURE.md` §1、`coding_maps/SYSTEM_MAP.md` §4/§6 |
 

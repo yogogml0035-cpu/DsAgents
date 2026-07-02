@@ -211,12 +211,12 @@ class SqliteSessionStore:
 
 
 def run_session(message: str, session_id: str | None = None) -> dict:
-    from harness import create_mineru_harness
+    from harness import create_harness
     from resources import AgentResources, ResourceConfig
 
     session_id = session_id or uuid.uuid4().hex
     with AgentResources(ResourceConfig()) as resources:
-        return create_mineru_harness(resources).run_turn(message, session_id).result
+        return create_harness(resources).run_turn(message, session_id).result
 
 
 def main() -> None:

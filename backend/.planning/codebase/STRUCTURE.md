@@ -12,7 +12,7 @@ backend/
 ├── harness.py           # Harness 边界：Brain 工厂 + 单轮运行时 HarnessRuntime
 ├── hands.py             # Hands 边界：TraceMiddleware 暴露执行 trace 并透传错误
 ├── resources.py         # Resources 边界：SQLite store/checkpointer + CompositeBackend 装配
-├── tools.py             # Tools 边界：MinerU 解析工具 + ToolCatalog 注册
+├── tools.py             # Tools 边界：通用文档解析工具 + ToolCatalog 注册
 ├── self_check.py        # 端到端自检（FakeBrain），验证五大边界与约束
 ├── pyproject.toml       # 可安装项目 dsagents：打包/依赖/扁平顶层模块声明
 ├── uv.lock              # uv 锁文件（依赖版本锁定）
@@ -30,10 +30,10 @@ backend/
 | 文件 | 主要导出（类/函数） | 一句话职责 |
 |------|----------------------|------------|
 | `session.py` | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session`、`main` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；并在导入时 `load_dotenv` |
-| `harness.py` | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_mineru_harness`、`create_mineru_agent` | 读历史→派生上下文→请求执行→写回事件 |
+| `harness.py` | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` | 读历史→派生上下文→请求执行→写回事件 |
 | `hands.py` | `Hands`、`TraceHands`、`TraceMiddleware` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
 | `resources.py` | `ResourceConfig`、`AgentResources` | 持有 SQLite store/checkpointer + CompositeBackend 路由；`data_dir` 锁定在 `backend/data/` |
-| `tools.py` | `ToolCatalog`、`ToolHandler`、`parse_document_with_mineru`、`default_tool_catalog` | MinerU 解析工具与工具注册 |
+| `tools.py` | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` | 通用文档解析工具与工具注册 |
 | `self_check.py` | `main`（+ 内部 `_FakeBrain`/`_FakeBrainFactory`） | 端到端自检五大边界与约束 |
 
 ## 3. 入口与运行方式
@@ -45,9 +45,9 @@ backend/
   from session import run_session
   result = run_session("帮我解析 xxx.pdf", session_id="可选")
   ```
-  调用链：`run_session` → `with AgentResources(ResourceConfig())` → `create_mineru_harness(resources)` → `HarnessRuntime.run_turn(message, session_id)` → 返回 `result`（含 `messages`）。
+  调用链：`run_session` → `with AgentResources(ResourceConfig())` → `create_harness(resources)` → `HarnessRuntime.run_turn(message, session_id)` → 返回 `result`（含 `messages`）。
 
-- **自检入口**（推荐，不需要真实 LLM / MinerU 可达）：
+- **自检入口**（推荐，不需要真实 LLM / 当前文档解析 provider 可达）：
   ```bash
   python backend/self_check.py        # 或 cd backend && python -m self_check
   ```
@@ -73,7 +73,7 @@ backend/
 | Checkpointer 库 | `backend/data/dsagents_checkpoints.db` | `ResourceConfig.checkpoint_db` → `SqliteSaver` |
 | 大型产物根目录 | `backend/data/artifacts/` | `ResourceConfig.artifacts_dir`，`AgentResources` 创建 |
 | 超大事件外溢文件 | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore(artifacts_dir)`，payload > 256KiB 时外溢 |
-| MinerU 输出 | `backend/data/mineru_outputs/<stem>.md` | `tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"mineru_outputs"`） |
+| 文档解析输出 | `backend/data/document_outputs/<stem>.md` | `tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"document_outputs"`） |
 
 **虚拟文件系统（DeepAgents CompositeBackend）**：`AgentResources` 构建的 `CompositeBackend` 路由如下（`FilesystemBackend` 根指向 `backend/data/artifacts/`，`virtual_mode=True`）：
 - `default = StateBackend()`（默认，进程内存态）
@@ -102,4 +102,4 @@ DsAgents/                      # 仓库根
 - **`backend/instantclient/`**：Oracle Instant Client 19.31（依赖产物，供可能的 Oracle 连接用，`.env.example` 含 `ORACLE_*` 键），但当前五大模块源码**未引用** Oracle，判断为预留/依赖产物，非运行时必经路径。
 - **`backend/.venv/`**：虚拟环境（依赖产物），`.gitignore` 忽略 `.venv/`。
 - **`backend/.env`**：运行时密钥与配置（`.gitignore` 忽略 `.env`），由 `session.py` 在导入时 `load_dotenv` 加载；`.env.example` 是模板（保留在仓库）。
-- **`backend/data/`**：运行时产物（SQLite 库 + artifacts + MinerU 输出），`.gitignore` 忽略 `data/`，首次运行自动创建，不入库。
+- **`backend/data/`**：运行时产物（SQLite 库 + artifacts + `document_outputs/`），`.gitignore` 忽略 `data/`，首次运行自动创建，不入库。

@@ -9,10 +9,10 @@
 ## 1. 系统边界
 
 - **形态**：单子项目仓库，当前唯一产品子项目为 Python 项目 `backend/`。五大模块边界（Session / Harness / Hands / Resources / Tools）全部落在该项目内。
-- **对外形态**：`backend/` 暴露的是 **Python 导入 API**（`run_session`、`create_mineru_agent` 等），**不是 HTTP 服务**。无 FastAPI / uvicorn / Flask 等 web 框架，无 HTTP server、无健康检查端点、无 SSE / WebSocket 通道。
+- **对外形态**：`backend/` 暴露的是 **Python 导入 API**（`run_session`、`create_harness`、`parse_document` 等），**不是 HTTP 服务**。无 FastAPI / uvicorn / Flask 等 web 框架，无 HTTP server、无健康检查端点、无 SSE / WebSocket 通道。
 - **模块形态**：`backend/` **不是常规 Python 包**——没有 `__init__.py` / `__main__.py`，而是以**扁平顶层模块**形式（`pyproject.toml` 的 `[tool.setuptools] package-dir = {"" = "."}` + `py-modules = [...]`）安装；模块间用绝对导入（`from session import ...`），**不带** `backend.` 前缀。
 - **无前端**：当前无前端子项目。`.env.example` 中的 `CORS_ORIGINS` 属预留边界，需确认（详见 `INTERFACES.md` §2）。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个 MinerU 解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
+- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
 
 ---
 
@@ -23,10 +23,10 @@
 | 模块 | 文件 | 核心职责 | 公开接口（类/函数） |
 |------|------|----------|----------------------|
 | **Session** | `backend/session.py` | 以 append-only 事件存完整持久任务事实；从历史派生上下文窗口（不等于上下文窗口本身） | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session` |
-| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；保持薄 | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_mineru_harness`、`create_mineru_agent` |
+| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；保持薄 | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` |
 | **Hands** | `backend/hands.py` | 通过 middleware 暴露模型/工具执行 trace，并把真实错误透传 | `Hands`、`TraceHands`、`TraceMiddleware` |
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` |
-| **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document_with_mineru`、`default_tool_catalog` |
+| **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` |
 
 > DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。没有 `backend/__init__.py` 装配层。
 
@@ -37,7 +37,7 @@
 ```
 run_session(message, session_id)
   └─ with AgentResources() 装配资源 (三 SQLite 库 + CompositeBackend)
-     └─ create_mineru_harness(resources).run_turn(message, session_id)
+     └─ create_harness(resources).run_turn(message, session_id)
         ├─① ensure_session(session_id)              确保会话存在
         ├─② emit_event("user_message")              写入用户事件（append-only）
         ├─③ context_window(session_id)              从事件历史派生最近 20 条消息
@@ -59,7 +59,7 @@ run_session(message, session_id)
 2. **再看系统架构**：本文件 §2——理解五大模块如何协作、调用链走向。
 3. **接着看目录与模块清单**：`backend/.planning/codebase/STRUCTURE.md`——理解每个文件做什么、入口怎么用、资源目录如何约定。
 4. **深入内部数据流与设计决策**：`backend/.planning/codebase/ARCHITECTURE.md`——理解 append-only 事件、Session≠上下文窗口、可恢复事件、薄 Harness、真实错误透传等关键决策的"为什么"。
-5. **接口与集成**：`INTERFACES.md` + `backend/.planning/codebase/INTEGRATIONS.md`——理解 MinerU / DeepAgents / SQLite / Provider 边界。
+5. **接口与集成**：`INTERFACES.md` + `backend/.planning/codebase/INTEGRATIONS.md`——理解文档解析 provider / DeepAgents / SQLite 边界。
 6. **风险与维护**：`backend/.planning/codebase/CONCERNS.md`——理解外部依赖、安全、稳定性、范围蔓延等已知风险。
 7. **跨系统全景**：`coding_maps/SYSTEM_MAP.md`——理解调用链全貌、provider 边界、按任务分类的阅读指南与集成风险清单。
 
@@ -75,16 +75,16 @@ run_session(message, session_id)
 | `backend/harness.py` | 读历史 → 派生上下文 → 请求执行 → 写回事件（Brain 工厂 + 单轮运行时） |
 | `backend/hands.py` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
 | `backend/resources.py` | 持有 SQLite store/checkpointer + `CompositeBackend` 路由；`data_dir` 锁定在 `backend/data/` |
-| `backend/tools.py` | MinerU 解析工具与工具注册（`ToolCatalog`） |
+| `backend/tools.py` | 通用文档解析工具与工具注册（`ToolCatalog`） |
 | `backend/self_check.py` | 端到端自检五大边界与约束（FakeBrain，可作 `python self_check.py` 运行） |
 
 **非产品知识目录**（不纳入架构理解，修改时不必联动本文档）：
 
 - `scripts/ralph/` —— 被 `.gitignore` 忽略的自动化脚本。
-- `backend/instantclient/` —— Oracle Instant Client 19.31（Windows 二进制依赖产物，已提交进 git，无任何 Python 代码 import 它，与 MinerU 里程碑无关）。
+- `backend/instantclient/` —— Oracle Instant Client 19.31（Windows 二进制依赖产物，已提交进 git，无任何 Python 代码 import 它，与当前里程碑无关）。
 - `.agents/`、`.codex/`、`.review-push/` —— 本地 agent / 工具配置元数据。
 
-**运行时产物**（`.gitignore` 忽略，首次运行自动创建，不入库）：`backend/data/`（三 SQLite 库 + artifacts + MinerU 输出）、`.venv/`、`.env`、`__pycache__/`。
+**运行时产物**（`.gitignore` 忽略，首次运行自动创建，不入库）：`backend/data/`（三 SQLite 库 + artifacts + `document_outputs/`）、`.venv/`、`.env`、`__pycache__/`。
 
 ---
 

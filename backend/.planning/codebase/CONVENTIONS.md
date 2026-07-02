@@ -10,10 +10,10 @@
 |------|------|------|
 | 文件名 | 全小写 `snake_case`，模块名单数名词 | `session.py`、`harness.py`、`hands.py`、`resources.py`、`tools.py`、`self_check.py` |
 | 类名 | `PascalCase` | `HarnessRuntime`、`DeepAgentsBrainFactory`、`TraceMiddleware`、`SqliteSessionStore`、`AgentResources` |
-| 函数名 | `snake_case` | `run_turn`、`create_mineru_harness`、`emit_event`、`context_window`、`parse_document_with_mineru` |
-| 常量 | `UPPER_SNAKE_CASE` | `DEFAULT_MINIMAX_BASE_URL`、`MINERU_BASE_URL`、`SUCCESS_STATES`、`FAILURE_STATES`、`CONTEXT_MESSAGE_LIMIT` |
-| 工厂函数 | `create_*` 前缀 | `create_mineru_agent`、`create_mineru_harness`、`create_deep_agent`(三方) |
-| 内部/私有 | 单下划线前缀 | `_submit_task`、`_wait_for_result`、`_extract_markdown`、`_safe`、`_utcnow`、`_default_output_path`、`_read_event`、`_assistant_content`、`_reset_messages`、`_message_text`、`_json_or_text`、`_find_value`、`_setup` |
+| 函数名 | `snake_case` | `run_turn`、`create_harness`、`emit_event`、`context_window`、`parse_document` |
+| 常量 | `UPPER_SNAKE_CASE` | `DEFAULT_SYSTEM_PROMPT`、`SUCCESS_STATES`、`FAILURE_STATES`、`CONTEXT_MESSAGE_LIMIT` |
+| 工厂函数 | `create_*` 前缀 | `create_harness`、`create_deep_agent`(三方) |
+| 内部/私有 | 单下划线前缀 | `_submit_mineru_task`、`_wait_for_mineru_result`、`_extract_markdown`、`_safe`、`_utcnow`、`_default_output_path`、`_read_event`、`_assistant_content`、`_reset_messages`、`_json_or_text`、`_find_value`、`_setup` |
 | 测试替身（self_check 内） | `_` 前缀的类 | `_FakeBrain`、`_FakeBrainFactory` |
 
 所有模块顶部统一使用 `from __future__ import annotations`（每个 `.py` 第 1 行），使类型注解延迟求值。**没有** `__all__` 声明（`backend/` 不是常规包，没有 `__init__.py`）。
@@ -25,10 +25,10 @@
 | 边界 | 文件 | 职责 | 关键符号 |
 |------|------|------|----------|
 | **Session** | `session.py` | 持久化的 append-only 事件存储、上下文窗口派生 | `SessionStore`(Protocol)、`SqliteSessionStore`、`SessionEvent`、`ContextWindow`、`run_session` |
-| **Harness** | `harness.py` | 读 Session 历史 → 派生上下文 → 请求执行 → 写回事件 | `HarnessRuntime`、`HarnessTurn`、`Brain`/`BrainFactory`(Protocol)、`DeepAgentsBrainFactory`、`create_mineru_harness` |
+| **Harness** | `harness.py` | 读 Session 历史 → 派生上下文 → 请求执行 → 写回事件 | `HarnessRuntime`、`HarnessTurn`、`Brain`/`BrainFactory`(Protocol)、`DeepAgentsBrainFactory`、`create_harness` |
 | **Hands** | `hands.py` | middleware：暴露 model/tool 执行轨迹并透传真实错误 | `Hands`(Protocol)、`TraceHands`、`TraceMiddleware` |
 | **Resources** | `resources.py` | 持有 store、checkpointer、CompositeBackend、产物路径 | `AgentResources`、`ResourceConfig` |
-| **Tools** | `tools.py` | 可调用能力（不绑定到具体 runner） | `ToolCatalog`、`ToolHandler`、`parse_document_with_mineru`、`default_tool_catalog` |
+| **Tools** | `tools.py` | 可调用能力（不绑定到具体 runner） | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` |
 
 - `self_check.py` 是自检/冒烟脚本，不属于五大边界，是验证入口。
 - 无 `__init__.py`（无聚合导出层），无 `__main__.py`（无 `python -m backend`）。入口由 `python session.py` / `python self_check.py` 或 `cd backend && python -m session` / `python -m self_check` 提供（见 TESTING.md）。
@@ -41,7 +41,7 @@
 
 - 业务源文件中无 `async def` / `await` / `asyncio`。
 - `HarnessRuntime.run_turn`（`harness.py:91`）为同步 `def`，直接调用 `brain.invoke(...)`。
-- `parse_document_with_mineru`（`tools.py:26`）用同步 `requests` + `time.sleep(poll_interval_seconds)` 轮询 MinerU（`tools.py:96`）。
+- `parse_document`（`tools.py`）用同步 `requests` + `time.sleep(poll_interval_seconds)` 轮询当前文档解析 provider（私有 helper 仍命名为 MinerU）。
 - MinerU 的 HTTP 任务 API（`POST /tasks` → 轮询 `GET /tasks/{id}` → `GET /tasks/{id}/result`）虽为"异步任务"，但客户端用同步轮询实现，未引入 `asyncio`。
 - LangGraph/SqliteSaver 的异步能力在当前代码中未被使用（用的是 `SqliteSaver.from_conn_string` 的同步上下文管理器，`resources.py:50`）。
 
@@ -102,16 +102,16 @@
   - `MINIMAX_BASE_URL`（默认 `https://api.minimaxi.com/v1`）→ `os.environ["OPENAI_API_BASE"] = ...`（直接赋值）。
   - `MINIMAX_MODEL`（默认 `MiniMax-M3`）→ 最终模型字符串 `openai:{model}`。
   - 为什么用直接赋值而非 `setdefault`：当系统环境变量里已预置旧的 `OPENAI_API_KEY`（如 DeepSeek 等）时，`setdefault` 不会覆盖，会导致 MiniMax 收到错误 key 而 401；直接赋值确保 MiniMax 用自己的 key 与 base url。
-- **MinerU 固定参数**（根 AGENTS.md 规定不可由用户配置）：
-  - `MINERU_BASE_URL = "http://10.11.0.110:6006"`（`tools.py:12`，模块级常量，**未读取** `.env` 中的同名键）。
-  - 请求固定字段：`backend="hybrid-engine"`、`effort="high"`、`return_md="true"`、`response_format_zip="false"`（`tools.py:66-71`）。
-  - 轮询参数为函数默认值：`timeout_seconds=900`、`poll_interval_seconds=2.0`（`tools.py:29-30`）。
+- **当前文档解析 provider 配置**：
+  - `parse_document(...)` 在调用时读取 `MINERU_BASE_URL`、`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS`。
+  - 请求固定字段仍有 `return_md="true"`、`response_format_zip="false"`；轮询间隔固定为内部默认 `poll_interval_seconds=2.0`。
+  - `MINERU_TIMEOUT_SECONDS` 通过 `int(...)` 转换；缺失抛 `RuntimeError`，非法整数直接暴露原生 `ValueError`。
 - **数据/产物路径**（`ResourceConfig`，`resources.py:17-35`，`data_dir = _BACKEND_DIR / "data"`，锁定在 `backend/data/`）：
   - 会话库 `backend/data/dsagents_sessions.db`
   - store 库 `backend/data/dsagents_store.db`
   - checkpoint 库 `backend/data/dsagents_checkpoints.db`
   - 产物目录 `backend/data/artifacts/`
-  - MinerU 输出默认落 `backend/data/mineru_outputs/{stem}.md`（`tools.py:56-57`）。
+  - 文档解析输出默认落 `backend/data/document_outputs/{stem}.md`（`tools.py::_default_output_path`）。
 
 ## 8. 持久化约定
 

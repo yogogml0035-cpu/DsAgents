@@ -4,7 +4,7 @@
 
 ## 1. 系统目的
 
-`backend/` 是一个 Harness 级的 agent 运行时底座。它的目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，让能力（Brain、执行器、工具）可以插拔，而不被硬编码到某个 runner、容器、模型或工作流里。当前里程碑交付的是最小可运行的 DeepAgents 解析演示：一个 MinerU 解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。
+`backend/` 是一个 Harness 级的 agent 运行时底座。它的目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，让能力（Brain、执行器、工具）可以插拔，而不被硬编码到某个 runner、容器、模型或工作流里。当前里程碑交付的是最小可运行的 DeepAgents 解析演示：一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。
 
 ## 2. 模块形态与导入
 
@@ -17,10 +17,10 @@
 | 模块 | 文件 | 核心职责 | 公开接口（类/函数） | 依赖关系 |
 |------|------|----------|----------------------|----------|
 | **Session** | `backend/session.py` | 以 append-only 事件存完整持久任务事实；从历史派生上下文窗口（不等于上下文窗口本身） | `SessionStore`（Protocol）、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session`、`main` | 标准库 `sqlite3`；被 Harness / Hands / Resources 依赖 |
-| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；保持薄 | `Brain`（Protocol）、`BrainFactory`（Protocol）、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_mineru_harness`、`create_mineru_agent` | 依赖 Session、Hands、Resources、Tools；调用 `deepagents`、`langchain`、`langgraph` |
+| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；保持薄 | `Brain`（Protocol）、`BrainFactory`（Protocol）、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` | 依赖 Session、Hands、Resources、Tools；调用 `deepagents`、`langchain`、`langgraph` |
 | **Hands** | `backend/hands.py` | 通过 middleware 暴露模型/工具执行 trace，并把真实错误透传 | `Hands`（Protocol）、`TraceHands`、`TraceMiddleware` | 依赖 Session（emit_event）；调用 `langchain.agents.middleware`、`langgraph.types` |
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` | 依赖 Session（`SqliteSessionStore`）；调用 `deepagents.backends`、`langgraph.checkpoint.sqlite`、`langgraph.store.sqlite` |
-| **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document_with_mineru`、`default_tool_catalog` | 标准库 + `requests`；被 Harness 注入 |
+| **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` | 标准库 + `requests`；被 Harness 注入 |
 
 > 注：`self_check.py` 是端到端自检脚本，不属于五大边界，是验证入口。DeepAgents 在本仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明其可被替换。
 
@@ -31,7 +31,7 @@
 ```
 run_session(message, session_id)
   └─ with AgentResources() 装配资源 (SQLite store/checkpointer + CompositeBackend)
-     └─ create_mineru_harness(resources).run_turn(message, session_id)
+     └─ create_harness(resources).run_turn(message, session_id)
         │
         ① resources.sessions.ensure_session(session_id)            # 确保会话存在
         ② sessions.emit_event(session_id, "user_message", {...})  # 写入用户事件
@@ -68,10 +68,10 @@ run_session(message, session_id)
 
 | 里程碑项 | 实现位置 | 状态 |
 |----------|----------|------|
-| 一个 MinerU 解析工具 | `backend/tools.py::parse_document_with_mineru` + `default_tool_catalog()` | 已实现：走 `POST /tasks` → 轮询 `GET /tasks/{id}` → 取 `GET /tasks/{id}/result`，固定 `backend=hybrid-engine`、`effort=high`，输出写 `backend/data/mineru_outputs/{stem}.md` |
+| 一个通用文档解析工具 | `backend/tools.py::parse_document` + `default_tool_catalog()` | 已实现：模型可见工具名为 `parse_document`，内部当前仍走 MinerU `POST /tasks` → 轮询 `GET /tasks/{id}` → 取 `GET /tasks/{id}/result`；调用时读取 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS`，输出写 `backend/data/document_outputs/{stem}.md` |
 | 一个 DeepAgents 工厂 | `backend/harness.py::DeepAgentsBrainFactory`（实现 `BrainFactory` Protocol） | 已实现：默认模型 `openai:MiniMax-M3`，从环境派生 `OPENAI_API_KEY` / `OPENAI_API_BASE` |
 | 一个 `CompositeBackend` 配置 | `backend/resources.py::AgentResources.__enter__` | 已实现：`default=StateBackend()`；`/memories/`、`/conversation_history/`、`/logs/` 路由到 `StoreBackend`；`/artifacts/`、`/large_tool_results/` 路由到 `FilesystemBackend` |
-| 一个最小 session runner | `backend/session.py::run_session` | 已实现：`with AgentResources(ResourceConfig()): create_mineru_harness(resources).run_turn(...).result` |
+| 一个最小 session runner | `backend/session.py::run_session` | 已实现：`with AgentResources(ResourceConfig()): create_harness(resources).run_turn(...).result` |
 
 - **自检**：`backend/self_check.py` 用 `_FakeBrainFactory` / `_FakeBrain` 端到端验证 Harness 单轮/多轮、trace 事件、错误透传、超大 payload 外溢，结尾打印 `self-check passed`。可作 `python self_check.py` 或 `cd backend && python -m self_check` 运行。
 - **`main()` 冒烟入口**：`session.py::main()`（`session.py:222`）硬编码 `message = "你好"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。可用 `python session.py` 或 `cd backend && python -m session` 触发；因 `session.py` 顶部 `load_dotenv`，会读取 `backend/.env`。

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dsagents"
 version = "0.1.0"
-description = "Agent runtime for DeepAgents + MinerU."
+description = "Agent runtime for DeepAgents with pluggable document parsing."
 requires-python = ">=3.11,<4.0"
 dependencies = [
     "deepagents>=0.6.12",

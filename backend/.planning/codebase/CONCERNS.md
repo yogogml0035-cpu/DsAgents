@@ -8,11 +8,11 @@
 ## 1. 外部依赖与可用性风险
 
 ### 已确认
-- **MinerU 服务地址硬编码内网 IP**：`tools.py:12` `MINERU_BASE_URL = "http://10.11.0.110:6006"` 为模块级常量，直接拼接到 `tools.py:64`（`POST /tasks`）、`tools.py:86`（`GET /tasks/{id}`）、`tools.py:93`（`GET /tasks/{id}/result`）。该地址仅在内网可达，部署到其它网络即不可用。
-- **环境变量键名是死代码**：`.env.example` 定义了 `MINERU_BASE_URL=`、`MINERU_BACKEND=`、`MINERU_TIMEOUT_SECONDS=`，但 `tools.py` 全程未调用 `os.getenv` 去读取它们——地址、参数均硬编码。配置项与实现脱节。
-- **固定参数耦合**：`tools.py:66-70` 写死 `backend="hybrid-engine"`、`effort="high"`、`return_md="true"`、`response_format_zip="false"`。根 AGENTS.md 明确声明这两个参数在本里程碑"固定且不可配置"，属刻意约束，但任何 MinerU 协议变更都会直接破坏解析。
-- **服务不可用时为硬失败、无重试/降级**：`requests` 抛 `ConnectionError`/`HTTPError`（`tools.py:74,87,94`），轮询超时抛 `TimeoutError`（`tools.py:97`，默认 900s）。异常经 `TraceMiddleware` 记为 `tool_error` 事件后重新抛出（hands.py:60-66）。符合根 AGENTS.md"真实错误透传"，但对短暂网络抖动无重试、无兜底。
-- **明文 HTTP**：`http://10.11.0.110:6006` 无 TLS，传输内容（含上传的文档文件）不加密。内网场景可接受，跨网段需注意。
+- **当前文档解析 provider 仍依赖 MinerU 内网 HTTP**：`parse_document` 在调用时读取 `MINERU_BASE_URL`，`.env.example` 当前示例值是 `http://10.11.0.110:6006`。如果运行环境沿用该值，则该地址仅在内网可达，部署到其它网络即不可用。
+- **provider 配置只在工具调用路径校验**：`parse_document` 通过 `_required_env(...)` 读取 `MINERU_BASE_URL`、`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS`；缺失会抛 `RuntimeError`，`MINERU_TIMEOUT_SECONDS` 非法时 `int(...)` 直接暴露原生 `ValueError`。普通聊天和 `create_harness(...)` 不预检这些配置。
+- **协议字段仍有耦合**：`backend` / `effort` 已改为来自环境变量，但 `return_md="true"`、`response_format_zip="false"` 仍写死在 `_submit_mineru_task(...)`。任何 MinerU 协议字段变更都会直接破坏解析。
+- **服务不可用时为硬失败、无重试/降级**：`requests` 抛 `ConnectionError`/`HTTPError`，轮询超时抛 `TimeoutError`（来自 `MINERU_TIMEOUT_SECONDS`）。异常经 `TraceMiddleware` 记为 `tool_error` 事件后重新抛出（hands.py:60-66）。符合根 AGENTS.md"真实错误透传"，但对短暂网络抖动无重试、无兜底。
+- **明文 HTTP**：若 `MINERU_BASE_URL` 使用 `http://`，传输内容（含上传的文档文件）不加密。内网场景可接受，跨网段需注意。
 
 ### 需确认/疑似
 - MinerU 响应字段用 `_find_value` 递归模糊匹配（`tools.py:107-121`），兼容了 `task_id/taskId/id`、`status/state`、`md/markdown/md_content/markdown_content` 多种命名。**疑似**：若 MinerU 返回结构稳定，此模糊匹配会掩盖真实字段名错误；需确认是否已对齐实际 API 文档。
@@ -35,9 +35,9 @@
 ## 3. 稳定性/技术债
 
 ### 已确认
-- **首个里程碑早期，范围刻意最小**：仅 1 个工具 `parse_document_with_mineru`（`tools.py:133-134`），1 个 Brain 工厂 `DeepAgentsBrainFactory`，无 stub/占位代码。无 `TODO/FIXME/XXX/HACK` 标注（项目源码无命中）。
+- **首个里程碑早期，范围刻意最小**：仅 1 个工具 `parse_document`，1 个 Brain 工厂 `DeepAgentsBrainFactory`，无 stub/占位代码。无 `TODO/FIXME/XXX/HACK` 标注（项目源码无命中）。
 - **错误处理一致**：`TraceMiddleware` 对 model/tool 调用统一 try/except，记事件后 re-raise；`self_check.py` 用断言验证"错误必须穿透"。无吞异常。
-- **无异步/同步混用**：项目源码全同步（`async`/`await`/`asyncio` 在项目 py 中无命中）。MinerU 工具用同步 `requests` + 阻塞 `time.sleep` 轮询（tools.py:96）。根 AGENTS.md 称"async task APIs"，但当前实现是同步轮询——一致性 OK，但长任务（最长 900s）会阻塞调用线程。
+- **无异步/同步混用**：项目源码全同步（`async`/`await`/`asyncio` 在项目 py 中无命中）。当前文档解析工具用同步 `requests` + 阻塞 `time.sleep` 轮询。provider 任务 API 虽是"异步任务"，但客户端是同步轮询；长任务会阻塞调用线程。
 - **遗留未使用 import**：`session.py:3` `import argparse` 未被使用（`main()` 硬编码 `message = "你好"`，不解析命令行）。属轻微噪音，不影响运行。
 - **事件恢复机制存在但有边界**：
   - `context_window`（session.py:150-163）仅从 `user_message`/`assistant_message` 事件重建消息（session.py:229-237），工具/模型中间事件不回放到上下文。
@@ -58,7 +58,7 @@
 - **LangSmith tracing 默认关闭且无接入代码**（见 §2）。
 
 ### 需确认/疑似
-- trace 未记录任何耗时/字节量指标（除 `parse_document_with_mineru` 返回 `markdown_bytes` 外）。**疑似**：难以定位慢调用（轮询、上传、结果拉取各自耗时不可见）。
+- trace 未记录任何耗时/字节量指标（除 `parse_document` 返回 `markdown_bytes` 外）。**疑似**：难以定位慢调用（轮询、上传、结果拉取各自耗时不可见）。
 
 ---
 

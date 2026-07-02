@@ -19,9 +19,10 @@ from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a document-processing agent. Use MinerU when a user asks to parse "
-    "PDF, image, DOCX, PPTX, or XLSX files. Persist important notes under "
-    "/memories/ and write large outputs under /artifacts/."
+    "You are a document-processing agent. When a user provides a local file path "
+    "and asks to parse PDF, image, DOCX, PPTX, or XLSX files, call "
+    "`parse_document`. Persist important notes under /memories/ and write large "
+    "outputs under /artifacts/."
 )
 
 
@@ -120,22 +121,12 @@ class HarnessRuntime:
         return HarnessTurn(session_id=session_id, context=context, result=result)
 
 
-def create_mineru_harness(resources: AgentResources) -> HarnessRuntime:
+def create_harness(resources: AgentResources) -> HarnessRuntime:
     return HarnessRuntime(
         resources=resources,
         hands=TraceHands(resources.sessions),
         tools=default_tool_catalog(),
         brain_factory=DeepAgentsBrainFactory(),
-    )
-
-
-def create_mineru_agent(resources: AgentResources, session_id: str) -> Brain:
-    harness = create_mineru_harness(resources)
-    return harness.brain_factory.create(
-        resources=resources,
-        middleware=harness.hands.middleware(session_id),
-        tools=harness.tools.as_list(),
-        session_id=session_id,
     )
 
 
