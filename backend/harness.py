@@ -14,6 +14,8 @@ from .resources import AgentResources
 from .session import ContextWindow
 from .tools import ToolCatalog, ToolHandler, default_tool_catalog
 
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M3"
 DEFAULT_SYSTEM_PROMPT = (
     "You are a document-processing agent. Use MinerU when a user asks to parse "
     "PDF, image, DOCX, PPTX, or XLSX files. Persist important notes under "
@@ -38,7 +40,12 @@ class BrainFactory(Protocol):
 
 class DeepAgentsBrainFactory:
     def __init__(self, model: str | None = None, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> None:
-        self.model = model or os.environ.get("DSAGENTS_MODEL", "openai:gpt-5.5")
+        if model is None:
+            if api_key := os.getenv("MINIMAX_API_KEY"):
+                os.environ.setdefault("OPENAI_API_KEY", api_key)
+            os.environ.setdefault("OPENAI_API_BASE", os.getenv("MINIMAX_BASE_URL") or DEFAULT_MINIMAX_BASE_URL)
+            model = f"openai:{os.getenv('MINIMAX_MODEL') or DEFAULT_MINIMAX_MODEL}"
+        self.model = model
         self.system_prompt = system_prompt
 
     def create(

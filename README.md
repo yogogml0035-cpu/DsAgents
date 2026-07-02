@@ -20,12 +20,7 @@ python -m backend.self_check
 如果本机还没装 `uv`，先装它。
 
 PowerShell:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-或者用 `winget`：
+用 `winget`：
 
 ```powershell
 winget install --id=astral-sh.uv -e
@@ -77,19 +72,15 @@ uv pip install -r requirements.txt
 
 ## 4. 运行前配置
 
-默认模型来自 `backend/harness.py`，默认值是 `openai:gpt-5.5`。真实跑会话前，至少要准备模型提供方的凭证。
+环境变量从 `backend/.env` 加载。默认模型是 `MINIMAX_MODEL`，未设置时使用 `MiniMax-M3`：
 
 PowerShell:
 
 ```powershell
-$env:OPENAI_API_KEY = "your-openai-api-key"
+Copy-Item backend\.env.example backend\.env
 ```
 
-如果要换模型，可以额外设置：
-
-```powershell
-$env:DSAGENTS_MODEL = "openai:gpt-5.5"
-```
+然后在 `backend/.env` 中填写 MiniMax 配置。
 
 补充说明：
 
@@ -135,7 +126,7 @@ python -m backend "请解析 D:/docs/demo.pdf 并总结重点" --session-id demo
 
 这一步要求：
 
-- `OPENAI_API_KEY` 已配置；
+- `backend/.env` 中的 MiniMax 凭证已配置；
 - MinerU 服务 `http://10.11.0.110:6006` 可访问。
 
 ## 7. 常用维护命令

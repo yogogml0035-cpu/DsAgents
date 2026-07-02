@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from dotenv import load_dotenv
 
 from .hands import TraceHands
-from .harness import HarnessRuntime
+from .harness import DeepAgentsBrainFactory, HarnessRuntime
 from .resources import AgentResources, ResourceConfig
 from .session import SqliteSessionStore
 from .tools import ToolCatalog, _extract_markdown, _find_value
@@ -28,6 +32,19 @@ def main() -> None:
     assert _extract_markdown({"result": {"md_content": "# ok"}}) == "# ok"
 
     with tempfile.TemporaryDirectory() as tmp:
+        with patch.dict(os.environ, {}, clear=True):
+            env_path = Path(tmp) / ".env"
+            env_path.write_text(
+                "MINIMAX_API_KEY=test-key\n"
+                "MINIMAX_BASE_URL=https://minimax.example/v1\n"
+                "MINIMAX_MODEL=test-minimax\n",
+                encoding="utf-8",
+            )
+            load_dotenv(env_path)
+            assert DeepAgentsBrainFactory().model == "openai:test-minimax"
+            assert os.environ["OPENAI_API_KEY"] == "test-key"
+            assert os.environ["OPENAI_API_BASE"] == "https://minimax.example/v1"
+
         data_dir = Path(tmp) / "data"
         with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
             assert resources.config.session_db.exists()
