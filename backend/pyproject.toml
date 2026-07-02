@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsagents"
+version = "0.1.0"
+description = "Agent runtime for DeepAgents + MinerU."
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "deepagents>=0.6.12",
+    "langchain>=1.3.11",
+    "langchain-core>=1.4.8",
+    "langchain-openai>=0.3.0",
+    "langgraph>=1.2.7",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.2",
+]
+
+# 扁平顶层模块：backend/ 内的 .py 直接作为顶层模块安装，
+# 这样模块内部 `from hands import ...` 等绝对导入在安装后同样可用。
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = ["hands", "harness", "resources", "session", "tools", "self_check"]

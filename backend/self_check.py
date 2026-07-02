@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 from dotenv import load_dotenv
 
-from .hands import TraceHands
-from .harness import DeepAgentsBrainFactory, HarnessRuntime
-from .resources import AgentResources, ResourceConfig
-from .session import SqliteSessionStore
-from .tools import ToolCatalog, _extract_markdown, _find_value
+from hands import TraceHands
+from harness import DeepAgentsBrainFactory, HarnessRuntime
+from resources import AgentResources, ResourceConfig
+from session import SqliteSessionStore
+from tools import ToolCatalog, _extract_markdown, _find_value
 
 
 class _FakeBrain:

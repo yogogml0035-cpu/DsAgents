@@ -5,6 +5,7 @@
 .venv/
 .env
 data/
+backend/data/
 __pycache__/
 *.pyc
 

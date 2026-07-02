@@ -54,7 +54,7 @@ def parse_document_with_mineru(
 
 
 def _default_output_path(source: Path) -> Path:
-    return (Path("data") / "mineru_outputs" / f"{source.stem}.md").resolve()
+    return (Path(__file__).resolve().parent / "data" / "mineru_outputs" / f"{source.stem}.md")
 
 
 def _submit_task(source: Path) -> str:

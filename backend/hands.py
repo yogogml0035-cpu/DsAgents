@@ -8,7 +8,7 @@ from langchain.messages import ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from .session import SessionStore
+from session import SessionStore
 
 
 class Hands(Protocol):

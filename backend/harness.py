@@ -9,10 +9,10 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
-from .hands import Hands, TraceHands
-from .resources import AgentResources
-from .session import ContextWindow
-from .tools import ToolCatalog, ToolHandler, default_tool_catalog
+from hands import Hands, TraceHands
+from resources import AgentResources
+from session import ContextWindow
+from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M3"

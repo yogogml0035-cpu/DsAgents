@@ -8,12 +8,15 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.sqlite import SqliteStore
 
-from .session import SqliteSessionStore
+from session import SqliteSessionStore
+
+# 数据目录固定在 backend/ 下，与 CWD 无关。
+_BACKEND_DIR = Path(__file__).resolve().parent
 
 
 @dataclass(frozen=True)
 class ResourceConfig:
-    data_dir: Path = Path("data")
+    data_dir: Path = _BACKEND_DIR / "data"
 
     @property
     def session_db(self) -> Path:

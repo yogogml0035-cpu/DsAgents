@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).with_name(".env"))
+
 
 @dataclass(frozen=True)
 class SessionRecord:
@@ -207,8 +211,8 @@ class SqliteSessionStore:
 
 
 def run_session(message: str, session_id: str | None = None) -> dict:
-    from .harness import create_mineru_harness
-    from .resources import AgentResources, ResourceConfig
+    from harness import create_mineru_harness
+    from resources import AgentResources, ResourceConfig
 
     session_id = session_id or uuid.uuid4().hex
     with AgentResources(ResourceConfig()) as resources:
@@ -216,11 +220,9 @@ def run_session(message: str, session_id: str | None = None) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the minimal DsAgents DeepAgents session.")
-    parser.add_argument("message", help="User message for the agent.")
-    parser.add_argument("--session-id", default=None, help="Stable session/thread id.")
-    args = parser.parse_args()
-    result = run_session(args.message, args.session_id)
+    message = "你好"
+    session_id = uuid.uuid4().hex
+    result = run_session(message, session_id)
     print(result["messages"][-1].content)
 
 
