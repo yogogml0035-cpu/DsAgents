@@ -16,8 +16,8 @@ from resources import AgentResources
 from session import ContextWindow
 from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
-DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/anthropic"
-DEFAULT_MINIMAX_MODEL = "MiniMax-M3"
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "You are a document-processing agent. Use MinerU when a user asks to parse "
     "PDF, image, DOCX, PPTX, or XLSX files. Persist important notes under "
@@ -45,9 +45,9 @@ class DeepAgentsBrainFactory:
         if model is None:
             # ponytail: keep existing MINIMAX_* keys and adapt them onto LangChain's Anthropic client.
             model = init_chat_model(
-                f"anthropic:{os.getenv('MINIMAX_MODEL') or DEFAULT_MINIMAX_MODEL}",
-                api_key=os.getenv("MINIMAX_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
-                base_url=os.getenv("MINIMAX_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL") or DEFAULT_MINIMAX_BASE_URL,
+                f"anthropic:{os.getenv('MINIMAX_MODEL')}",
+                api_key=os.getenv("MINIMAX_API_KEY"),
+                base_url=os.getenv("MINIMAX_BASE_URL"),
             )
         self.model = model
         self.system_prompt = system_prompt
