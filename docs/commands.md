@@ -21,6 +21,20 @@ python backend/self_check.py
 # 或：cd backend && python -m self_check
 ```
 
+## 启动 HTTP 服务
+
+Windows 下可直接运行：
+
+```bat
+scripts\start-backend.bat
+```
+
+等价命令：
+
+```bash
+cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
 ## 通过 Python API 调用
 
 无独立 CLI 入口，需在 `backend/` 下或加入 `PYTHONPATH`：
