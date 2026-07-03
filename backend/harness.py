@@ -13,7 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from hands import Hands, TraceHands
 from resources import AgentResources
-from session import ContextWindow
+from session import ContextWindow, RunEvent
 from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
 
@@ -115,6 +115,78 @@ class HarnessRuntime:
         )
         return HarnessTurn(session_id=session_id, context=context, result=result)
 
+    def execute_run(self, message: str, session_id: str, run_id: str) -> Iterator[RunEvent]:
+        assistant_text = ""
+        text_parts: list[str] = []
+        yield self.resources.sessions.emit_run_status(run_id, "running")
+        try:
+            context, brain = self._prepare_turn(message, session_id, run_id=run_id)
+            for chunk in brain.stream(
+                {"messages": _reset_messages(context)},
+                config={"configurable": {"thread_id": session_id}},
+                stream_mode=["messages", "custom", "values"],
+                version="v2",
+            ):
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk["type"] == "messages":
+                    thinking = _thinking_delta(chunk["data"])
+                    if thinking:
+                        yield self.resources.sessions.emit_run_event(
+                            run_id,
+                            "thinking",
+                            {"content": thinking},
+                            raw=chunk["data"],
+                        )
+                    text = _message_delta(chunk["data"])
+                    if text:
+                        text_parts.append(text)
+                        yield self.resources.sessions.emit_run_event(
+                            run_id,
+                            "text_delta",
+                            {"content": text},
+                            raw=chunk["data"],
+                        )
+                elif chunk["type"] == "custom":
+                    yield self.resources.sessions.emit_run_event(
+                        run_id,
+                        "tool_status",
+                        _stream_payload(chunk["data"]),
+                        raw=chunk["data"],
+                    )
+                elif chunk["type"] == "values":
+                    text = _assistant_text(chunk["data"])
+                    if text:
+                        assistant_text = text
+                    yield self.resources.sessions.emit_run_event(
+                        run_id,
+                        "values",
+                        {"text": text} if text else {},
+                        raw=chunk["data"],
+                    )
+        except Exception as exc:
+            yield self.resources.sessions.emit_run_status(
+                run_id,
+                "failed",
+                error=_error_text(exc),
+                raw={"status": "failed", "error": repr(exc)},
+            )
+            return
+
+        if not assistant_text and text_parts:
+            assistant_text = "".join(text_parts)
+        self.resources.sessions.emit_event(
+            session_id,
+            "assistant_message",
+            {"role": "assistant", "content": assistant_text},
+        )
+        yield self.resources.sessions.emit_run_status(
+            run_id,
+            "succeeded",
+            reply=assistant_text,
+            raw={"status": "succeeded", "reply": assistant_text},
+        )
+
     def stream_turn(self, message: str, session_id: str) -> Iterator[tuple[str, dict[str, Any]]]:
         context, brain = self._prepare_turn(message, session_id)
         assistant_content = None
@@ -153,7 +225,13 @@ class HarnessRuntime:
             {"role": "assistant", "content": assistant_content},
         )
 
-    def _prepare_turn(self, message: str, session_id: str) -> tuple[ContextWindow, Brain]:
+    def _prepare_turn(
+        self,
+        message: str,
+        session_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> tuple[ContextWindow, Brain]:
         self.resources.sessions.ensure_session(session_id)
         self.resources.sessions.emit_event(
             session_id,
@@ -164,7 +242,7 @@ class HarnessRuntime:
 
         brain = self.brain_factory.create(
             resources=self.resources,
-            middleware=self.hands.middleware(session_id),
+            middleware=self.hands.middleware(session_id, run_id=run_id),
             tools=self.tools.as_list(),
             session_id=session_id,
         )
@@ -196,6 +274,10 @@ def assistant_reply_text(result: dict[str, Any]) -> str:
     if text:
         return text
     return _stringify_content(content)
+
+
+def _assistant_text(result: dict[str, Any]) -> str:
+    return _content_text(_assistant_content(result))
 
 
 def _reset_messages(context: ContextWindow) -> list[Any]:
@@ -283,6 +365,17 @@ def _thinking_text(content: Any) -> str:
     if isinstance(content, list):
         return "".join(_thinking_text(item) for item in content)
     return ""
+
+
+def _stream_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {"value": value}
+
+
+def _error_text(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
 
 
 def _stringify_content(content: Any) -> str:

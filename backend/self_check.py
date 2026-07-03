@@ -4,12 +4,15 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
+import time
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from dotenv import load_dotenv
+
 warnings.filterwarnings(
     "ignore",
     message=r"Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.",
@@ -17,7 +20,7 @@ warnings.filterwarnings(
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from api import create_app
+from api import INTERRUPTED_RUN_ERROR, create_app
 from hands import TraceHands
 from harness import DeepAgentsBrainFactory, HarnessRuntime, _thinking_delta
 from resources import AgentResources, ResourceConfig
@@ -25,7 +28,16 @@ from session import SqliteSessionStore
 from tools import ToolCatalog, _extract_markdown, _find_value, default_tool_catalog, parse_document
 
 
+class _StreamControl:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+
 class _FakeBrain:
+    def __init__(self, control: _StreamControl | None = None) -> None:
+        self.control = control
+
     def invoke(self, payload: dict, config: dict | None = None) -> dict:
         assert getattr(payload["messages"][0], "id", None) == "__remove_all__"
         text = payload["messages"][-1]["content"]
@@ -48,6 +60,12 @@ class _FakeBrain:
                 {"langgraph_node": "model"},
             ),
         }
+        if text == "fail":
+            raise RuntimeError("planned failure")
+        if text == "hold":
+            assert self.control is not None
+            self.control.started.set()
+            assert self.control.release.wait(timeout=5), "hold run was never released"
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo: "), {"langgraph_node": "model"})}
         yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content=text), {"langgraph_node": "model"})}
@@ -70,15 +88,15 @@ class _FakeBrain:
 
 
 class _FakeBrainFactory:
+    def __init__(self, control: _StreamControl | None = None) -> None:
+        self.control = control
+
     def create(self, **_: object) -> _FakeBrain:
-        return _FakeBrain()
+        return _FakeBrain(self.control)
 
 
 def main() -> None:
-    assert (
-        _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {}))
-        == "plan"
-    )
+    assert _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
     assert _find_value({"data": {"task_id": "abc"}}, {"task_id"}) == "abc"
     assert _extract_markdown({"result": {"md_content": "# ok"}}) == "# ok"
     assert default_tool_catalog().handlers[0].__name__ == "parse_document"
@@ -128,7 +146,8 @@ def main() -> None:
                 {"role": "assistant", "content": "a"},
             ]
 
-            trace = TraceHands(resources.sessions).middleware("s1")[0]
+            resources.sessions.create_run("s1", "run-trace")
+            trace = TraceHands(resources.sessions).middleware("s1", run_id="run-trace")[0]
             trace.wrap_model_call(
                 SimpleNamespace(messages=[{"role": "user", "content": "ping"}]),
                 lambda _request: SimpleNamespace(result=[SimpleNamespace(content="pong")]),
@@ -138,8 +157,16 @@ def main() -> None:
                 lambda _request: {"ok": True},
             )
             trace_types = [event.event_type for event in resources.sessions.get_events("s1")]
+            run_trace_types = [event.event_type for event in resources.sessions.get_run_events("run-trace")]
             assert "model_request" in trace_types
             assert "tool_response" in trace_types
+            assert "model_request" in run_trace_types
+            assert "tool_response" in run_trace_types
+            tool_request = [event for event in resources.sessions.get_run_events("run-trace") if event.event_type == "tool_request"][-1]
+            assert tool_request.raw["args"] == {"value": 1}
+            tool_response = [event for event in resources.sessions.get_run_events("run-trace") if event.event_type == "tool_response"][-1]
+            assert tool_response.raw["result"] == {"ok": True}
+            resources.sessions.emit_run_status("run-trace", "succeeded", reply="ok")
             try:
                 trace.wrap_model_call(
                     SimpleNamespace(messages=[{"role": "user", "content": "bad"}]),
@@ -179,46 +206,106 @@ def main() -> None:
             turn_types = [event.event_type for event in resources.sessions.get_events("s2")]
             assert turn_types == ["user_message", "assistant_message", "user_message", "assistant_message"]
 
+            resources.sessions.create_run("recover", "recover-run")
+            resources.sessions.emit_run_status("recover-run", "running")
+            failed_runs = resources.sessions.fail_incomplete_runs(INTERRUPTED_RUN_ERROR)
+            assert failed_runs == ["recover-run"]
+            recover_snapshot = resources.sessions.get_run("recover-run")
+            assert recover_snapshot.status == "failed"
+            assert recover_snapshot.error == INTERRUPTED_RUN_ERROR
+
         oversized = SqliteSessionStore(data_dir / "dsagents_sessions.db", data_dir / "artifacts", max_inline_bytes=10)
         oversized.emit_event("s3", "tool_response", {"content": "x" * 100})
         large_event = oversized.get_events("s3")[-1]
         assert large_event.payload["content"] == "x" * 100
+        oversized.create_run("s3", "big-run")
+        oversized.emit_run_event("big-run", "tool_response", {"name": "demo"}, raw={"content": "x" * 100})
+        large_run_event = oversized.get_run_events("big-run")[-1]
+        assert large_run_event.raw["content"] == "x" * 100
         assert any((data_dir / "artifacts" / "session-events").glob("*.json"))
+        assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
 
         api_data_dir = Path(tmp) / "api-data"
+        hold_control = _StreamControl()
+        harness_creations = {"count": 0}
+
+        def counted_harness(resources: AgentResources) -> HarnessRuntime:
+            harness_creations["count"] += 1
+            return _fake_harness(resources, control=hold_control)
+
         app = create_app(
             resource_config=ResourceConfig(data_dir=api_data_dir),
-            harness_factory=_fake_harness,
+            harness_factory=counted_harness,
         )
         with TestClient(app) as client:
             message_response = client.post("/sessions/messages", json={"message": "hello", "session_id": None})
             assert message_response.status_code == 200
             payload = message_response.json()
             session_id = payload["session_id"]
-            assert payload == {"session_id": session_id, "reply": "echo: hello"}
+            run_id = payload["run_id"]
+            assert payload == {
+                "session_id": session_id,
+                "run_id": run_id,
+                "status": "succeeded",
+                "reply": "echo: hello",
+            }
             follow_up = client.post("/sessions/messages", json={"message": "again", "session_id": session_id})
             assert follow_up.status_code == 200
-            assert follow_up.json() == {"session_id": session_id, "reply": "echo: again"}
-            with sqlite3.connect(api_data_dir / "dsagents_sessions.db") as conn:
-                session_count = conn.execute("select count(*) from sessions").fetchone()[0]
-            assert session_count == 1
+            follow_up_payload = follow_up.json()
+            assert follow_up_payload == {
+                "session_id": session_id,
+                "run_id": follow_up_payload["run_id"],
+                "status": "succeeded",
+                "reply": "echo: again",
+            }
+            assert harness_creations["count"] == 1
 
-            with client.stream("POST", "/sessions/messages/stream", json={"message": "stream me", "session_id": None}) as response:
+            run_detail = client.get(f"/runs/{run_id}")
+            assert run_detail.status_code == 200
+            run_payload = run_detail.json()
+            assert run_payload["run"]["status"] == "succeeded"
+            event_types = [event["type"] for event in run_payload["events"]]
+            assert event_types[0] == "status"
+            assert event_types[1] == "status"
+            assert "thinking" in event_types
+            assert "text_delta" in event_types
+            assert "tool_status" in event_types
+            assert event_types[-1] == "status"
+            cursor = run_payload["events"][1]["event_id"]
+            cursor_payload = client.get(f"/runs/{run_id}", params={"after_event_id": cursor}).json()
+            assert len(cursor_payload["events"]) < len(run_payload["events"])
+            assert cursor_payload["events"][0]["event_id"] > cursor
+
+            with client.stream("POST", "/sessions/messages/stream", json={"message": "stream me", "session_id": session_id}) as response:
                 assert response.status_code == 200
                 events = _parse_sse("".join(response.iter_text()))
             event_names = [event["event"] for event in events]
             assert event_names[0] == "session"
             assert event_names[-1] == "done"
-            assert "thinking_delta" in event_names
-            assert "text_delta" in event_names
-            assert "tool_status" in event_names
-            assert (
-                event_names.index("session")
-                < event_names.index("thinking_delta")
-                < event_names.index("text_delta")
-                < event_names.index("tool_status")
-                < event_names.index("done")
-            )
+            assert all(name == "run_event" for name in event_names[1:-1])
+            assert events[0]["data"]["status"] == "queued"
+            streamed_types = [event["data"]["type"] for event in events[1:-1]]
+            assert streamed_types[0] == "status"
+            assert "thinking" in streamed_types
+            assert "text_delta" in streamed_types
+            assert "tool_status" in streamed_types
+            assert streamed_types[-1] == "status"
+
+            background = client.post("/sessions/messages/runs", json={"message": "hold", "session_id": session_id})
+            assert background.status_code == 200
+            background_payload = background.json()
+            assert background_payload == {
+                "session_id": session_id,
+                "run_id": background_payload["run_id"],
+                "status": "queued",
+            }
+            assert hold_control.started.wait(timeout=5)
+            conflict = client.post("/sessions/messages", json={"message": "blocked", "session_id": session_id})
+            assert conflict.status_code == 409
+            assert conflict.json() == {
+                "error": "该会话正在运行",
+                "active_run_id": background_payload["run_id"],
+            }
 
             upload_response = client.post(
                 "/files",
@@ -231,6 +318,75 @@ def main() -> None:
             assert upload_name.endswith("_report.pdf")
             upload_file = api_data_dir / "artifacts" / "uploads" / upload_name
             assert upload_file.read_bytes() == b"demo upload"
+
+            hold_control.release.set()
+            background_run = _wait_for_run(client, background_payload["run_id"], "succeeded")
+            assert background_run["reply"] == "echo: hold"
+
+            session_runs = client.get(f"/sessions/{session_id}/runs")
+            assert session_runs.status_code == 200
+            session_runs_payload = session_runs.json()
+            assert [item["run_id"] for item in session_runs_payload[:3]] == [
+                background_payload["run_id"],
+                events[0]["data"]["run_id"],
+                follow_up_payload["run_id"],
+            ]
+            assert session_runs_payload[0]["reply_preview"] == "echo: hold"
+
+            failed = client.post("/sessions/messages", json={"message": "fail", "session_id": "failed-session"})
+            assert failed.status_code == 200
+            failed_payload = failed.json()
+            assert failed_payload == {
+                "session_id": "failed-session",
+                "run_id": failed_payload["run_id"],
+                "status": "failed",
+                "error": "planned failure",
+            }
+            failed_run = client.get(f"/runs/{failed_payload['run_id']}").json()
+            assert failed_run["run"]["status"] == "failed"
+            assert failed_run["run"]["error"] == "planned failure"
+            failed_types = [event["type"] for event in failed_run["events"]]
+            assert failed_types[0] == "status"
+            assert failed_types[1] == "status"
+            assert "thinking" in failed_types
+            assert failed_types[-1] == "status"
+            failed_session_runs = client.get("/sessions/failed-session/runs").json()
+            assert failed_session_runs[0]["error_preview"] == "planned failure"
+            with sqlite3.connect(api_data_dir / "dsagents_sessions.db") as conn:
+                assistant_count = conn.execute(
+                    """
+                    select count(*)
+                    from session_events
+                    where session_id = ? and event_type = 'assistant_message'
+                    """,
+                    ("failed-session",),
+                ).fetchone()[0]
+                session_count = conn.execute("select count(*) from sessions").fetchone()[0]
+            assert assistant_count == 0
+            assert session_count >= 2
+
+        cleanup_data_dir = Path(tmp) / "cleanup-api"
+        cleanup_store = SqliteSessionStore(cleanup_data_dir / "dsagents_sessions.db", cleanup_data_dir / "artifacts")
+        cleanup_store.create_run("cleanup-session", "cleanup-run")
+        cleanup_store.emit_run_status("cleanup-run", "running")
+        cleanup_factory_count = {"count": 0}
+
+        def cleanup_harness(resources: AgentResources) -> HarnessRuntime:
+            cleanup_factory_count["count"] += 1
+            return _fake_harness(resources)
+
+        cleanup_app = create_app(
+            resource_config=ResourceConfig(data_dir=cleanup_data_dir),
+            harness_factory=cleanup_harness,
+        )
+        with TestClient(cleanup_app) as cleanup_client:
+            cleanup_run = cleanup_client.get("/runs/cleanup-run")
+            assert cleanup_run.status_code == 200
+            cleanup_payload = cleanup_run.json()
+            assert cleanup_payload["run"]["status"] == "failed"
+            assert cleanup_payload["run"]["error"] == INTERRUPTED_RUN_ERROR
+            assert cleanup_payload["events"][-1]["type"] == "status"
+            assert cleanup_factory_count["count"] == 1
 
         virtual_source = api_data_dir / "artifacts" / "uploads" / "source.pdf"
         virtual_source.parent.mkdir(parents=True, exist_ok=True)
@@ -269,12 +425,12 @@ def main() -> None:
     print("self-check passed")
 
 
-def _fake_harness(resources: AgentResources) -> HarnessRuntime:
+def _fake_harness(resources: AgentResources, control: _StreamControl | None = None) -> HarnessRuntime:
     return HarnessRuntime(
         resources=resources,
         hands=TraceHands(resources.sessions),
         tools=ToolCatalog(()),
-        brain_factory=_FakeBrainFactory(),
+        brain_factory=_FakeBrainFactory(control),
     )
 
 
@@ -291,6 +447,18 @@ def _parse_sse(raw: str) -> list[dict[str, object]]:
             }
         )
     return events
+
+
+def _wait_for_run(client: TestClient, run_id: str, expected_status: str) -> dict[str, object]:
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        response = client.get(f"/runs/{run_id}")
+        assert response.status_code == 200
+        payload = response.json()["run"]
+        if payload["status"] == expected_status:
+            return payload
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} never reached {expected_status}")
 
 
 if __name__ == "__main__":

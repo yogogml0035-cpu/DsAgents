@@ -12,20 +12,29 @@
 
 ### 1.1 FastAPI HTTP API（对外 transport）
 
-- **边界位置**：`backend/api.py`，公开导出 `create_app(...)` 与模块级 `app`。HTTP 层本身不持有独立 service/manager，只在每个请求里 `with AgentResources(...)` 后复用 `HarnessRuntime`。
+- **边界位置**：`backend/api.py`，公开导出 `create_app(...)` 与模块级 `app`。HTTP 层本身不持有独立 service/manager；它在 FastAPI lifespan 启动时装配一次共享 `AgentResources` / `HarnessRuntime`，并把 HTTP 三种 Agent POST 统一收口到 `HarnessRuntime.execute_run(...)`。
 - **阻塞消息接口**：`POST /sessions/messages`
   - 请求 JSON：`{"message": "...", "session_id": null | "..."}`。
-  - 行为：若 `session_id` 为空则服务端生成 `uuid.uuid4().hex`；然后 `create_harness(resources).run_turn(...)`。
-  - 响应 JSON：`{"session_id":"...","reply":"..."}`。
+  - 行为：若 `session_id` 为空则服务端生成 `uuid.uuid4().hex`；请求被接受时统一创建 `run_id`，同一 `session_id` 若已有运行中的 Agent run 则返回 HTTP 409。
+  - 响应 JSON：`{"session_id":"...","run_id":"...","status":"succeeded","reply":"..."}` 或 `{"session_id":"...","run_id":"...","status":"failed","error":"..."}`。
 - **SSE 流式接口**：`POST /sessions/messages/stream`
   - 请求 JSON 同上。
-  - 行为：若 `session_id` 为空则服务端生成 id；然后 `create_harness(resources).stream_turn(...)`。
-  - SSE 事件：`session`（`{"session_id":"..."}`）→ 零到多条 `thinking_delta` / `text_delta` / `tool_status` → `done`；异常时发 `error`（`{"session_id":"...","message":"..."}`）。
+  - 行为：同样先创建 `run_id`，随后统一走 `brain.stream(..., stream_mode=["messages","custom","values"], version="v2")`。
+  - SSE 事件：首条 `session`（`{"session_id":"...","run_id":"...","status":"queued"}`）→ 零到多条 `run_event`（事件体稳定为 `event_id/run_id/type/created_at/payload/raw`）→ `done`。
+- **后台接口**：`POST /sessions/messages/runs`
+  - 请求 JSON 同上。
+  - 行为：创建 `run_id` 后立即返回 queued；服务端进程内后台线程继续执行，进程重启不可恢复。
+  - 响应 JSON：`{"session_id":"...","run_id":"...","status":"queued"}`。
+- **run 查询接口**：`GET /runs/{run_id}`
+  - 查询参数：可选 `after_event_id=<int>`。
+  - 响应 JSON：`{"run": {...}, "events": [...]}`；不带 cursor 返回累计全量事件，带 cursor 只返回新增事件。
+- **session run 列表接口**：`GET /sessions/{session_id}/runs`
+  - 响应 JSON：按创建时间倒序返回 `run_id/status/created_at/updated_at/reply_preview/error_preview`。
 - **上传接口**：`POST /files`
   - 请求：`multipart/form-data` 字段 `file`。
   - 保存：`backend/data/artifacts/uploads/<uuid>_<clean_filename>`；文件名只取 basename，空名回退 `upload`。
   - 响应：`{"file_path":"/artifacts/uploads/<uuid>_<clean_filename>"}`。
-- **显式不做**：源码未见鉴权、中间租户层、上传大小限制、CORS middleware、`/health` 健康检查端点。
+- **显式不做**：源码未见鉴权、中间租户层、上传大小限制、CORS middleware、`/health` 健康检查端点、Redis/外部队列、取消/自动重试。
 
 ### 1.2 MinerU 异步任务 API（当前文档解析 provider）
 
@@ -75,11 +84,11 @@
 
 | 用途 | 路径 | 谁建/写 |
 |------|------|---------|
-| 会话事件库（append-only） | `backend/data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） |
+| 会话/Run 事件库（append-only） | `backend/data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） |
 | LangGraph Store（持久记忆/历史/日志） | `backend/data/dsagents_store.db` | `SqliteStore.from_conn_string` + `.setup()`（`backend/resources.py`） |
 | LangGraph Checkpoint（线程状态检查点） | `backend/data/dsagents_checkpoints.db` | `SqliteSaver.from_conn_string` + `.setup()`（`backend/resources.py`） |
 
-三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。均为本地文件 SQLite，无连接串/网络、无远程 DB。会话事件库为 append-only，超大 payload（> 256KiB）外溢到 `backend/data/artifacts/session-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
+三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。均为本地文件 SQLite，无连接串/网络、无远程 DB。会话/Run 事件库内同时维护 `sessions` / `session_events` / `runs` / `run_events` 四张表；两类事件都保持 append-only，超大 payload 会外溢到 `backend/data/artifacts/session-events/<uuid>.json` 或 `backend/data/artifacts/run-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
 
 ### 1.7 MiniMax LLM（Anthropic 兼容，默认 LLM 提供方）
 

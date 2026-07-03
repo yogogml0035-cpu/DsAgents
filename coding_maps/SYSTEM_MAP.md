@@ -11,7 +11,7 @@
 DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，使能力（Brain、执行器、工具）可插拔，而**不被硬编码到某个 runner、容器、模型或工作流**。DeepAgents 在这里只是可插拔的 Brain / 子 Harness（经 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明可替换）；文档解析作为可插拔工具（`ToolCatalog`）由 Harness 注入；项目自身拥有 Session、事件、资源、工具路由与运行时状态。
 
 - **仓库形态**：单子项目仓库，当前只有一个 Python 子项目 `backend/`，五大模块边界全部落在该子项目内。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个薄 HTTP/SSE/upload 适配层。刻意不引入账号体系、鉴权、复杂 service 框架或工作流引擎。
+- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个薄 HTTP run/upload 适配层。刻意不引入账号体系、鉴权、复杂 service 框架或工作流引擎。
 - **根级原则**（见 `AGENTS.md`）：稳定接口而非实现；Session 存 append-only 完整持久任务事实、不是上下文窗口；真实错误透传；保持 Harness 薄；每个新抽象必须保护五大边界之一否则移除。
 
 ---
@@ -84,10 +84,13 @@ return HarnessTurn(session_id, context, result)
 
 **当前仍无前端子项目**，但本仓库的 `backend/` 已暴露最小 HTTP API，供外部 UI / client 直接调用：
 
-- `POST /sessions/messages`：阻塞回复，返回 `{"session_id","reply"}`。
-- `POST /sessions/messages/stream`：SSE 流式回复，事件 `session` → `thinking_delta` / `text_delta` / `tool_status` → `done|error`。
+- `POST /sessions/messages`：阻塞 run，返回 `{"session_id","run_id","status","reply|error"}`。
+- `POST /sessions/messages/stream`：SSE 流式 run，事件 `session` → `run_event*` → `done`。
+- `POST /sessions/messages/runs`：后台 run，立即返回 `{"session_id","run_id","status":"queued"}`。
+- `GET /runs/{run_id}`：查询 run 基础状态与事件流，支持 `after_event_id` 增量拉取。
+- `GET /sessions/{session_id}/runs`：按创建时间倒序返回该 session 的 run 列表。
 - `POST /files`：上传到 `backend/data/artifacts/uploads/`，返回虚拟路径 `/artifacts/uploads/...`，供后续消息引用。
-- 仍无鉴权、无 CORS middleware、无独立 `/health`、无 WebSocket。
+- 仍无鉴权、无 CORS middleware、无独立 `/health`、无 WebSocket、无 Redis/外部队列。
 - `.env.example` 中的 `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500`（端口 8500 暗示 Streamlit）仍未被源码读取，属预留前端边界。
 
 > 不编造任何额外前端 API 契约。若未来新增前端子项目，应在本节补充真实使用到的请求/响应语义，而不是规划稿。
@@ -102,12 +105,12 @@ return HarnessTurn(session_id, context, result)
 
 | 用途 | 路径 | 谁建/写 | 来源 |
 |------|------|---------|------|
-| 会话事件库（append-only） | `backend/data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） | `ResourceConfig.session_db` |
+| 会话/Run 事件库（append-only） | `backend/data/dsagents_sessions.db` | `SqliteSessionStore`（标准库 `sqlite3`，`backend/session.py`） | `ResourceConfig.session_db` |
 | LangGraph Store（持久记忆/历史/日志） | `backend/data/dsagents_store.db` | `SqliteStore.from_conn_string` + `.setup()`（`backend/resources.py`） | `ResourceConfig.store_db` |
 | LangGraph Checkpoint（线程状态检查点） | `backend/data/dsagents_checkpoints.db` | `SqliteSaver.from_conn_string` + `.setup()`（`backend/resources.py`） | `ResourceConfig.checkpoint_db` |
 
 - 三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。
-- 会话事件库为 append-only，超大 payload（> `max_inline_bytes=262144` 即 256KiB）外溢到 `backend/data/artifacts/session-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
+- 会话/Run 事件库为 append-only，超大 payload（> `max_inline_bytes=262144` 即 256KiB）外溢到 `backend/data/artifacts/session-events/<uuid>.json` 或 `backend/data/artifacts/run-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
 
 ### 5.2 文件系统产物目录
 
@@ -115,7 +118,8 @@ return HarnessTurn(session_id, context, result)
 |------|------|------|
 | 数据根目录 | `backend/data/` | `ResourceConfig.data_dir = _BACKEND_DIR/"data"`，运行时创建，`.gitignore` 忽略 |
 | 大产物根目录 | `backend/data/artifacts/` | `ResourceConfig.artifacts_dir`；DeepAgents `FilesystemBackend` 根 |
-| 超大事件外溢 JSON | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore` |
+| 超大 session 事件外溢 JSON | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore` |
+| 超大 run 事件外溢 JSON | `backend/data/artifacts/run-events/<uuid>.json` | `SqliteSessionStore` |
 | 文档解析输出 | `backend/data/document_outputs/<stem>.md` | `backend/tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"document_outputs"`） |
 
 ### 5.3 DeepAgents `CompositeBackend` 路由（`backend/resources.py`）
@@ -189,7 +193,7 @@ return HarnessTurn(session_id, context, result)
 | 1 | **当前文档解析 provider 仍依赖 MinerU 内网 HTTP**；若运行环境继续使用 `.env.example` 示例地址，则部署到其它网络即不可用；明文 HTTP 无 TLS；服务不可用时硬失败、无重试/降级。 | `backend/tools.py::_submit_mineru_task` / `_wait_for_mineru_result`、`backend/.env.example` |
 | 2 | **`MINERU_*` 仅在工具调用时校验**：缺失会在 `parse_document(...)` 路径抛 `RuntimeError`，非法 `MINERU_TIMEOUT_SECONDS` 直接抛原生 `ValueError`；普通聊天和 harness 创建不会预检。 | `backend/tools.py::_required_env`、`int(_required_env("MINERU_TIMEOUT_SECONDS"))` |
 | 3 | **范围蔓延前兆：Oracle 预埋与当前里程碑无关**。`.env.example` 已含 5 个 `ORACLE_*` 键、`backend/instantclient/` 二进制已提交进 git，但 backend 源码零 Oracle 引用、`backend/pyproject.toml` 未列 `oracledb`/`cx_Oracle`。配置先于实现进入仓库。 | `backend/.env.example`、`git ls-files backend/instantclient/`、grep `oracle/cx_Oracle/oracledb` 在 `backend/*.py`（零命中） |
-| 4 | **`session.py` 遗留未使用 import**：`import argparse`（`session.py:3`）未被使用——`main()` 硬编码 `message = "你好"` + 随机 `session_id`，不解析命令行参数。属轻微噪音。 | `backend/session.py:3`（`argparse`）、`session.py:222-226`（`main` 未用 `args`） |
+| 4 | **后台 run 只做进程内单飞，不做跨进程恢复**：同一 `session_id` 运行锁只保存在 FastAPI app state；进程重启后 queued/running run 统一在 startup 追加 failed("执行已中断，请重试")。这是当前里程碑刻意接受的简化。 | `backend/api.py::_acquire_session_run/_release_session_run`、`backend/api.py::lifespan`、`backend/session.py::fail_incomplete_runs` |
 | 5 | **错误事件可能携带敏感信息**：`hands.py` 把 `repr(exc)` 写入 `model_error`/`tool_error` 事件并持久化到 SQLite，`repr` 可能含 URL/请求头片段，当前无脱敏。 | `backend/hands.py:41,64`（`emit_event(..., repr(exc))`） |
 
 > 其它已确认的低风险项（无 TODO/FIXME 残留、`.env`/`.venv` 正确忽略、纯同步一致性 OK、append-only 事件可恢复但非完整回放、LangSmith 默认关闭）详见 `backend/.planning/codebase/CONCERNS.md`。

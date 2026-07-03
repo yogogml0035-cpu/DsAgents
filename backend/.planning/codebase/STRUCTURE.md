@@ -1,6 +1,6 @@
 # STRUCTURE
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-03 生成；本轮刷新：新增 FastAPI HTTP/SSE/upload 适配层与 `/artifacts/uploads` 路径）
+> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-03 生成；本轮刷新：新增 FastAPI lifespan + run API + `run-events/` 产物目录）
 
 ## 1. backend/ 目录树
 
@@ -8,10 +8,10 @@
 
 ```
 backend/
-├── api.py               # 薄 HTTP 适配层：FastAPI 阻塞消息、SSE 流、文件上传
-├── session.py           # Session 边界：SQLite 事件存储 + 上下文窗口派生 + run_session + main
-├── harness.py           # Harness 边界：Brain 工厂 + 单轮运行时 HarnessRuntime
-├── hands.py             # Hands 边界：TraceMiddleware 暴露执行 trace 并透传错误
+├── api.py               # 薄 HTTP 适配层：FastAPI lifespan、run API、文件上传
+├── session.py           # Session 边界：SQLite session 事件 + runs/run_events + 上下文窗口派生 + run_session + main
+├── harness.py           # Harness 边界：Brain 工厂 + 单轮运行时 + HTTP run streaming 执行
+├── hands.py             # Hands 边界：TraceMiddleware 暴露执行 trace，并可同步写 run 事件
 ├── resources.py         # Resources 边界：SQLite store/checkpointer + CompositeBackend 装配
 ├── tools.py             # Tools 边界：通用文档解析工具 + ToolCatalog 注册
 ├── self_check.py        # 端到端自检（FakeBrain），验证五大边界与约束
@@ -30,10 +30,10 @@ backend/
 
 | 文件 | 主要导出（类/函数） | 一句话职责 |
 |------|----------------------|------------|
-| `session.py` | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session`、`main` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；并在导入时 `load_dotenv` |
-| `api.py` | `MessageRequest`、`create_app`、`app` | 薄 HTTP 适配层：把 HarnessRuntime 暴露为阻塞消息、SSE 流式消息和文件上传接口 |
-| `harness.py` | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` | 读历史→派生上下文→请求执行→写回事件 |
-| `hands.py` | `Hands`、`TraceHands`、`TraceMiddleware` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
+| `session.py` | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`RunRecord`、`RunEvent`、`RunSnapshot`、`ContextWindow`、`run_session`、`main` | append-only session 事件 + immutable runs + append-only run_events + 上下文窗口派生 |
+| `api.py` | `MessageRequest`、`INTERRUPTED_RUN_ERROR`、`create_app`、`app` | 薄 HTTP 适配层：用 lifespan 持有共享 resources/harness，暴露阻塞 run、SSE run、后台 run、run 查询和文件上传 |
+| `harness.py` | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` | 读历史→派生上下文→请求执行→写回事件；HTTP run 统一走 streaming 执行路径 |
+| `hands.py` | `Hands`、`TraceHands`、`TraceMiddleware` | 用 middleware 暴露 model/tool trace 并透传真实错误；可按 run_id 同步追加 run 事件 |
 | `resources.py` | `ResourceConfig`、`AgentResources` | 持有 SQLite store/checkpointer + CompositeBackend 路由；`data_dir` 锁定在 `backend/data/` |
 | `tools.py` | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` | 通用文档解析工具与工具注册 |
 | `self_check.py` | `main`（+ 内部 `_FakeBrain`/`_FakeBrainFactory`） | 端到端自检五大边界与约束 |
@@ -46,7 +46,7 @@ backend/
   ```bash
   cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
   ```
-  `api.py` 暴露 `app` / `create_app()`，当前提供三个端点：`POST /sessions/messages`（阻塞回复）、`POST /sessions/messages/stream`（SSE 流式回复）、`POST /files`（multipart 上传到 `backend/data/artifacts/uploads/`，响应虚拟路径 `/artifacts/uploads/<uuid>_<filename>`）。
+  `api.py` 暴露 `app` / `create_app()`，当前提供六个端点：`POST /sessions/messages`（阻塞 run）、`POST /sessions/messages/stream`（SSE run 流）、`POST /sessions/messages/runs`（后台 run）、`GET /runs/{run_id}`（run + 事件查询）、`GET /sessions/{session_id}/runs`（session run 列表）、`POST /files`（multipart 上传到 `backend/data/artifacts/uploads/`，响应虚拟路径 `/artifacts/uploads/<uuid>_<filename>`）。
 
 - **导入入口**：需在 `backend/` 目录下（或把 `backend/` 加入 `PYTHONPATH`）：
   ```python
@@ -76,12 +76,13 @@ backend/
 | 用途 | 实际路径 | 来源 |
 |------|----------|------|
 | 数据根目录 | `backend/data/` | `ResourceConfig.data_dir`（`_BACKEND_DIR/"data"`），`AgentResources.__enter__` 创建 |
-| Session 事件库 | `backend/data/dsagents_sessions.db` | `ResourceConfig.session_db` |
+| Session/Run 事件库 | `backend/data/dsagents_sessions.db` | `ResourceConfig.session_db`（包含 `sessions` / `session_events` / `runs` / `run_events` 四张表） |
 | Store 库（持久历史/记忆） | `backend/data/dsagents_store.db` | `ResourceConfig.store_db` → `SqliteStore` |
 | Checkpointer 库 | `backend/data/dsagents_checkpoints.db` | `ResourceConfig.checkpoint_db` → `SqliteSaver` |
 | 大型产物根目录 | `backend/data/artifacts/` | `ResourceConfig.artifacts_dir`，`AgentResources` 创建 |
 | HTTP 上传落点 | `backend/data/artifacts/uploads/<uuid>_<filename>` | `api.py::post_file` |
-| 超大事件外溢文件 | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore(artifacts_dir)`，payload > 256KiB 时外溢 |
+| 超大 session 事件外溢文件 | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore(artifacts_dir)`，payload > 256KiB 时外溢 |
+| 超大 run 事件外溢文件 | `backend/data/artifacts/run-events/<uuid>.json` | `SqliteSessionStore(artifacts_dir)`，payload/raw > 256KiB 时外溢 |
 | 文档解析输出 | `backend/data/document_outputs/<stem>.md` | `tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"document_outputs"`） |
 
 **虚拟文件系统（DeepAgents CompositeBackend）**：`AgentResources` 构建的 `CompositeBackend` 路由如下（`FilesystemBackend` 根指向 `backend/data/artifacts/`，`virtual_mode=True`）：
