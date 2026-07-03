@@ -194,7 +194,7 @@ return HarnessTurn(session_id, context, result)
 | 2 | **`MINERU_*` 仅在工具调用时校验**：缺失会在 `parse_document(...)` 路径抛 `RuntimeError`，非法 `MINERU_TIMEOUT_SECONDS` 直接抛原生 `ValueError`；普通聊天和 harness 创建不会预检。 | `backend/tools.py::_required_env`、`int(_required_env("MINERU_TIMEOUT_SECONDS"))` |
 | 3 | **范围蔓延前兆：Oracle 预埋与当前里程碑无关**。`.env.example` 已含 5 个 `ORACLE_*` 键、`backend/instantclient/` 二进制已提交进 git，但 backend 源码零 Oracle 引用、`backend/pyproject.toml` 未列 `oracledb`/`cx_Oracle`。配置先于实现进入仓库。 | `backend/.env.example`、`git ls-files backend/instantclient/`、grep `oracle/cx_Oracle/oracledb` 在 `backend/*.py`（零命中） |
 | 4 | **后台 run 只做进程内单飞，不做跨进程恢复**：同一 `session_id` 运行锁只保存在 FastAPI app state；进程重启后 queued/running run 统一在 startup 追加 failed("执行已中断，请重试")。这是当前里程碑刻意接受的简化。 | `backend/api.py::_acquire_session_run/_release_session_run`、`backend/api.py::lifespan`、`backend/session.py::fail_incomplete_runs` |
-| 5 | **错误事件可能携带敏感信息**：`hands.py` 把 `repr(exc)` 写入 `model_error`/`tool_error` 事件并持久化到 SQLite，`repr` 可能含 URL/请求头片段，当前无脱敏。 | `backend/hands.py:41,64`（`emit_event(..., repr(exc))`） |
+| 5 | **错误事件可能携带敏感信息**：`hands.py` 把 `repr(exc)` 写入 `model_error`/`tool_error` 事件并持久化到 SQLite，`repr` 可能含 URL/请求头片段，当前无脱敏。 | `backend/hands.py:44,68`（`emit_event(..., "model_error"/"tool_error", {"error": repr(exc)})`） |
 
 > 其它已确认的低风险项（无 TODO/FIXME 残留、`.env`/`.venv` 正确忽略、纯同步一致性 OK、append-only 事件可恢复但非完整回放、LangSmith 默认关闭）详见 `backend/.planning/codebase/CONCERNS.md`。
 

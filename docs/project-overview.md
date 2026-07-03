@@ -1,6 +1,6 @@
 # 项目总览
 
-> 根级 AGENTS.md 的详情文档之一。事实来源：`backend/.planning/codebase/` 与 `coding_maps/SYSTEM_MAP.md`（2026-07-02，本轮刷新）。
+> 根级 AGENTS.md 的详情文档之一。事实来源：`backend/.planning/codebase/` 与 `coding_maps/SYSTEM_MAP.md`（2026-07-03，本轮刷新）。
 
 ## 仓库定位
 
@@ -20,7 +20,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 
 ## 包管理器
 
-`uv`（项目元数据在 `backend/pyproject.toml`，锁文件 `backend/uv.lock`；`backend/` 是可安装包 `dsagents`）。仓库根的 `requirements.txt` 已废弃删除。
+`uv`（项目元数据在 `backend/pyproject.toml`，锁文件 `backend/uv.lock`；`backend/` 是可安装包 `dsagents`）。安装：`cd backend && uv sync`。
 
 ## 文档分层规则
 

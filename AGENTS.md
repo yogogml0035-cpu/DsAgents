@@ -4,25 +4,20 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 
 ## 关键约定
 
-- **包管理器**：`uv`（`cd backend && uv sync`）。`backend/` 是可安装包 `dsagents`，非常规 Python 包（无 `__init__.py`，**无** `python -m backend.*`）。
-- **导入入口**：`from session import run_session`（需在 `backend/` 下或把 `backend/` 加入 `PYTHONPATH`）。
-- **能力可插拔**：Brain / 执行器 / 工具可插拔；Session 是 append-only 事件源（不是上下文窗口）；运行时保持薄；真实错误透传；优先删减范围而非增加旋钮。
-- **文档分层**：根级只放导航与全局原则；实现细节留在更下层。改代码后同步事实层。
+- **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
+- **非标准导入入口**：`from session import run_session`（需在 `backend/` 下或把 `backend/` 加入 `PYTHONPATH`）。**没有** `python -m backend.*`（无 `__init__.py` / `__main__.py`）。
+- **自检**：`python backend/self_check.py`（FakeBrain，结尾打印 `self-check passed`）。
 - **文档语言**：简体中文（保留代码标识符 / 路径 / 命令 / 配置键 / IP/端口原文）；不外泄密钥；证据不足标注"需确认"。
 
-## 自检
-
-```bash
-python backend/self_check.py        # FakeBrain，结尾打印 self-check passed
-```
+> 核心运行时原则（能力可插拔、Session 是事件源、保持运行时薄、真实错误透传、优先删减范围）与文档维护规则见 [`docs/conventions.md`](docs/conventions.md)，每次改动 backend 前请先读。
 
 ## 详细文档
 
-- [项目总览（定位 / 技术栈 / 文档分层 / 运行时规则）](docs/project-overview.md)
-- [核心原则与维护规则](docs/conventions.md)
-- [命令与入口](docs/commands.md)
-- [按任务分类的阅读顺序 + 当前里程碑](docs/reading-order.md)
-- [backend 架构与约定（根级视角）](docs/backend.md)
+- [项目总览](docs/project-overview.md) — 定位 / 技术栈 / 文档分层 / 运行时规则
+- [核心原则与维护规则](docs/conventions.md) — 全局人工约束（改动前必读）
+- [命令与入口](docs/commands.md) — 开发 / 自检 / HTTP / 导入调用
+- [按任务分类的阅读顺序](docs/reading-order.md) — 任务类型 → 应先读哪些文档
+- [backend 架构与约定](docs/backend.md) — 根级视角的 backend 摘要
 
 ## 系统级文档
 

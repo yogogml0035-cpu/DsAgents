@@ -13,4 +13,4 @@
 
 ## 当前里程碑
 
-最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / 最小 session runner）。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md` §5。
+最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / 最小 session runner / 薄 HTTP run/upload 适配层）。HTTP 层已升级为 **run 中心模型**：阻塞/SSE/后台三种 POST 统一创建 `run_id`、写 `runs`/`run_events`，并提供 run 查询与文件上传。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md` §6。

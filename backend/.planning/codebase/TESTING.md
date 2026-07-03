@@ -1,109 +1,101 @@
 # 测试与验证 (TESTING)
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-03 本轮刷新：新增 FastAPI lifespan / run API / 并发锁 / 启动清理自检）
+> 事实来源：backend/ 源码（2026-07-03 刷新）
 
-本文档如实反映"首个里程碑早期"的测试现状。当前**没有正式的自动化测试套件**，唯一的验证手段是 `self_check.py` 自检脚本。
+本文档如实反映首个里程碑早期的测试现状：**无正式自动化测试套件、无 CI、无类型/lint 工具**。唯一产品级验证手段是 `self_check.py` 端到端自检。
 
-## 1. 测试框架与依赖
+## 1. 测试框架与依赖现状
 
-- **backend/pyproject.toml 的 `[project.dependencies]` 不包含任何测试/lint/类型工具**：无 `pytest`、`unittest`(显式依赖)、`ruff`、`black`、`mypy`、`coverage` 等。亦无 `[project.optional-dependencies]` / `[dependency-groups]` 声明 dev 工具。
-- 仓库内无 `pytest.ini` / `setup.cfg` / `tox.ini` 等测试配置文件。`backend/pyproject.toml` 仅定义运行时依赖与打包元数据，未含 `[tool.pytest]` / `[tool.ruff]` 等测试/lint 配置节。
-- backend 业务源码中无 `test_*.py` / `*_test.py` / `conftest.py`。
-- 唯一引入的"测试相关"导入是标准库 `unittest.mock.patch`（`self_check.py`）和 `types.SimpleNamespace`（`self_check.py`），用于构造假对象，不走任何测试框架 runner。
+- `backend/pyproject.toml` 的 `[project.dependencies]` **不含任何测试/lint/类型工具**：无 `pytest`、`unittest`(显式依赖)、`ruff`、`black`、`mypy`、`coverage`。无 `[project.optional-dependencies]`/`[dependency-groups]` 声明 dev 工具。→ 验证：`backend/pyproject.toml`。
+- 仓库内无 `pytest.ini`/`setup.cfg`/`tox.ini`，`pyproject.toml` 无 `[tool.pytest]`/`[tool.ruff]`。
+- `self_check.py` 引入的"测试相关"仅为标准库 `unittest.mock.patch`、`types.SimpleNamespace`、`fastapi.testclient.TestClient`（`self_check.py:11-12/20`），**不走任何测试 runner**。
+- `backend/tests/` 仅一个文件 `test_stream_typing.py`：**它不是 pytest 用例**，而是一个**手动 SSE 打字机客户端**（`argparse` + `requests`，默认连 `http://127.0.0.1:8500/sessions/messages/stream`，逐字打印 `text_delta`）。无 `assert`、无 test 函数、无 `conftest.py`。→ 验证：`tests/test_stream_typing.py:11/14-44`。
 
-结论：**当前没有正式测试，自检脚本用裸 `assert` 实现，不依赖 pytest。**
+结论：**当前没有正式测试；自检脚本用裸 `assert` 实现，`tests/` 目录名具误导性，内含的是辅助工具而非测试。**
 
 ## 2. self_check.py 的角色
 
-`backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document` 真实网络成功路径外的几乎所有核心逻辑。它通过 `python backend/self_check.py`（仓库根，已激活环境）或 `cd backend && uv run python self_check.py` 运行（`if __name__ == "__main__": main()`）。
+`backend/self_check.py`（465 行）是端到端冒烟自检，覆盖五大边界的核心不变量。通过 `python backend/self_check.py` 运行（`if __name__ == "__main__": main()`）。
 
-### 它验证什么（`main()` 函数，均通过裸 `assert`）
+### 五大边界自检（`main()`，均裸 `assert`）
 
-| 验证项 | 覆盖的代码 |
-|--------|-----------|
-| `_find_value` 递归取值 / `_extract_markdown` 提取 md | `tools._find_value` / `_extract_markdown` |
-| brain factory 模型接线：注入 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL=https://minimax.example/anthropic` / `MINIMAX_MODEL=test-minimax`，断言产物为 `ChatAnthropic`、`model == "test-minimax"` 且 `thinking == {"type": "adaptive"}` | `harness.DeepAgentsBrainFactory.__init__` |
-| 缺失 `MINERU_BASE_URL` 时 fail-fast（抛 `RuntimeError`） | `tools.parse_document` / `_required_env` |
-| `AgentResources` 初始化：建库、建目录、CompositeBackend 就绪 | `resources.AgentResources` |
-| Session 事件 append + 读取 round-trip | `session.SqliteSessionStore.emit_event/get_events` |
-| 上下文窗口派生（20 上限裁剪、剔除 leading 非 user 消息） | `session.context_window` |
-| TraceMiddleware 记录 model/tool trace，存在 `run_id` 时同步写 run 事件，且异常被 re-raise | `hands.TraceMiddleware` |
-| `HarnessRuntime.run_turn` 单轮 + 多轮事件序列 `["user_message","assistant_message","user_message","assistant_message"]` | `harness.HarnessRuntime.run_turn` |
-| `HarnessRuntime.execute_run` 统一 streaming 路径：`messages/custom/values`→`run_events`→成功/失败终态 | `harness.HarnessRuntime.execute_run` |
-| HTTP lifespan 共享资源：多个请求复用同一个 `HarnessRuntime`，启动时清理遗留 queued/running run | `api.py::create_app(lifespan=...)` |
-| HTTP 阻塞接口：自动生成 `session_id` / `run_id`、返回 `status` / `reply|error` | `api.py::POST /sessions/messages` |
-| SSE 接口：首个 `session` 事件携带 `session_id/run_id/status`，后续统一 `run_event`，末尾 `done` | `api.py::POST /sessions/messages/stream` |
-| 后台 run：提交即返回 queued，随后可经 `GET /runs/{run_id}` 轮询 | `api.py::POST /sessions/messages/runs` |
-| `GET /runs/{run_id}` 全量/增量 cursor 查询；`GET /sessions/{session_id}/runs` 列表 | `api.py::GET /runs/{run_id}` / `GET /sessions/{session_id}/runs` |
-| 同 session 并发锁：运行中第二个 Agent POST 返回 409，但上传不受影响 | `api.py::_acquire_session_run` / `_release_session_run` |
-| 失败语义：failed run 不写 `assistant_message`，但会保留 run 错误与过程事件 | `harness.HarnessRuntime.execute_run` + `api.py` |
-| 上传接口：basename 清理、保存到 `artifacts/uploads/`、返回 `/artifacts/uploads/...` | `api.py::POST /files` |
-| `/artifacts/...` 虚拟路径映射与 `..` 逃逸拒绝 | `tools.parse_document` / `_resolve_document_path` |
-| 超大 payload 落盘 round-trip（`max_inline_bytes=10` → `artifacts/session-events/*.json` / `artifacts/run-events/*.json`） | `session.SqliteSessionStore`（`max_inline_bytes`） |
+| 边界 | 自检内容 | 验证代码 |
+|------|---------|---------|
+| **Session（append-only）** | 事件 round-trip、`emit_event` 只增不改 | `session.py:177-198`；自检 `self_check.py:138-148/217-226` |
+| **Session（派生视图）** | `context_window` 从 `user_message`/`assistant_message` 投影 | `session.py:200-213`；自检 `self_check.py:144-147` |
+| **Hands（错误透传）** | model/tool 异常 emit `*_error` 后必 `raise` | `hands.py:42-46/66-71`；自检 `self_check.py:170-189` |
+| **Harness（Brain 可替换）** | `_FakeBrainFactory` 注入，`run_turn` 多轮事件序列 | `harness.py:104-116`；自检 `self_check.py:191-207` |
+| **Tools（fail-fast）** | 缺 `MINERU_BASE_URL` 抛 `RuntimeError` | `tools.py:84-88`；自检 `self_check.py:121-129` |
 
-### 它如何替身真实 Brain
+### 关键断言的不变量
 
-- `_FakeBrain`：断言首条消息是 `RemoveMessage(REMOVE_ALL_MESSAGES)`（对应 harness 的 `_reset_messages`），返回 `echo: {原文}`，绕开真实 LLM 调用。
-- `_FakeBrainFactory`：返回 `_FakeBrain`，注入 `HarnessRuntime`。
-- 用 `patch.dict(os.environ, {}, clear=True)` 保证环境变量测试的纯净（env-purity）。
+- **append-only**：`emit_event`/`emit_run_event` 返回的事件 payload 与读回一致，超大 payload 外溢后仍可 round-trip 读回（`self_check.py:217-226`，`max_inline_bytes=10` 触发外溢）。
+- **错误透传**：`model`/`tool` handler 抛 `ValueError`/`RuntimeError`，`wrap_model_call`/`wrap_tool_call` 必须 re-raise，且末事件为 `model_error`/`tool_error`（`self_check.py:170-189`）。
+- **fail-forward 配置**：缺 `MINERU_BASE_URL` 必抛 `RuntimeError("Missing required environment variable: MINERU_BASE_URL")`（`self_check.py:121-129`）。
+- **失败 run 不写 `assistant_message`**：`fail` 输入的 session 中 `assistant_message` 计数为 0（`self_check.py:355-365`）。
+- **启动清理**：进程（TestClient）重启后遗留 `queued`/`running` 的 run 被标记 `failed` + `INTERRUPTED_RUN_ERROR`（`self_check.py:368-389`、`api.py:40`）。
+- **409 并发**：后台 run 持有 session 锁时，同步 POST 返回 409（`self_check.py:294-308`）。
+- **超大 payload 外溢**：`session-events/*.json` 与 `run-events/*.json` 文件存在（`self_check.py:225-226`）。
+
+### `_FakeBrain` / `_FakeBrainFactory`（证明 Brain 可替换）
+
+- `_FakeBrain`（`self_check.py:37`）：断言首条消息是 `RemoveMessage(REMOVE_ALL_MESSAGES)`（对应 harness 的 `_reset_messages`，`harness.py:283-284`），返回 `echo: {原文}`，绕开真实 LLM；`stream()` 按 `messages/custom/values` 序列产出 thinking + 文本 chunk，`text=="fail"` 时抛 `RuntimeError`，`text=="hold"` 时用 `_StreamControl` 同步阻塞（用于并发锁测试）。
+- `_FakeBrainFactory`（`self_check.py:90`）：实现 `BrainFactory.create(...)`，返回 `_FakeBrain`，注入 `HarnessRuntime`——**证明 `Brain`/`BrainFactory` Protocol 的可替换性**。
+- 用 `patch.dict(os.environ, {}, clear=True)` 保证 env 纯净（`self_check.py:105/121`）。
 
 ### 输出
 
-- 成功：`print("self-check passed")`，退出码 0。
+- 成功：末行打印 `self-check passed`（`self_check.py:425`），退出码 0。
 - 失败：任一 `assert` 抛 `AssertionError`（或被测代码抛其它异常），非零退出。
 
 ## 3. 运行命令
 
-`backend/` 是扁平顶层模块（不是包），所以**不能用** `python -m backend.self_check`（没有 `backend` 包）。可用入口：
+`backend/` 是扁平顶层模块（非包），**不能用** `python -m backend.self_check`（无 `backend` 包）。可用入口：
 
 ```bash
-# 自检（推荐，不需要真实 LLM / 当前文档解析 provider 可达）
+# 自检（推荐，无需真实 LLM / provider 可达）
 python backend/self_check.py
 # 或：cd backend && uv run python self_check.py
 
-# 单次会话冒烟（需真实 MiniMax key 与网络，会发 LLM 请求）
+# 单次会话冒烟（需真实 MiniMax key 与网络，发 LLM 请求）
 python backend/session.py
-# 或：cd backend && python -m session
 
-# HTTP 服务（需真实 MiniMax key 与网络；run API + 上传端点）
+# HTTP 服务（需真实 MiniMax key 与网络）
 cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
+# 或仓库根：scripts\start-backend.bat（端口 8500）
 ```
 
-`session.main()`（`session.py`）硬编码 `message = "你是谁"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。
+## 4. scripts/ 辅助脚本（辅助，非产品）
 
-> 没有 `python -m backend`（无 `__main__.py`）；也没有 `python -m backend.self_check` / `python -m backend.session`（无 `backend` 包）。
+- `scripts/start-backend.bat`：切到 `backend/`，执行 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`。→ 验证：`scripts/start-backend.bat`。
+- `backend/tests/test_stream_typing.py`：手动 SSE 打字机客户端（连本地 8500 端口），属辅助工具，**非自动化测试**。→ 验证：见 §1。
+- `scripts/ralph/`：独立的 dashboard/ralph 子项目，与 backend 无关，不属于本子项目测试范畴。
 
-## 4. 验证入口（如何确认 backend 可运行）
+> 辅助脚本不是产品代码，变更不影响 backend 不变量；它们的存在不代表测试覆盖。
 
-1. **依赖就位**：在仓库根执行 `cd backend && uv sync`，由 uv 按 `backend/pyproject.toml` + `backend/uv.lock` 创建/同步 `backend/.venv`。
-2. **纯逻辑自检（无需外部服务）**：
-   ```bash
-   python backend/self_check.py
-   ```
-  看到末行 `self-check passed` 即表示 Session / Harness / Hands / Resources / Tools / HTTP run / SSE run / 后台 run / upload（除真实外部网络）链路正常。
-3. **带真实模型的集成验证**：调用编程入口而非冒烟 `main()`：
-   ```python
-   # 需在 backend/ 目录下，或把 backend/ 加入 PYTHONPATH
-   from session import run_session
-   result = run_session("你好")
-   print(result["messages"][-1].content)
-   ```
-   前提：`backend/.env` 中配置了有效的 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`。
+## 5. 覆盖缺口（诚实评估）
 
-> 当前没有独立的 `/health` 端点。验证以 `self_check`、`run_session` 与 `api.py` 的本地 `TestClient` 契约检查为主。
-
-## 5. 当前测试覆盖缺口（初步建议，不夸大）
-
-**已覆盖（self_check.py）：** `session`、`harness`、`hands`、`resources` 的纯逻辑路径，以及 `tools` 中 `_find_value` / `_extract_markdown` 纯函数。
-
-**未覆盖 / 缺口：**
-
-| 缺口 | 说明 | 建议 |
+| 缺口 | 现状 | 影响 |
 |------|------|------|
-| 当前 provider 的真实网络交互 | `tools.parse_document` / `_submit_mineru_task` / `_wait_for_mineru_result` 的成功路径未测试（需 mock `requests`） | 引入 `requests` mock（如 `responses`/`unittest.mock`）覆盖成功/失败状态/超时分支 |
-| 缺乏正式测试框架 | 无 pytest、无 fixture、无 CI | 可选：引入 `pytest` + `tests/` 目录，把 `self_check.py` 的断言拆为 pytest 用例以便细分失败定位 |
-| 无类型检查 / lint | 未配置 mypy/ruff | 可选：加 `mypy`/`ruff` 到 dev 依赖，CI 中跑（代码已全量类型注解，mypy 成本低） |
-| 跨进程恢复 | 当前只测“进程重启后 queued/running 被启动清理追加 failed”，不做后台线程恢复 | 若未来引入真正队列/多进程 worker，再补恢复/幂等等验证 |
-| 回放/重放事件 | append-only 事件可重放，但无对应测试 | 可补"从事件流重建上下文"的测试 |
+| **无单元测试** | 业务模块无 `test_*.py`；`tests/` 唯一文件是手动工具 | 函数级失败无法细分定位 |
+| **无 CI** | 无 GitHub Actions / 预提交钩子配置 | 回归靠本地手跑 `self_check` |
+| **无 provider mock** | `parse_document` 成功路径（`_submit_mineru_task`/`_wait_for_mineru_result`）仅靠自检里 `patch` 桩覆盖一次（`self_check.py:405-408`），无独立 mock 套件 | provider 协议变更难及时发现 |
+| **依赖真实 env 才能 run** | `self_check` 通过 `patch.dict` 注入 env；`run_session`/`api.py` 需真实 `MINIMAX_*` + 网络 | 集成验证需密钥与可达端点 |
+| **HTTP 端点无集成测试** | `self_check` 用 `TestClient` 覆盖主路径，但无独立 HTTP 集成套件；边界（如 404、并发释放、上传异常）无专项用例 | 传输层回归靠自检一次性走查 |
 
-> 当前里程碑以"最小可运行 demo"为目标，测试薄弱属预期。上述建议为后续增量，不要求立即实施。
+> 当前里程碑以"最小可运行 demo"为目标，测试薄弱属预期。上述为后续增量方向，不要求立即实施。
+
+## 6. 验证入口清单（每个不变量如何在 self_check 里复核）
+
+| 不变量 | 复核位置 |
+|--------|---------|
+| append-only 事件不可改 | `self_check.py:138-148`（emit→get round-trip） |
+| `context_window` 是派生视图 | `self_check.py:144-147`（投影非存储） |
+| 错误透传（model） | `self_check.py:170-179` |
+| 错误透传（tool） | `self_check.py:180-189` |
+| fail-fast 缺 env | `self_check.py:121-129` |
+| 失败 run 不写 assistant_message | `self_check.py:355-365` |
+| 启动清理 fail_incomplete_runs | `self_check.py:209-216/368-389` |
+| 409 并发冲突锁 | `self_check.py:294-308` |
+| 超大 payload 外溢 JSON 指针 | `self_check.py:217-226` |
+| Brain Protocol 可替换 | `self_check.py:191-207`（`_FakeBrainFactory`） |

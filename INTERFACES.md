@@ -96,7 +96,7 @@
 - **初始化方式**：当 `model is None` 时执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"), thinking={"type": "adaptive"})`，构造 LangChain `ChatAnthropic` 模型对象（经 MiniMax 的 Anthropic 兼容端点、走 Anthropic 协议），再交给 `create_deep_agent(...)`。复用 LangChain 的 Anthropic provider 适配，**不**自行包装 `anthropic` SDK，也**不**再手工覆写 `OPENAI_*` 环境变量。
 - **Thinking 输出**：默认模型固定传 `thinking={"type": "adaptive"}`。流式 HTTP 接口从 LangChain `messages` chunk 里提取 Anthropic/MiniMax `thinking` 内容块或标准 `reasoning` 内容块，并作为 `thinking_delta` SSE 事件发给前端。
 - **配置来源（单一、无 fallback）**：**仅**读取 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 三个 env（commit `a30bb99` 切换 Anthropic 兼容协议、`9c78cf2` 移除 fallback）。**无默认值、无 fallback**：既无 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` 回退，也无 `MINIMAX_*` → `OPENAI_*` 复制；env 未设置时 `os.getenv` 返回 `None` 直传 provider，行为由 provider 决定（fail-forward，缺失配置的诊断推迟到首次模型调用）。
-- **配置加载**：`.env` 由 `backend/session.py:15` 在导入时 `load_dotenv` 加载（`tools.py` 也在导入时同样加载；不是 `__init__.py`，因为没有 `__init__.py`）。
+- **配置加载**：`.env` 由 `backend/session.py:14` 在导入时 `load_dotenv` 加载（`tools.py:16` 也在导入时同样加载；不是 `__init__.py`，因为没有 `__init__.py`）。
 
 ---
 

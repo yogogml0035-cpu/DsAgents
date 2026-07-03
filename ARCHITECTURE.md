@@ -22,8 +22,8 @@
 
 | 模块 | 文件 | 核心职责 | 公开接口（类/函数） |
 |------|------|----------|----------------------|
-| **Session** | `backend/session.py` | 以 append-only 事件存完整持久任务事实；从历史派生上下文窗口（不等于上下文窗口本身） | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session` |
-| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；保持薄 | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` |
+| **Session** | `backend/session.py` | 以 append-only 事件存完整持久任务事实；在同一 SQLite 边界追加 `runs`/`run_events`；从历史派生上下文窗口（不等于上下文窗口本身） | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`RunRecord`、`RunEvent`、`RunSnapshot`、`ContextWindow`、`run_session`、`main` |
+| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；同时提供 HTTP run 的统一 streaming 执行路径（`execute_run`）；保持薄 | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` |
 | **Hands** | `backend/hands.py` | 通过 middleware 暴露模型/工具执行 trace，并把真实错误透传 | `Hands`、`TraceHands`、`TraceMiddleware` |
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` |
 | **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` |
