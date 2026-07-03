@@ -220,7 +220,7 @@ def run_session(message: str, session_id: str | None = None) -> dict:
 
 
 def main() -> None:
-    message = "你好"
+    message = "你是谁"
     session_id = uuid.uuid4().hex
     result = run_session(message, session_id)
     print(result["messages"][-1].content)

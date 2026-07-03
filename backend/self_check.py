@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from api import create_app
 from hands import TraceHands
-from harness import DeepAgentsBrainFactory, HarnessRuntime
+from harness import DeepAgentsBrainFactory, HarnessRuntime, _thinking_delta
 from resources import AgentResources, ResourceConfig
 from session import SqliteSessionStore
 from tools import ToolCatalog, _extract_markdown, _find_value, default_tool_catalog, parse_document
@@ -37,10 +37,36 @@ class _FakeBrain:
         assert kwargs["version"] == "v2"
         text = payload["messages"][-1]["content"]
         yield {"type": "values", "ns": (), "data": {"messages": [{"role": "user", "content": text}]}, "interrupts": ()}
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                AIMessageChunk(
+                    content=[{"type": "thinking", "thinking": "plan: ", "index": 0}],
+                    response_metadata={"model_provider": "anthropic"},
+                ),
+                {"langgraph_node": "model"},
+            ),
+        }
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo: "), {"langgraph_node": "model"})}
         yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content=text), {"langgraph_node": "model"})}
-        yield {"type": "values", "ns": (), "data": {"messages": [AIMessage(content=f"echo: {text}")]} , "interrupts": ()}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [
+                    AIMessage(
+                        content=[
+                            {"type": "thinking", "thinking": "plan: "},
+                            {"type": "text", "text": f"echo: {text}"},
+                        ],
+                        response_metadata={"model_provider": "anthropic"},
+                    )
+                ]
+            },
+            "interrupts": (),
+        }
 
 
 class _FakeBrainFactory:
@@ -49,6 +75,10 @@ class _FakeBrainFactory:
 
 
 def main() -> None:
+    assert (
+        _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {}))
+        == "plan"
+    )
     assert _find_value({"data": {"task_id": "abc"}}, {"task_id"}) == "abc"
     assert _extract_markdown({"result": {"md_content": "# ok"}}) == "# ok"
     assert default_tool_catalog().handlers[0].__name__ == "parse_document"
@@ -66,6 +96,7 @@ def main() -> None:
             factory = DeepAgentsBrainFactory()
             assert factory.model.__class__.__name__ == "ChatAnthropic"
             assert getattr(factory.model, "model", None) == "test-minimax"
+            assert factory.model.thinking == {"type": "adaptive"}
             assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
             assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
 
@@ -178,9 +209,16 @@ def main() -> None:
             event_names = [event["event"] for event in events]
             assert event_names[0] == "session"
             assert event_names[-1] == "done"
+            assert "thinking_delta" in event_names
             assert "text_delta" in event_names
             assert "tool_status" in event_names
-            assert event_names.index("session") < event_names.index("text_delta") < event_names.index("tool_status") < event_names.index("done")
+            assert (
+                event_names.index("session")
+                < event_names.index("thinking_delta")
+                < event_names.index("text_delta")
+                < event_names.index("tool_status")
+                < event_names.index("done")
+            )
 
             upload_response = client.post(
                 "/files",

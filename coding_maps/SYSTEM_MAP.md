@@ -85,7 +85,7 @@ return HarnessTurn(session_id, context, result)
 **当前仍无前端子项目**，但本仓库的 `backend/` 已暴露最小 HTTP API，供外部 UI / client 直接调用：
 
 - `POST /sessions/messages`：阻塞回复，返回 `{"session_id","reply"}`。
-- `POST /sessions/messages/stream`：SSE 流式回复，事件 `session` → `text_delta` / `tool_status` → `done|error`。
+- `POST /sessions/messages/stream`：SSE 流式回复，事件 `session` → `thinking_delta` / `text_delta` / `tool_status` → `done|error`。
 - `POST /files`：上传到 `backend/data/artifacts/uploads/`，返回虚拟路径 `/artifacts/uploads/...`，供后续消息引用。
 - 仍无鉴权、无 CORS middleware、无独立 `/health`、无 WebSocket。
 - `.env.example` 中的 `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500`（端口 8500 暗示 Streamlit）仍未被源码读取，属预留前端边界。
@@ -131,7 +131,7 @@ return HarnessTurn(session_id, context, result)
 | Provider | 状态 | 边界位置 | 关键事实 |
 |----------|------|----------|----------|
 | **MinerU**（当前文档解析 provider） | 已确认 | `backend/tools.py::parse_document`（私有 `_submit_mineru_task` / `_wait_for_mineru_result`） | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` 在调用时读取；`.env.example` 当前示例地址是内网 `http://10.11.0.110:6006`；三步同步任务 API：`POST /tasks` → 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result`；源码未携带鉴权头，需确认内网是否需鉴权；明文 HTTP 无 TLS |
-| **MiniMax**（默认 LLM） | 已确认 | `backend/harness.py::DeepAgentsBrainFactory` | 经 **Anthropic 兼容协议**接入：`DeepAgentsBrainFactory.__init__`（当 `model is None` 时）执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))` 落到 LangChain `ChatAnthropic`。**仅**读取 `MINIMAX_MODEL`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL`，**无默认值、无 fallback**（commit `a30bb99` 切换协议、`9c78cf2` 移除 fallback；env 未设置时 `os.getenv` 返回 `None`，行为由 provider 决定）。**不再**复制到 `OPENAI_API_KEY`/`OPENAI_API_BASE`，也**无** `ANTHROPIC_*` 回退 |
+| **MiniMax**（默认 LLM） | 已确认 | `backend/harness.py::DeepAgentsBrainFactory` | 经 **Anthropic 兼容协议**接入：`DeepAgentsBrainFactory.__init__`（当 `model is None` 时）执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"), thinking={"type": "adaptive"})` 落到 LangChain `ChatAnthropic`。**仅**读取 `MINIMAX_MODEL`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL`，**无默认值、无 fallback**（commit `a30bb99` 切换协议、`9c78cf2` 移除 fallback；env 未设置时 `os.getenv` 返回 `None`，行为由 provider 决定）；thinking 固定启用为 `adaptive`，流式接口输出 `thinking_delta`。**不再**复制到 `OPENAI_API_KEY`/`OPENAI_API_BASE`，也**无** `ANTHROPIC_*` 回退 |
 | **DeepSeek** | 仅 `.env.example`，需确认 | — | `.env.example` 有 `DEEPSEEK_API_KEY`/`DEEPSEEK_BASE_URL`/`DEEPSEEK_MODEL`，但 backend 源码**零引用**，归属需确认（疑似可切换 LLM 提供方） |
 | **LangSmith** | 仅 `.env.example`，需确认 | — | `LANGSMITH_TRACING=false` 默认关闭，backend 源码无直接引用，经 LangChain/LangGraph 运行时间接生效；若误开启会上传 trace 到外部服务 |
 | **Oracle** | 仅 `.env.example`，需确认 | — | `ORACLE_DSN` 等键已进 `.env.example`，`backend/instantclient/` 已入库，但 backend 源码**零引用**，`backend/pyproject.toml` 的 `[project.dependencies]` 也未列 `oracledb`/`cx_Oracle`（疑似范围蔓延前兆，见 §8） |

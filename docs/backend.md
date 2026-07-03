@@ -36,7 +36,7 @@
 
 - **三 SQLite 库**（均锁定在 `backend/data/`，与 CWD 无关）：会话事件库（append-only）、LangGraph Store（持久记忆/历史/日志）、LangGraph Checkpoint（线程状态）。详见 `INTERFACES.md` §1.5。
 - **CompositeBackend 路由**：`/memories/`、`/conversation_history/`、`/logs/` → StoreBackend（SQLite）；`/artifacts/`、`/large_tool_results/` → FilesystemBackend（磁盘）；default → StateBackend（图状态）。
-- **MiniMax LLM**：经 **Anthropic 兼容协议**接入，`DeepAgentsBrainFactory` 用 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", ...)` 构造 `ChatAnthropic`，仅读 `MINIMAX_MODEL`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL`，**无默认值、无 fallback**。详见 `INTERFACES.md` §1.6。
+- **MiniMax LLM**：经 **Anthropic 兼容协议**接入，`DeepAgentsBrainFactory` 用 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", ..., thinking={"type": "adaptive"})` 构造 `ChatAnthropic`，仅读 `MINIMAX_MODEL`/`MINIMAX_API_KEY`/`MINIMAX_BASE_URL`，**无默认值、无 fallback**；SSE 流式接口输出 `thinking_delta`。详见 `INTERFACES.md` §1.7。
 - **文档解析（MinerU）**：`parse_document` 在调用时读 `MINERU_*` 四个 env，三步同步任务 API（提交 → 轮询 → 取结果）。详见 `INTERFACES.md` §1.1。
 
 > 深入 backend 内部（命名约定、类型规范、错误处理、配置约定、持久化细节、测试现状、已知风险）请直接阅读 `backend/.planning/codebase/` 下对应文档。

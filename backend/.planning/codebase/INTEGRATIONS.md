@@ -15,7 +15,7 @@
 - **SSE 流式消息接口**：`POST /sessions/messages/stream`
   - 请求 JSON 同上。
   - 行为：若 `session_id` 为空则服务端生成 id；然后 `with AgentResources(...)` → `create_harness(resources).stream_turn(...)`。
-  - SSE 事件顺序：先发 `session`（`{"session_id":"..."}`），然后零到多条 `text_delta` / `tool_status`，最后 `done`；异常时发 `error`（`{"session_id":"...","message":"..."}`）并结束。
+  - SSE 事件顺序：先发 `session`（`{"session_id":"..."}`），然后零到多条 `thinking_delta` / `text_delta` / `tool_status`，最后 `done`；异常时发 `error`（`{"session_id":"...","message":"..."}`）并结束。
 - **上传接口**：`POST /files`
   - 请求：`multipart/form-data` 字段 `file`。
   - 保存：`backend/data/artifacts/uploads/<uuid>_<clean_filename>`；文件名只取 basename，空名回退 `upload`。
@@ -73,7 +73,8 @@
 ## 7. LLM 提供方（MiniMax Anthropic 兼容）（已确认）
 
 - **边界位置**：`backend/harness.py` 的 `DeepAgentsBrainFactory.__init__`（当传入 `model is None` 时构造模型）。
-- **初始化方式**：直接以 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))` 构造 LangChain `ChatAnthropic` 模型对象（经 `langchain.chat_models.init_chat_model`，复用 LangChain 的 Anthropic provider 适配，**不是**自行包装 `anthropic` SDK），再把该对象传给 `create_deep_agent(...)`。
+- **初始化方式**：直接以 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"), thinking={"type": "adaptive"})` 构造 LangChain `ChatAnthropic` 模型对象（经 `langchain.chat_models.init_chat_model`，复用 LangChain 的 Anthropic provider 适配，**不是**自行包装 `anthropic` SDK），再把该对象传给 `create_deep_agent(...)`。
+- **Thinking 输出**：默认模型固定传 `thinking={"type": "adaptive"}`。`HarnessRuntime.stream_turn` 从 LangChain `messages` chunk 中识别 Anthropic/MiniMax `thinking` 内容块或标准 `reasoning` 内容块，并通过 SSE `thinking_delta` 发送给前端；普通文本仍走 `text_delta`。
 - **配置来源**：**仅**读取 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 三个环境变量，**无默认值、无任何 fallback**：
   - 提交 `9c78cf2`（"fix(backend/harness): remove fallback logic for minimax model config"）已**显式移除**全部回退逻辑。
   - **不存在** `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` 回退。
@@ -95,7 +96,7 @@
 HTTP 入口与 Python 导入入口共享同一 Harness：
 
 - `POST /sessions/messages` → `with AgentResources(...)` → `create_harness(resources).run_turn(message, session_id)` → `{"session_id","reply"}`。
-- `POST /sessions/messages/stream` → `with AgentResources(...)` → `create_harness(resources).stream_turn(message, session_id)` → SSE `session` / `text_delta` / `tool_status` / `done|error`。
+- `POST /sessions/messages/stream` → `with AgentResources(...)` → `create_harness(resources).stream_turn(message, session_id)` → SSE `session` / `thinking_delta` / `text_delta` / `tool_status` / `done|error`。
 - `POST /files` → 保存到 `backend/data/artifacts/uploads/` → 返回 `/artifacts/uploads/...`，供用户后续在消息里引用。
 
 以一次用户输入触发 DeepAgents 解析文档为例的数据流（文字 + 箭头）：
@@ -105,9 +106,9 @@ HTTP 入口与 Python 导入入口共享同一 Harness：
 1. `Sessions.ensure_session` → 写 `backend/data/dsagents_sessions.db`；
 2. `Sessions.emit_event("user_message")` → 写会话事件库（emit `user_message`）；
 3. `Sessions.context_window` → 读取最近 `CONTEXT_MESSAGE_LIMIT=20` 条消息（首条须为 user）；
-4. `DeepAgentsBrainFactory.create` → `create_deep_agent(...)`，注入 `middleware=TraceHands.middleware`、`tools=[parse_document]`、`backend=CompositeBackend`、`checkpointer=SqliteSaver`、`store=SqliteStore`；其中模型由 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=MINIMAX_API_KEY, base_url=MINIMAX_BASE_URL)` 构造的 `ChatAnthropic`（无默认值/无 fallback）；
+4. `DeepAgentsBrainFactory.create` → `create_deep_agent(...)`，注入 `middleware=TraceHands.middleware`、`tools=[parse_document]`、`backend=CompositeBackend`、`checkpointer=SqliteSaver`、`store=SqliteStore`；其中模型由 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=MINIMAX_API_KEY, base_url=MINIMAX_BASE_URL, thinking={"type": "adaptive"})` 构造的 `ChatAnthropic`（无默认值/无 fallback，固定开启 thinking）；
 5. `brain.invoke({"messages": _reset_messages(context)}, config={"configurable": {"thread_id": session_id}})`（`_reset_messages` 前置 `RemoveMessage(REMOVE_ALL_MESSAGES)`）→ DeepAgents 运行图；
-6. 模型调用经 `TraceMiddleware.wrap_model_call` 拦截 → emit `model_request/model_response`（出错 emit `model_error` 并上抛）→ 经 LangChain `ChatAnthropic`（`base_url=MINIMAX_BASE_URL`，无默认值）调用 MiniMax Anthropic 兼容端点完成 LLM 推理；
+6. 模型调用经 `TraceMiddleware.wrap_model_call` 拦截 → emit `model_request/model_response`（出错 emit `model_error` 并上抛）→ 经 LangChain `ChatAnthropic`（`base_url=MINIMAX_BASE_URL`，无默认值，`thinking={"type": "adaptive"}`）调用 MiniMax Anthropic 兼容端点完成 LLM 推理；
 7. 若模型决定解析文档 → `TraceMiddleware.wrap_tool_call` 拦截 → `parse_document` (`backend/tools.py`)：
    `POST ${MINERU_BASE_URL}/tasks`（`backend`/`effort` 来自 `MINERU_*`，缺失则 `_required_env` 抛 `RuntimeError`）→ 轮询 `GET /tasks/{task_id}` → `GET /tasks/{task_id}/result` → 写 `backend/data/document_outputs/{stem}.md` → emit `tool_request/tool_response`（出错 emit `tool_error` 并上抛）；
 8. Brain 将大产物经 `CompositeBackend` 路由：`/artifacts/`、`/large_tool_results/` → `backend/data/artifacts/`（`FilesystemBackend`），`/memories/`、`/conversation_history/`、`/logs/` → `SqliteStore`（`backend/data/dsagents_store.db`），线程状态检查点写 `backend/data/dsagents_checkpoints.db`；

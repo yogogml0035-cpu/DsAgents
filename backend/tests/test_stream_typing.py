@@ -58,6 +58,9 @@ def handle_event(event_name: str, raw_data: str, char_delay: float) -> None:
     if event_name == "text_delta":
         print_typewriter(payload.get("content", ""), char_delay)
         return
+    if event_name == "thinking_delta":
+        print(f"\n[thinking] {payload.get('content', '')}", end="", flush=True)
+        return
     if event_name == "tool_status":
         print(f"\n[tool] {payload.get('name')} {payload.get('status')}")
         return

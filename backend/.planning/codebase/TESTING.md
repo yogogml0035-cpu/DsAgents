@@ -22,16 +22,16 @@
 | 验证项 | 覆盖的代码 |
 |--------|-----------|
 | `_find_value` 递归取值 / `_extract_markdown` 提取 md | `tools._find_value` / `_extract_markdown` |
-| brain factory 模型接线：注入 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL=https://minimax.example/anthropic` / `MINIMAX_MODEL=test-minimax`，断言产物为 `ChatAnthropic` 且 `model == "test-minimax"` | `harness.DeepAgentsBrainFactory.__init__` |
+| brain factory 模型接线：注入 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL=https://minimax.example/anthropic` / `MINIMAX_MODEL=test-minimax`，断言产物为 `ChatAnthropic`、`model == "test-minimax"` 且 `thinking == {"type": "adaptive"}` | `harness.DeepAgentsBrainFactory.__init__` |
 | 缺失 `MINERU_BASE_URL` 时 fail-fast（抛 `RuntimeError`） | `tools.parse_document` / `_required_env` |
 | `AgentResources` 初始化：建库、建目录、CompositeBackend 就绪 | `resources.AgentResources` |
 | Session 事件 append + 读取 round-trip | `session.SqliteSessionStore.emit_event/get_events` |
 | 上下文窗口派生（20 上限裁剪、剔除 leading 非 user 消息） | `session.context_window` |
 | TraceMiddleware 记录 model_request / tool_response，且异常被 re-raise | `hands.TraceMiddleware` |
 | `HarnessRuntime.run_turn` 单轮 + 多轮事件序列 `["user_message","assistant_message","user_message","assistant_message"]` | `harness.HarnessRuntime.run_turn` |
-| `HarnessRuntime.stream_turn` 流式事件转换：`messages`→`text_delta`、`custom`→`tool_status`、`values`→最终 assistant 内容 | `harness.HarnessRuntime.stream_turn` |
+| `HarnessRuntime.stream_turn` 流式事件转换：`messages`→`thinking_delta` / `text_delta`、`custom`→`tool_status`、`values`→最终 assistant 内容 | `harness.HarnessRuntime.stream_turn` |
 | HTTP 阻塞接口：自动生成 `session_id`、传入 `session_id` 继续复用 | `api.py::POST /sessions/messages` |
-| SSE 接口：事件顺序包含 `session`、`text_delta`、`tool_status`、`done` | `api.py::POST /sessions/messages/stream` |
+| SSE 接口：事件顺序包含 `session`、`thinking_delta`、`text_delta`、`tool_status`、`done` | `api.py::POST /sessions/messages/stream` |
 | 上传接口：basename 清理、保存到 `artifacts/uploads/`、返回 `/artifacts/uploads/...` | `api.py::POST /files` |
 | `/artifacts/...` 虚拟路径映射与 `..` 逃逸拒绝 | `tools.parse_document` / `_resolve_document_path` |
 | 超大 payload 落盘 round-trip（`max_inline_bytes=10` → `artifacts/session-events/*.json`） | `session.SqliteSessionStore`（`max_inline_bytes`） |

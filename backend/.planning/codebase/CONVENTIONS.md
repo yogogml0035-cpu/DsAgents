@@ -106,8 +106,9 @@
 - **MiniMax 接线（Anthropic 协议，无默认、无 fallback）**：
   `DeepAgentsBrainFactory.__init__`（`harness.py`）当 `model` 为 `None` 时：
   - 仅通过 `os.getenv` 读取三个环境变量：`MINIMAX_MODEL`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL`。
-  - 构造 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))`，得到 LangChain `ChatAnthropic`。
+  - 构造 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"), thinking={"type": "adaptive"})`，得到 LangChain `ChatAnthropic`。
   - MiniMax 通过其 **Anthropic 兼容端点**以 **Anthropic 协议**（非 OpenAI 协议）访问。
+  - Thinking 固定启用为 `adaptive`；`/sessions/messages/stream` 将 thinking/reasoning chunk 作为 `thinking_delta` SSE 事件输出。
   - **无默认值、无 fallback**：commit `9c78cf2` 显式移除了 fallback，保持配置单一来源、对缺失配置 fail-fast。
 
   > **本轮更正（commits a30bb99 / 9c78cf2）**：以下历史写法均已废弃，请勿沿用——

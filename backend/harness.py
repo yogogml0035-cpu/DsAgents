@@ -56,6 +56,7 @@ class DeepAgentsBrainFactory:
                 f"anthropic:{os.getenv('MINIMAX_MODEL')}",
                 api_key=os.getenv("MINIMAX_API_KEY"),
                 base_url=os.getenv("MINIMAX_BASE_URL"),
+                thinking={"type": "adaptive"},
             )
         self.model = model
         self.system_prompt = system_prompt
@@ -128,6 +129,9 @@ class HarnessRuntime:
             if not isinstance(chunk, dict):
                 continue
             if chunk["type"] == "messages":
+                thinking = _thinking_delta(chunk["data"])
+                if thinking:
+                    yield ("thinking_delta", {"content": thinking})
                 text = _message_delta(chunk["data"])
                 if text:
                     text_parts.append(text)
@@ -208,6 +212,22 @@ def _message_delta(data: Any) -> str:
     return _content_text(_message_content(message))
 
 
+def _thinking_delta(data: Any) -> str:
+    message = data[0] if isinstance(data, tuple) and data else data
+    if isinstance(message, dict):
+        event = message.get("event")
+        if event and not str(event).endswith("delta"):
+            return ""
+        return (
+            _thinking_text(message.get("delta"))
+            or _thinking_text(message.get("content"))
+            or _thinking_text(message)
+        )
+    return _thinking_text(getattr(message, "content_blocks", None)) or _thinking_text(
+        _message_content(message)
+    )
+
+
 def _message_role(message: Any) -> str | None:
     role = getattr(message, "role", None)
     if isinstance(role, str):
@@ -241,6 +261,27 @@ def _content_text(content: Any) -> str:
         )
     if isinstance(content, list):
         return "".join(_content_text(item) for item in content)
+    return ""
+
+
+def _thinking_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, dict):
+        block_type = content.get("type")
+        if block_type == "thinking":
+            return _content_text(content.get("thinking")) or _content_text(
+                content.get("text")
+            )
+        if block_type == "reasoning":
+            return _content_text(content.get("reasoning")) or _content_text(
+                content.get("text")
+            )
+        if block_type == "non_standard":
+            return _thinking_text(content.get("value"))
+        return _thinking_text(content.get("delta")) or _thinking_text(content.get("content"))
+    if isinstance(content, list):
+        return "".join(_thinking_text(item) for item in content)
     return ""
 
 
