@@ -1,14 +1,14 @@
 # ARCHITECTURE
 
-> 事实来源：backend/ 源码与 backend/pyproject.toml（2026-07-02 生成；本轮刷新：按 commit a30bb99 / 9c78cf2 修正 MiniMax 模型接入为 Anthropic 兼容协议、移除全部 fallback/默认值描述）
+> 事实来源：backend/ 源码与 backend/pyproject.toml（2026-07-03 生成；本轮刷新：新增 FastAPI HTTP/SSE/upload 适配层与 `HarnessRuntime.stream_turn`）
 
 ## 1. 系统目的
 
-`backend/` 是一个 Harness 级的 agent 运行时底座。它的目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，让能力（Brain、执行器、工具）可以插拔，而不被硬编码到某个 runner、容器、模型或工作流里。当前里程碑交付的是最小可运行的 DeepAgents 解析演示：一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。
+`backend/` 是一个 Harness 级的 agent 运行时底座。它的目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，让能力（Brain、执行器、工具）可以插拔，而不被硬编码到某个 runner、容器、模型或工作流里。当前里程碑交付的是最小可运行的 DeepAgents 解析演示：一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个保持薄的 FastAPI HTTP/SSE/upload 适配层。
 
 ## 2. 模块形态与导入
 
-`backend/` **不是常规 Python 包**，没有 `__init__.py`，也没有 `backend/__main__.py`。它在 `backend/pyproject.toml` 中以**扁平顶层模块**（`[tool.setuptools] package-dir = {"" = "."}`，`py-modules = ["hands","harness","resources","session","tools","self_check"]`）的形式声明：`backend/` 内的每个 `.py` 文件直接作为顶层模块安装，因此模块之间用**绝对导入**（`from hands import ...`、`from session import ...`、`from resources import ...`、`from tools import ...`），**不带** `backend.` 前缀。
+`backend/` **不是常规 Python 包**，没有 `__init__.py`，也没有 `backend/__main__.py`。它在 `backend/pyproject.toml` 中以**扁平顶层模块**（`[tool.setuptools] package-dir = {"" = "."}`，`py-modules = ["api","hands","harness","resources","session","tools","self_check"]`）的形式声明：`backend/` 内的每个 `.py` 文件直接作为顶层模块安装，因此模块之间用**绝对导入**（`from api import ...`、`from hands import ...`、`from session import ...`、`from resources import ...`、`from tools import ...`），**不带** `backend.` 前缀。
 
 `.env` 由 `backend/session.py:15` 在导入时加载：`load_dotenv(Path(__file__).with_name(".env"))`（任何触发 `session` 模块导入的路径都会执行一次）。`session.py` 还 `import argparse`（`session.py:3`），但 `main()` 并未使用它，属于遗留未使用 import。
 
@@ -22,7 +22,7 @@
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` | 依赖 Session（`SqliteSessionStore`）；调用 `deepagents.backends`、`langgraph.checkpoint.sqlite`、`langgraph.store.sqlite` |
 | **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` | 标准库 + `requests`；被 Harness 注入 |
 
-> 注：`self_check.py` 是端到端自检脚本，不属于五大边界，是验证入口。DeepAgents 在本仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明其可被替换。
+> 注：`api.py` 是薄 HTTP 适配层，`self_check.py` 是端到端自检脚本；二者都**不属于**五大稳定边界。DeepAgents 在本仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明其可被替换。
 
 ## 4. 运行时数据流
 
@@ -54,6 +54,22 @@ run_session(message, session_id)
 
 要点：上下文窗口（步骤③）是从 append-only 事件历史**派生**出来的视图，派生前先写入了用户事件（步骤②），执行 trace 由 Hands 的 middleware 产生（步骤⑤内的 emit），最终助手回复再写回事件（步骤⑥）。`brain.invoke` 前用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 重置 langgraph 内部消息，再用 Session 派生的上下文重建——这是 Session 作为"单一事实源"而非 langgraph thread 状态的具体体现。
 
+HTTP 入口在此调用链之外只加了一层薄适配（`backend/api.py`）：
+
+```
+POST /sessions/messages
+  └─ with AgentResources() → create_harness(resources).run_turn(message, session_id)
+      └─ 返回 {"session_id", "reply"}
+
+POST /sessions/messages/stream
+  └─ with AgentResources() → create_harness(resources).stream_turn(message, session_id)
+      └─ SSE: session → text_delta* / tool_status* → done | error
+
+POST /files
+  └─ 保存到 backend/data/artifacts/uploads/<uuid>_<filename>
+      └─ 返回虚拟路径 /artifacts/uploads/<uuid>_<filename>
+```
+
 ## 5. 关键设计决策
 
 - **Append-only 事件**：`SqliteSessionStore.emit_event` 只做 `insert`，从不 update/delete；事件表带自增 `event_id` 与 `(session_id, event_id)` 索引。**为什么**：保证任务事实可审计、可回放；任何派生视图（上下文、摘要）都可从原始事件重建，不会因修改而丢失历史。
@@ -72,6 +88,7 @@ run_session(message, session_id)
 | 一个 DeepAgents 工厂 | `backend/harness.py::DeepAgentsBrainFactory`（实现 `BrainFactory` Protocol） | 已实现：默认模型经 MiniMax 的 **Anthropic 兼容协议**接入（`init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))`），直接读取 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 三个环境变量，**无默认值、无 fallback** |
 | 一个 `CompositeBackend` 配置 | `backend/resources.py::AgentResources.__enter__` | 已实现：`default=StateBackend()`；`/memories/`、`/conversation_history/`、`/logs/` 路由到 `StoreBackend`；`/artifacts/`、`/large_tool_results/` 路由到 `FilesystemBackend` |
 | 一个最小 session runner | `backend/session.py::run_session` | 已实现：`with AgentResources(ResourceConfig()): create_harness(resources).run_turn(...).result` |
+| 一个薄 FastAPI HTTP 层 | `backend/api.py` | 已实现：`POST /sessions/messages` 复用 `HarnessRuntime.run_turn`；`POST /sessions/messages/stream` 复用 `HarnessRuntime.stream_turn` 并手写 SSE；`POST /files` 保存到 `backend/data/artifacts/uploads/` 后返回 `/artifacts/uploads/...` |
 
-- **自检**：`backend/self_check.py` 用 `_FakeBrainFactory` / `_FakeBrain` 端到端验证 Harness 单轮/多轮、trace 事件、错误透传、超大 payload 外溢，结尾打印 `self-check passed`。可作 `python self_check.py` 或 `cd backend && python -m self_check` 运行。
+- **自检**：`backend/self_check.py` 用 `_FakeBrainFactory` / `_FakeBrain` + FastAPI `TestClient` 端到端验证 Harness 单轮/多轮、trace 事件、错误透传、超大 payload 外溢、HTTP 阻塞回复、SSE 事件顺序、上传与 `/artifacts/...` 映射，结尾打印 `self-check passed`。可作 `python self_check.py` 或 `cd backend && uv run python self_check.py` 运行。
 - **`main()` 冒烟入口**：`session.py::main()`（`session.py:222`）硬编码 `message = "你好"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。可用 `python session.py` 或 `cd backend && python -m session` 触发；因 `session.py` 顶部 `load_dotenv`，会读取 `backend/.env`。

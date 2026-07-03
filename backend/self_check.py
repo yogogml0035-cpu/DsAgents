@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import tempfile
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from dotenv import load_dotenv
+warnings.filterwarnings(
+    "ignore",
+    message=r"Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.",
+)
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, AIMessageChunk
 
+from api import create_app
 from hands import TraceHands
 from harness import DeepAgentsBrainFactory, HarnessRuntime
 from resources import AgentResources, ResourceConfig
@@ -21,6 +31,17 @@ class _FakeBrain:
         text = payload["messages"][-1]["content"]
         return {"messages": [SimpleNamespace(content=f"echo: {text}")]}
 
+    def stream(self, payload: dict, config: dict | None = None, **kwargs: object):
+        assert getattr(payload["messages"][0], "id", None) == "__remove_all__"
+        assert kwargs["stream_mode"] == ["messages", "custom", "values"]
+        assert kwargs["version"] == "v2"
+        text = payload["messages"][-1]["content"]
+        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "user", "content": text}]}, "interrupts": ()}
+        yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo: "), {"langgraph_node": "model"})}
+        yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
+        yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content=text), {"langgraph_node": "model"})}
+        yield {"type": "values", "ns": (), "data": {"messages": [AIMessage(content=f"echo: {text}")]} , "interrupts": ()}
+
 
 class _FakeBrainFactory:
     def create(self, **_: object) -> _FakeBrain:
@@ -32,7 +53,7 @@ def main() -> None:
     assert _extract_markdown({"result": {"md_content": "# ok"}}) == "# ok"
     assert default_tool_catalog().handlers[0].__name__ == "parse_document"
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         with patch.dict(os.environ, {}, clear=True):
             env_path = Path(tmp) / ".env"
             env_path.write_text(
@@ -133,7 +154,105 @@ def main() -> None:
         assert large_event.payload["content"] == "x" * 100
         assert any((data_dir / "artifacts" / "session-events").glob("*.json"))
 
+        api_data_dir = Path(tmp) / "api-data"
+        app = create_app(
+            resource_config=ResourceConfig(data_dir=api_data_dir),
+            harness_factory=_fake_harness,
+        )
+        with TestClient(app) as client:
+            message_response = client.post("/sessions/messages", json={"message": "hello", "session_id": None})
+            assert message_response.status_code == 200
+            payload = message_response.json()
+            session_id = payload["session_id"]
+            assert payload == {"session_id": session_id, "reply": "echo: hello"}
+            follow_up = client.post("/sessions/messages", json={"message": "again", "session_id": session_id})
+            assert follow_up.status_code == 200
+            assert follow_up.json() == {"session_id": session_id, "reply": "echo: again"}
+            with sqlite3.connect(api_data_dir / "dsagents_sessions.db") as conn:
+                session_count = conn.execute("select count(*) from sessions").fetchone()[0]
+            assert session_count == 1
+
+            with client.stream("POST", "/sessions/messages/stream", json={"message": "stream me", "session_id": None}) as response:
+                assert response.status_code == 200
+                events = _parse_sse("".join(response.iter_text()))
+            event_names = [event["event"] for event in events]
+            assert event_names[0] == "session"
+            assert event_names[-1] == "done"
+            assert "text_delta" in event_names
+            assert "tool_status" in event_names
+            assert event_names.index("session") < event_names.index("text_delta") < event_names.index("tool_status") < event_names.index("done")
+
+            upload_response = client.post(
+                "/files",
+                files={"file": ("../report.pdf", b"demo upload", "application/pdf")},
+            )
+            assert upload_response.status_code == 200
+            upload_payload = upload_response.json()
+            assert upload_payload["file_path"].startswith("/artifacts/uploads/")
+            upload_name = Path(upload_payload["file_path"]).name
+            assert upload_name.endswith("_report.pdf")
+            upload_file = api_data_dir / "artifacts" / "uploads" / upload_name
+            assert upload_file.read_bytes() == b"demo upload"
+
+        virtual_source = api_data_dir / "artifacts" / "uploads" / "source.pdf"
+        virtual_source.parent.mkdir(parents=True, exist_ok=True)
+        virtual_source.write_text("demo", encoding="utf-8")
+        with patch("tools._artifacts_root", return_value=(api_data_dir / "artifacts").resolve()):
+            with patch.dict(
+                os.environ,
+                {
+                    "MINERU_BASE_URL": "https://mineru.example",
+                    "MINERU_BACKEND": "pipeline",
+                    "MINERU_EFFORT": "standard",
+                    "MINERU_TIMEOUT_SECONDS": "10",
+                },
+                clear=True,
+            ):
+                with patch("tools._submit_mineru_task", return_value="task-1"), patch(
+                    "tools._wait_for_mineru_result",
+                    return_value={"md_content": "# parsed"},
+                ):
+                    parsed = json.loads(
+                        parse_document(
+                            "/artifacts/uploads/source.pdf",
+                            "/artifacts/generated/output.md",
+                        )
+                    )
+            assert Path(parsed["source"]) == virtual_source.resolve()
+            assert Path(parsed["output_path"]) == (api_data_dir / "artifacts" / "generated" / "output.md").resolve()
+            assert Path(parsed["output_path"]).read_text(encoding="utf-8") == "# parsed"
+            try:
+                parse_document("/artifacts/../x")
+            except ValueError as exc:
+                assert str(exc) == "Invalid /artifacts path: /artifacts/../x"
+            else:
+                raise AssertionError("parse_document must reject /artifacts path escapes")
+
     print("self-check passed")
+
+
+def _fake_harness(resources: AgentResources) -> HarnessRuntime:
+    return HarnessRuntime(
+        resources=resources,
+        hands=TraceHands(resources.sessions),
+        tools=ToolCatalog(()),
+        brain_factory=_FakeBrainFactory(),
+    )
+
+
+def _parse_sse(raw: str) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for block in raw.strip().split("\n\n"):
+        lines = [line for line in block.splitlines() if line]
+        if len(lines) != 2:
+            continue
+        events.append(
+            {
+                "event": lines[0].removeprefix("event: ").strip(),
+                "data": json.loads(lines[1].removeprefix("data: ").strip()),
+            }
+        )
+    return events
 
 
 if __name__ == "__main__":

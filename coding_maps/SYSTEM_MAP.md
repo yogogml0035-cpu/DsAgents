@@ -1,6 +1,6 @@
 # 系统地图 (SYSTEM_MAP)
 
-> 系统地图 · 事实来源：根 AGENTS.md 与 backend/.planning/codebase/（2026-07-02 生成，本轮刷新）
+> 系统地图 · 事实来源：根 AGENTS.md 与 backend/.planning/codebase/（2026-07-03 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**系统层**导航，综合根级与子项目事实文档，描述多个子项目如何组成一个整体。底层实现细节请直接查阅 `backend/.planning/codebase/` 下的对应文档，本文不复制。证据不足处以"当前源文档未确认"或"需确认"标注，不编造依赖。
 
@@ -11,7 +11,7 @@
 DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session` / `Harness` / `Hands` / `Resources` / `Tools` 固化为五个稳定模块边界，使能力（Brain、执行器、工具）可插拔，而**不被硬编码到某个 runner、容器、模型或工作流**。DeepAgents 在这里只是可插拔的 Brain / 子 Harness（经 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrainFactory` 证明可替换）；文档解析作为可插拔工具（`ToolCatalog`）由 Harness 注入；项目自身拥有 Session、事件、资源、工具路由与运行时状态。
 
 - **仓库形态**：单子项目仓库，当前只有一个 Python 子项目 `backend/`，五大模块边界全部落在该子项目内。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
+- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个薄 HTTP/SSE/upload 适配层。刻意不引入账号体系、鉴权、复杂 service 框架或工作流引擎。
 - **根级原则**（见 `AGENTS.md`）：稳定接口而非实现；Session 存 append-only 完整持久任务事实、不是上下文窗口；真实错误透传；保持 Harness 薄；每个新抽象必须保护五大边界之一否则移除。
 
 ---
@@ -20,9 +20,9 @@ DsAgents 是一个 **Harness 级 agent 运行时底座**，目标是把 `Session
 
 | 子项目 | 路径 | 主要职责 | 关键依赖 | 可独立运行 |
 |--------|------|----------|----------|------------|
-| backend | `backend/` | Harness 级 agent 运行时底座：五大模块边界（Session/Harness/Hands/Resources/Tools）全部在此；DeepAgents 作为可插拔 Brain；通用文档解析工具 | `deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-dotenv>=1.2.2`、`requests>=2.34.2`（来源 `backend/pyproject.toml`，uv 管理） | 是：`python backend/self_check.py`（自检）/ `python backend/session.py`（冒烟）/ `from session import run_session`（导入调用）；**没有** `python -m backend.*`（`backend/` 不是包，无 `__init__.py` / `__main__.py`） |
+| backend | `backend/` | Harness 级 agent 运行时底座：五大模块边界（Session/Harness/Hands/Resources/Tools）全部在此；DeepAgents 作为可插拔 Brain；通用文档解析工具；薄 FastAPI HTTP 层 | `deepagents>=0.6.12`、`fastapi>=0.116.1`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-multipart>=0.0.20`、`python-dotenv>=1.2.2`、`requests>=2.34.2`、`uvicorn>=0.35.0`（来源 `backend/pyproject.toml`，uv 管理） | 是：`python backend/self_check.py`（自检）/ `python backend/session.py`（冒烟）/ `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000`（HTTP）/ `from session import run_session`（导入调用）；**没有** `python -m backend.*`（`backend/` 不是包，无 `__init__.py` / `__main__.py`） |
 
-> **模块形态**：`backend/` **不是常规 Python 包**，没有 `__init__.py` / `__main__.py`。它在 `pyproject.toml` 中以**扁平顶层模块**（`[tool.setuptools] package-dir = {"" = "."}` + `py-modules = ["hands","harness","resources","session","tools","self_check"]`）声明，模块间用绝对导入（`from session import ...`），导入入口为 `from session import run_session`（**不带** `backend.` 前缀）。
+> **模块形态**：`backend/` **不是常规 Python 包**，没有 `__init__.py` / `__main__.py`。它在 `pyproject.toml` 中以**扁平顶层模块**（`[tool.setuptools] package-dir = {"" = "."}` + `py-modules = ["api","hands","harness","resources","session","tools","self_check"]`）声明，模块间用绝对导入（`from session import ...`），导入入口为 `from session import run_session`（**不带** `backend.` 前缀）。
 >
 > `scripts/ralph/`、`backend/instantclient/`、`.agents/`、`.codex/`、`.review-push/` 等目录**不属于产品知识边界**：前者是被 `.gitignore` 忽略的自动化脚本，后者是 Oracle 依赖产物 / 本地 agent 工具配置，详见 §6。
 
@@ -82,13 +82,15 @@ return HarnessTurn(session_id, context, result)
 
 ## 4. 后端到前端的接口边界
 
-**当前无前端子项目。** 本仓库仅含 `backend/`，backend 暴露的是 **Python 导入 API**（`from session import run_session`、`from harness import create_harness`、`from tools import parse_document`），**而非 HTTP 服务**：
+**当前仍无前端子项目**，但本仓库的 `backend/` 已暴露最小 HTTP API，供外部 UI / client 直接调用：
 
-- 无 FastAPI / uvicorn / Flask 等 web 框架依赖（`backend/pyproject.toml` 的 `[project.dependencies]` 未声明，源码无引用）。
-- 无 HTTP server、无健康检查端点、无 SSE/WebSocket 通道。
-- `.env.example` 中的 `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500`（端口 8500 暗示 Streamlit）属**预留 / 前端边界**，backend 自身源码未引用，需确认服务层归属。
+- `POST /sessions/messages`：阻塞回复，返回 `{"session_id","reply"}`。
+- `POST /sessions/messages/stream`：SSE 流式回复，事件 `session` → `text_delta` / `tool_status` → `done|error`。
+- `POST /files`：上传到 `backend/data/artifacts/uploads/`，返回虚拟路径 `/artifacts/uploads/...`，供后续消息引用。
+- 仍无鉴权、无 CORS middleware、无独立 `/health`、无 WebSocket。
+- `.env.example` 中的 `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500`（端口 8500 暗示 Streamlit）仍未被源码读取，属预留前端边界。
 
-> 不编造任何前端 API 契约。若未来新增前端子项目，应在本节补"后端→前端接口边界"小节（详见 §7 阅读指南）。
+> 不编造任何额外前端 API 契约。若未来新增前端子项目，应在本节补充真实使用到的请求/响应语义，而不是规划稿。
 
 ---
 
@@ -171,7 +173,7 @@ return HarnessTurn(session_id, context, result)
 ### 7.4 新增子项目（如未来加 frontend）时应注意的边界
 - 先读：根 `AGENTS.md`（简洁约束、Harness 边界）、本地图 §4（当前无前端）、§6（依赖归属）。
 - 系统层提醒：
-  - backend 当前是 **Python API 而非 HTTP 服务**，新增前端须同时决定"是否引入服务层"——根 `AGENTS.md` 明确要求服务层只有在真实 caller 需要时才加，每个新抽象必须保护五大边界之一。
+  - backend 当前同时提供 **Python API + 薄 FastAPI HTTP API**；若新增前端，优先复用现有 HTTP 层并保持它薄，不新增第二套 service 框架。
   - `.env.example` 的 `CORS_ORIGINS=http://localhost:8500` 已预留前端端口（疑似 Streamlit），属未实现边界。
   - 事件 / 产物 / 三 SQLite 库归属 backend，新子项目应通过明确接口访问而非直连 DB。
   - 新增子项目后须更新本地图 §2 子项目职责表、§3 调用链、§4 接口边界。

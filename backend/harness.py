@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Iterator, Protocol, Sequence
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -28,6 +28,13 @@ DEFAULT_SYSTEM_PROMPT = (
 
 class Brain(Protocol):
     def invoke(self, payload: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]: ...
+
+    def stream(
+        self,
+        payload: dict[str, Any],
+        config: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Iterator[dict[str, Any] | Any]: ...
 
 
 class BrainFactory(Protocol):
@@ -94,6 +101,55 @@ class HarnessRuntime:
         self.brain_factory = brain_factory
 
     def run_turn(self, message: str, session_id: str) -> HarnessTurn:
+        context, brain = self._prepare_turn(message, session_id)
+        result = brain.invoke(
+            {"messages": _reset_messages(context)},
+            config={"configurable": {"thread_id": session_id}},
+        )
+
+        self.resources.sessions.emit_event(
+            session_id,
+            "assistant_message",
+            {"role": "assistant", "content": _assistant_content(result)},
+        )
+        return HarnessTurn(session_id=session_id, context=context, result=result)
+
+    def stream_turn(self, message: str, session_id: str) -> Iterator[tuple[str, dict[str, Any]]]:
+        context, brain = self._prepare_turn(message, session_id)
+        assistant_content = None
+        text_parts: list[str] = []
+
+        for chunk in brain.stream(
+            {"messages": _reset_messages(context)},
+            config={"configurable": {"thread_id": session_id}},
+            stream_mode=["messages", "custom", "values"],
+            version="v2",
+        ):
+            if not isinstance(chunk, dict):
+                continue
+            if chunk["type"] == "messages":
+                text = _message_delta(chunk["data"])
+                if text:
+                    text_parts.append(text)
+                    yield ("text_delta", {"content": text})
+            elif chunk["type"] == "custom":
+                if isinstance(chunk["data"], dict):
+                    yield ("tool_status", chunk["data"])
+            elif chunk["type"] == "values":
+                content = _assistant_content(chunk["data"])
+                if content is not None:
+                    assistant_content = content
+
+        if assistant_content is None and text_parts:
+            assistant_content = "".join(text_parts)
+
+        self.resources.sessions.emit_event(
+            session_id,
+            "assistant_message",
+            {"role": "assistant", "content": assistant_content},
+        )
+
+    def _prepare_turn(self, message: str, session_id: str) -> tuple[ContextWindow, Brain]:
         self.resources.sessions.ensure_session(session_id)
         self.resources.sessions.emit_event(
             session_id,
@@ -108,17 +164,7 @@ class HarnessRuntime:
             tools=self.tools.as_list(),
             session_id=session_id,
         )
-        result = brain.invoke(
-            {"messages": _reset_messages(context)},
-            config={"configurable": {"thread_id": session_id}},
-        )
-
-        self.resources.sessions.emit_event(
-            session_id,
-            "assistant_message",
-            {"role": "assistant", "content": _assistant_content(result)},
-        )
-        return HarnessTurn(session_id=session_id, context=context, result=result)
+        return context, brain
 
 
 def create_harness(resources: AgentResources) -> HarnessRuntime:
@@ -132,10 +178,75 @@ def create_harness(resources: AgentResources) -> HarnessRuntime:
 
 def _assistant_content(result: dict[str, Any]) -> Any:
     messages = result.get("messages") or []
-    if not messages:
-        return None
-    return getattr(messages[-1], "content", messages[-1])
+    for message in reversed(messages):
+        if _message_role(message) in {"assistant", "ai"}:
+            return _message_content(message)
+    if messages:
+        return _message_content(messages[-1])
+    return None
+
+
+def assistant_reply_text(result: dict[str, Any]) -> str:
+    content = _assistant_content(result)
+    text = _content_text(content)
+    if text:
+        return text
+    return _stringify_content(content)
 
 
 def _reset_messages(context: ContextWindow) -> list[Any]:
     return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *context.messages]
+
+
+def _message_delta(data: Any) -> str:
+    message = data[0] if isinstance(data, tuple) and data else data
+    if isinstance(message, dict):
+        event = message.get("event")
+        if event and not str(event).endswith("delta"):
+            return ""
+        return _content_text(message.get("delta")) or _content_text(message.get("content")) or _content_text(message)
+    return _content_text(_message_content(message))
+
+
+def _message_role(message: Any) -> str | None:
+    role = getattr(message, "role", None)
+    if isinstance(role, str):
+        return role
+    message_type = getattr(message, "type", None)
+    if isinstance(message_type, str):
+        return "assistant" if message_type == "ai" else message_type
+    if isinstance(message, dict):
+        value = message.get("role") or message.get("type")
+        if isinstance(value, str):
+            return "assistant" if value == "ai" else value
+    return None
+
+
+def _message_content(message: Any) -> Any:
+    if isinstance(message, dict):
+        return message.get("content")
+    return getattr(message, "content", message)
+
+
+def _content_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return (
+            _content_text(content.get("text"))
+            or _content_text(content.get("delta"))
+            or _content_text(content.get("content"))
+        )
+    if isinstance(content, list):
+        return "".join(_content_text(item) for item in content)
+    return ""
+
+
+def _stringify_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, (str, int, float, bool)):
+        return str(content)
+    return repr(content)

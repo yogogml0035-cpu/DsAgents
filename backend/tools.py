@@ -5,11 +5,13 @@ import mimetypes
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 import requests
 from dotenv import load_dotenv
+
+from resources import ResourceConfig
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -31,11 +33,11 @@ def parse_document(
     output_path: str | None = None,
 ) -> str:
     """Parse a local document and write the returned markdown to a local file."""
-    source = Path(file_path).expanduser().resolve()
+    source = _resolve_document_path(file_path)
     if not source.is_file():
         raise FileNotFoundError(f"File not found: {source}")
 
-    target = Path(output_path).expanduser().resolve() if output_path else _default_output_path(source)
+    target = _resolve_document_path(output_path) if output_path else _default_output_path(source)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     base_url = _required_env("MINERU_BASE_URL")
@@ -61,6 +63,22 @@ def parse_document(
 
 def _default_output_path(source: Path) -> Path:
     return Path(__file__).resolve().parent / "data" / "document_outputs" / f"{source.stem}.md"
+
+
+def _resolve_document_path(raw_path: str | None) -> Path:
+    if not raw_path:
+        raise ValueError("Path is required")
+    if raw_path == "/artifacts" or raw_path.startswith("/artifacts/"):
+        virtual_path = PurePosixPath(raw_path)
+        if ".." in virtual_path.parts:
+            raise ValueError(f"Invalid /artifacts path: {raw_path}")
+        relative = virtual_path.relative_to("/artifacts")
+        return _artifacts_root().joinpath(*relative.parts).resolve()
+    return Path(raw_path).expanduser().resolve()
+
+
+def _artifacts_root() -> Path:
+    return ResourceConfig().artifacts_dir.resolve()
 
 
 def _required_env(name: str) -> str:

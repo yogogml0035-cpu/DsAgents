@@ -1,6 +1,6 @@
 # 系统架构 (ARCHITECTURE)
 
-> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成，本轮刷新）
+> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-03 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**系统级架构总览**，描述系统边界、子系统职责、推荐理解路径与稳定目录职责。底层实现细节请直接查阅 `backend/.planning/codebase/` 下的对应事实文档，本文不复制。接口与集成边界见根级 `INTERFACES.md`；跨项目导航见 `coding_maps/SYSTEM_MAP.md`；全局入口与原则见根级 `AGENTS.md`。
 
@@ -9,10 +9,10 @@
 ## 1. 系统边界
 
 - **形态**：单子项目仓库，当前唯一产品子项目为 Python 项目 `backend/`。五大模块边界（Session / Harness / Hands / Resources / Tools）全部落在该项目内。
-- **对外形态**：`backend/` 暴露的是 **Python 导入 API**（`run_session`、`create_harness`、`parse_document` 等），**不是 HTTP 服务**。无 FastAPI / uvicorn / Flask 等 web 框架，无 HTTP server、无健康检查端点、无 SSE / WebSocket 通道。
+- **对外形态**：`backend/` 同时暴露 **Python 导入 API**（`run_session`、`create_harness`、`parse_document` 等）和一个保持薄的 **FastAPI HTTP 层**（`POST /sessions/messages`、`POST /sessions/messages/stream`、`POST /files`）。当前无鉴权、无 CORS middleware、无独立 `/health` 端点。
 - **模块形态**：`backend/` **不是常规 Python 包**——没有 `__init__.py` / `__main__.py`，而是以**扁平顶层模块**形式（`pyproject.toml` 的 `[tool.setuptools] package-dir = {"" = "."}` + `py-modules = [...]`）安装；模块间用绝对导入（`from session import ...`），**不带** `backend.` 前缀。
 - **无前端**：当前无前端子项目。`.env.example` 中的 `CORS_ORIGINS` 属预留边界，需确认（详见 `INTERFACES.md` §2）。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner。刻意不引入服务层、容器、鉴权、策略框架或工作流引擎。
+- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个薄 HTTP/SSE/upload 适配层。刻意不引入账号体系、鉴权、租户层、复杂 service 框架或工作流引擎。
 
 ---
 
@@ -28,7 +28,7 @@
 | **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` |
 | **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` |
 
-> DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。没有 `backend/__init__.py` 装配层。
+> `backend/api.py` 是薄 transport 适配层，不是第六个稳定边界；它每次请求都临时装配 `AgentResources` 后复用 `HarnessRuntime.run_turn` / `stream_turn`。DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。没有 `backend/__init__.py` 装配层。
 
 ### 五大边界协作（运行时数据流）
 
@@ -48,6 +48,8 @@ run_session(message, session_id)
 ```
 
 要点：上下文窗口（步骤③）是从 append-only 事件历史**派生**的视图，派生前先写入了用户事件（步骤②），执行 trace 由 Hands 的 middleware 产生（步骤⑤内 emit），最终助手回复再写回事件（步骤⑥）。`brain.invoke` 前用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 重置 langgraph 内部消息，再用 Session 派生的上下文重建——Session 是"单一事实源"而非 langgraph thread 状态。完整调用链与字段细节见 `backend/.planning/codebase/ARCHITECTURE.md` §4 与 `coding_maps/SYSTEM_MAP.md` §3。
+
+HTTP 入口只是在这条链路外包了一层薄适配：`POST /sessions/messages` 复用 `run_turn`，`POST /sessions/messages/stream` 复用 `stream_turn` 并转成 SSE，`POST /files` 直接落盘到 `backend/data/artifacts/uploads/` 后返回虚拟路径 `/artifacts/uploads/...`。
 
 ---
 
@@ -72,6 +74,7 @@ run_session(message, session_id)
 | 文件 | 职责 |
 |------|------|
 | `backend/session.py` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；导入时 `load_dotenv` 加载 `backend/.env` |
+| `backend/api.py` | 薄 HTTP 适配层：阻塞消息、SSE 流式消息、文件上传 |
 | `backend/harness.py` | 读历史 → 派生上下文 → 请求执行 → 写回事件（Brain 工厂 + 单轮运行时） |
 | `backend/hands.py` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
 | `backend/resources.py` | 持有 SQLite store/checkpointer + `CompositeBackend` 路由；`data_dir` 锁定在 `backend/data/` |
@@ -95,7 +98,7 @@ run_session(message, session_id)
 - **保护五大边界**：任何新增抽象必须保护 Session / Harness / Hands / Resources / Tools 之一，否则应删除。不要把能力硬编码到某个 runner、容器、模型或工作流。
 - **Session 是 append-only 单一事实源**：`emit_event` 只做 `insert`，从不 update/delete。任何派生视图（上下文窗口、摘要）都可从原始事件重建，但不可替代 raw events。改动持久化时不得破坏"事件不修改/不删除"。
 - **Session ≠ 上下文窗口**：`context_window()` 是给模型看的裁剪视图，不是真相。不要把裁剪视图当事实源。
-- **保持 Harness 薄**：`HarnessRuntime.run_turn` 维持少量清晰步骤。在真实 caller 需要前，不增加服务层、容器、鉴权、策略框架或工作流引擎。
+- **保持 Harness 与 HTTP 层都薄**：`HarnessRuntime.run_turn` / `stream_turn` 维持少量清晰步骤；`api.py` 只做 transport 适配，不下沉成第二套业务层。
 - **真实错误透传**：`TraceMiddleware` 在 `except` 中 emit `*_error` 事件后 `raise`，`self_check.py` 断言错误必须穿透。改动错误处理时不得吞掉异常或包装失真。
 - **Tools 不绑定 runner**：工具能力可被任意 Brain 复用，经 `ToolCatalog` 注入。新增工具应走同一注册机制。
 - **Brain 可替换**：`BrainFactory` 是 Protocol，DeepAgents 并非硬绑定。改动 Brain 相关代码时保持 Protocol 边界，不要把 DeepAgents 耦合成唯一实现。

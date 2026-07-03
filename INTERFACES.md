@@ -1,6 +1,6 @@
 # 接口边界 (INTERFACES)
 
-> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-02 生成，本轮刷新）
+> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-03 生成，本轮刷新）
 
 本文件是 DsAgents 仓库的**接口与集成边界**文档，描述已确认的接口边界、未证实的跨系统关系、任务排查建议与可扩展集成入口。系统级架构见 `ARCHITECTURE.md`；全局原则与入口见 `AGENTS.md`。
 
@@ -10,7 +10,24 @@
 
 ## 1. 已确认接口边界
 
-### 1.1 MinerU 异步任务 API（当前文档解析 provider）
+### 1.1 FastAPI HTTP API（对外 transport）
+
+- **边界位置**：`backend/api.py`，公开导出 `create_app(...)` 与模块级 `app`。HTTP 层本身不持有独立 service/manager，只在每个请求里 `with AgentResources(...)` 后复用 `HarnessRuntime`。
+- **阻塞消息接口**：`POST /sessions/messages`
+  - 请求 JSON：`{"message": "...", "session_id": null | "..."}`。
+  - 行为：若 `session_id` 为空则服务端生成 `uuid.uuid4().hex`；然后 `create_harness(resources).run_turn(...)`。
+  - 响应 JSON：`{"session_id":"...","reply":"..."}`。
+- **SSE 流式接口**：`POST /sessions/messages/stream`
+  - 请求 JSON 同上。
+  - 行为：若 `session_id` 为空则服务端生成 id；然后 `create_harness(resources).stream_turn(...)`。
+  - SSE 事件：`session`（`{"session_id":"..."}`）→ 零到多条 `text_delta` / `tool_status` → `done`；异常时发 `error`（`{"session_id":"...","message":"..."}`）。
+- **上传接口**：`POST /files`
+  - 请求：`multipart/form-data` 字段 `file`。
+  - 保存：`backend/data/artifacts/uploads/<uuid>_<clean_filename>`；文件名只取 basename，空名回退 `upload`。
+  - 响应：`{"file_path":"/artifacts/uploads/<uuid>_<clean_filename>"}`。
+- **显式不做**：源码未见鉴权、中间租户层、上传大小限制、CORS middleware、`/health` 健康检查端点。
+
+### 1.2 MinerU 异步任务 API（当前文档解析 provider）
 
 - **边界位置**：公开入口是 `backend/tools.py::parse_document`（经 `default_tool_catalog()` 注册为工具）；实际 HTTP 调用留在私有 helper `_submit_mineru_task` / `_wait_for_mineru_result`。
 - **服务地址**：`parse_document` 在调用时读取 `MINERU_BASE_URL`；`.env.example` 当前示例值为 `http://10.11.0.110:6006`。
@@ -25,7 +42,7 @@
 
 > `.env.example` 当前提供 `MINERU_BASE_URL`、`MINERU_BACKEND`、`MINERU_EFFORT`、`MINERU_TIMEOUT_SECONDS` 示例值；`parse_document` 在调用路径读取它们。缺失会抛 `RuntimeError`，非法 `MINERU_TIMEOUT_SECONDS` 直接暴露原生 `ValueError`。
 
-### 1.2 DeepAgents BrainFactory Protocol（可插拔 Brain）
+### 1.3 DeepAgents BrainFactory Protocol（可插拔 Brain）
 
 - **边界位置**：`backend/harness.py` 的 `DeepAgentsBrainFactory`（实现 `BrainFactory` Protocol）。
 - **集成方式**：`from deepagents import create_deep_agent` 构建 Brain，传入 `model`、`tools`、`system_prompt`、`middleware`、`backend`、`checkpointer`、`store`。Brain 暴露 `invoke(payload, config)` 接口（`Brain` Protocol）。
@@ -33,7 +50,7 @@
 - **后端注入**：Brain 复用 `AgentResources` 提供的 `CompositeBackend` / `checkpointer` / `store`。DeepAgents 内置虚拟文件系统通过该 `backend` 暴露给模型。
 - **可替换性**：`BrainFactory` 是 Protocol，`backend/self_check.py` 用 `_FakeBrainFactory` 证明 Brain 可被替换——DeepAgents 并非硬绑定。
 
-### 1.3 DeepAgents CompositeBackend 虚拟文件系统路由
+### 1.4 DeepAgents CompositeBackend 虚拟文件系统路由
 
 - **边界位置**：`backend/resources.py::AgentResources.__enter__`。
 - **路由规则**（`CompositeBackend`，`default=StateBackend()`）：
@@ -42,9 +59,9 @@
   - 其余路径 → `StateBackend()`（图状态/内存，默认）。
 - **作用**：模型写"记忆/历史/日志"落 SQLite Store，写"大产物/大工具结果"落本地磁盘，写一般内容随图状态保存。遵循根 `AGENTS.md`"使用 DeepAgents 内置虚拟文件系统，不另加包装"。
 
-### 1.4 Python 导入 API（对外主接口）
+### 1.5 Python 导入 API（对外主接口）
 
-`backend/` **不是常规 Python 包**（没有 `__init__.py` / `__main__.py`），而是扁平顶层模块（`pyproject.toml` 的 `py-modules`）。模块之间用绝对导入（`from session import ...`），因此对外 API 也是**扁平顶层**导入（**不带** `backend.` 前缀）：
+`backend/` **不是常规 Python 包**（没有 `__init__.py` / `__main__.py`），而是扁平顶层模块（`pyproject.toml` 的 `py-modules`）。模块之间用绝对导入（`from session import ...`），因此对外 Python API 也是**扁平顶层**导入（**不带** `backend.` 前缀），与上面的 FastAPI HTTP API 并存：
 
 | API | 位置 | 用途 |
 |-----|------|------|
@@ -54,7 +71,7 @@
 
 典型用法：`from session import run_session; run_session("帮我解析 xxx.pdf")`（需在 `backend/` 目录下或把 `backend/` 加入 `PYTHONPATH`）。**没有** `python -m backend` / `python -m backend.self_check` / `python -m backend.session`（无 `backend` 包）。可用命令入口为 `python backend/self_check.py`（自检）与 `python backend/session.py`（冒烟）。
 
-### 1.5 三条独立 SQLite 持久化通道
+### 1.6 三条独立 SQLite 持久化通道
 
 | 用途 | 路径 | 谁建/写 |
 |------|------|---------|
@@ -64,7 +81,7 @@
 
 三库相互独立，均由 `AgentResources.__enter__` 创建 + `.setup()`，`__exit__` 经 `ExitStack` 关闭。均为本地文件 SQLite，无连接串/网络、无远程 DB。会话事件库为 append-only，超大 payload（> 256KiB）外溢到 `backend/data/artifacts/session-events/<uuid>.json`，DB 仅存 `{artifact_path, bytes}` 指针。
 
-### 1.6 MiniMax LLM（Anthropic 兼容，默认 LLM 提供方）
+### 1.7 MiniMax LLM（Anthropic 兼容，默认 LLM 提供方）
 
 - **边界位置**：`backend/harness.py::DeepAgentsBrainFactory.__init__`。
 - **初始化方式**：当 `model is None` 时执行 `init_chat_model(f"anthropic:{os.getenv('MINIMAX_MODEL')}", api_key=os.getenv("MINIMAX_API_KEY"), base_url=os.getenv("MINIMAX_BASE_URL"))`，构造 LangChain `ChatAnthropic` 模型对象（经 MiniMax 的 Anthropic 兼容端点、走 Anthropic 协议），再交给 `create_deep_agent(...)`。复用 LangChain 的 Anthropic provider 适配，**不**自行包装 `anthropic` SDK，也**不**再手工覆写 `OPENAI_*` 环境变量。
@@ -82,7 +99,7 @@
 | **DeepSeek** | `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL=https://api.deepseek.com`、`DEEPSEEK_MODEL=deepseek-v4-flash` | backend 源码零引用，疑似预留为可切换 LLM 提供方，需确认。 |
 | **Oracle** | `ORACLE_DSN`、`ORACLE_USERNAME`、`ORACLE_PASSWORD`、`ORACLE_CLIENT_LIB_DIR`、`ORACLE_TIMEOUT_SECONDS` | backend 源码零引用；`backend/pyproject.toml` 的 `[project.dependencies]` 未列 `oracledb`/`cx_Oracle`；但 `backend/instantclient/` Oracle 二进制已提交进 git。配置先于实现进入仓库，疑似范围蔓延前兆，需确认是否有未列入里程碑的 Oracle 数据源需求。 |
 | **LangSmith** | `LANGSMITH_TRACING=false`、`LANGSMITH_ENDPOINT`、`LANGSMITH_PROJECT=DsAgents` | 默认关闭，backend 源码无直接引用，经 LangChain/LangGraph 运行时间接生效。若误开启会把 trace 上传外部服务。需确认是否计划启用。 |
-| **CORS / 前端** | `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500` | 端口 8500 暗示 Streamlit。backend 无 FastAPI/uvicorn 等 web 框架、无 HTTP server，源码未引用。属预留 / 前端边界，服务层归属需确认。 |
+| **CORS / 前端** | `CORS_ORIGINS=http://localhost:8500,http://127.0.0.1:8500` | 端口 8500 暗示 Streamlit。backend 现已存在 `api.py` FastAPI HTTP 层，但源码仍未读取该配置、也未装配 CORS middleware。属预留 / 前端边界。 |
 
 ---
 
@@ -90,10 +107,10 @@
 
 按任务类型，应**先读**下列事实文档（路径相对仓库根），再到本文件定位接口边界：
 
-- **改文档解析工具**：读 `backend/.planning/codebase/INTEGRATIONS.md` §1（三步 API、`MINERU_*` 配置、字段模糊匹配）、`CONCERNS.md` §1（硬失败、明文 HTTP、无重试/降级）。提醒：模型侧公开工具名是 `parse_document`；当前 provider 仍是 MinerU，协议字段变更会冲击 `tools.py::_find_value` 模糊匹配。
-- **改存储 / 持久化**：读 `backend/.planning/codebase/STRUCTURE.md` §4（资源目录约定）、`INTEGRATIONS.md` §3-4（三 SQLite 库 + CompositeBackend 路由）。提醒：会话事件 append-only、不可 update/delete；三库相互独立；超大 payload 外溢机制需保持。
+- **改文档解析工具**：读 `backend/.planning/codebase/INTEGRATIONS.md` §2（三步 API、`MINERU_*` 配置、字段模糊匹配）、`CONCERNS.md` §1（硬失败、明文 HTTP、无重试/降级）。提醒：模型侧公开工具名是 `parse_document`；当前 provider 仍是 MinerU，协议字段变更会冲击 `tools.py::_find_value` 模糊匹配。
+- **改存储 / 持久化**：读 `backend/.planning/codebase/STRUCTURE.md` §4（资源目录约定）、`INTEGRATIONS.md` §4-6（CompositeBackend 路由 + 三 SQLite 库 + 本地产物目录）。提醒：会话事件 append-only、不可 update/delete；三库相互独立；超大 payload 外溢机制需保持。
 - **加 / 改 Provider（LLM 或外部服务）**：读本文件 §1.6 / §2、`backend/.planning/codebase/STACK.md`。提醒：当前唯一已接入的外部文档解析 provider 是 MinerU；MiniMax 默认经 Anthropic 兼容协议接入，优先走 `MINIMAX_*` 配置；DeepSeek/Oracle/LangSmith/CORS 均需先确认归属再动。
-- **改 Brain / Harness 执行**：读 `backend/.planning/codebase/ARCHITECTURE.md` §4-5（运行时数据流、关键设计决策）、本文件 §1.2。提醒：保持 `BrainFactory` Protocol 可替换、Harness 薄、真实错误透传。
+- **改 Brain / Harness 执行**：读 `backend/.planning/codebase/ARCHITECTURE.md` §4-5（运行时数据流、关键设计决策）、本文件 §1.3。提醒：保持 `BrainFactory` Protocol 可替换、Harness 薄、真实错误透传。
 - **改可观测 / trace**：读 `backend/.planning/codebase/CONCERNS.md` §4。提醒：middleware 仅记录模型可见层，不触碰隐藏思维链；trace 写入 SQLite 的错误事件含 `repr(exc)`，当前无脱敏。
 
 ---
@@ -102,7 +119,7 @@
 
 未来扩展时，应沿下列边界接入，避免破坏五大模块边界（详见 `AGENTS.md` Harness 原则与 `ARCHITECTURE.md` §5）：
 
-- **新增前端 / 服务层**：当前 backend 是 Python API 而非 HTTP 服务。新增前端须同时决定"是否引入服务层"——根 `AGENTS.md` 明确服务层只在真实 caller 需要时才加，每个新抽象必须保护五大边界之一。`.env.example` 的 `CORS_ORIGINS=http://localhost:8500` 已预留前端端口（疑似 Streamlit），属未实现边界。新增子项目后须在 `coding_maps/SYSTEM_MAP.md` §2-4 同步子项目职责表、调用链、接口边界。
+- **扩展前端 / HTTP 层**：当前 backend 已有薄 FastAPI HTTP 服务，但仍只有三个最小端点，且未做鉴权、CORS、健康检查。若新增前端子项目或扩展 HTTP 契约，仍应保持 transport 薄，不新增第二套 service 框架；新增子项目后须在 `coding_maps/SYSTEM_MAP.md` §2-4 同步子项目职责表、调用链、接口边界。
 - **新增可插拔 Brain / runner**：实现 `BrainFactory` Protocol 即可（参照 `DeepAgentsBrainFactory` 与 `self_check.py::_FakeBrainFactory`），不要把新 runner 硬绑到现有工具/资源。
 - **新增工具**：实现 `ToolHandler` 并加入 `ToolCatalog`，由 Harness 注入；工具不绑定单一 runner。
 - **新增 LLM Provider**：参照 `DeepAgentsBrainFactory` 的 LangChain provider 初始化方式（`init_chat_model("provider:model", ...)` 直接构造模型对象）；DeepSeek 等 `.env.example` 预留键的归属需先确认。

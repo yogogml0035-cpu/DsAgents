@@ -1,6 +1,6 @@
 # STRUCTURE
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 生成；本轮刷新：按 commit a30bb99 / 9c78cf2 修正 MiniMax 模型接入为 Anthropic 兼容协议、移除全部 fallback/默认值描述）
+> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-03 生成；本轮刷新：新增 FastAPI HTTP/SSE/upload 适配层与 `/artifacts/uploads` 路径）
 
 ## 1. backend/ 目录树
 
@@ -8,6 +8,7 @@
 
 ```
 backend/
+├── api.py               # 薄 HTTP 适配层：FastAPI 阻塞消息、SSE 流、文件上传
 ├── session.py           # Session 边界：SQLite 事件存储 + 上下文窗口派生 + run_session + main
 ├── harness.py           # Harness 边界：Brain 工厂 + 单轮运行时 HarnessRuntime
 ├── hands.py             # Hands 边界：TraceMiddleware 暴露执行 trace 并透传错误
@@ -30,6 +31,7 @@ backend/
 | 文件 | 主要导出（类/函数） | 一句话职责 |
 |------|----------------------|------------|
 | `session.py` | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`ContextWindow`、`run_session`、`main` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；并在导入时 `load_dotenv` |
+| `api.py` | `MessageRequest`、`create_app`、`app` | 薄 HTTP 适配层：把 HarnessRuntime 暴露为阻塞消息、SSE 流式消息和文件上传接口 |
 | `harness.py` | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` | 读历史→派生上下文→请求执行→写回事件 |
 | `hands.py` | `Hands`、`TraceHands`、`TraceMiddleware` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
 | `resources.py` | `ResourceConfig`、`AgentResources` | 持有 SQLite store/checkpointer + CompositeBackend 路由；`data_dir` 锁定在 `backend/data/` |
@@ -40,6 +42,12 @@ backend/
 
 `backend/` 不是包，没有 `__init__.py` / `__main__.py`，因此**不能**用 `from backend import ...` 或 `python -m backend.<x>`。模块之间用绝对导入（`from session import ...`），脚本所在目录会自动加入 `sys.path`，所以直接运行 `backend/` 内脚本即可让这些绝对导入正确解析。
 
+- **HTTP 服务入口**：
+  ```bash
+  cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
+  ```
+  `api.py` 暴露 `app` / `create_app()`，当前提供三个端点：`POST /sessions/messages`（阻塞回复）、`POST /sessions/messages/stream`（SSE 流式回复）、`POST /files`（multipart 上传到 `backend/data/artifacts/uploads/`，响应虚拟路径 `/artifacts/uploads/<uuid>_<filename>`）。
+
 - **导入入口**：需在 `backend/` 目录下（或把 `backend/` 加入 `PYTHONPATH`）：
   ```python
   from session import run_session
@@ -49,9 +57,9 @@ backend/
 
 - **自检入口**（推荐，不需要真实 LLM / 当前文档解析 provider 可达）：
   ```bash
-  python backend/self_check.py        # 或 cd backend && python -m self_check
+  python backend/self_check.py        # 或 cd backend && uv run python self_check.py
   ```
-  `self_check.main()` 用 FakeBrain 端到端跑 Harness、验证 trace 事件与错误透传，结尾打印 `self-check passed`。
+  `self_check.main()` 用 FakeBrain + FastAPI `TestClient` 端到端跑 Harness / HTTP / SSE / upload / `/artifacts/...` 映射，结尾打印 `self-check passed`。
 
 - **冒烟入口**（需真实 `MINIMAX_API_KEY` / `MINIMAX_MODEL` / `MINIMAX_BASE_URL` 与网络）：
   ```bash
@@ -72,6 +80,7 @@ backend/
 | Store 库（持久历史/记忆） | `backend/data/dsagents_store.db` | `ResourceConfig.store_db` → `SqliteStore` |
 | Checkpointer 库 | `backend/data/dsagents_checkpoints.db` | `ResourceConfig.checkpoint_db` → `SqliteSaver` |
 | 大型产物根目录 | `backend/data/artifacts/` | `ResourceConfig.artifacts_dir`，`AgentResources` 创建 |
+| HTTP 上传落点 | `backend/data/artifacts/uploads/<uuid>_<filename>` | `api.py::post_file` |
 | 超大事件外溢文件 | `backend/data/artifacts/session-events/<uuid>.json` | `SqliteSessionStore(artifacts_dir)`，payload > 256KiB 时外溢 |
 | 文档解析输出 | `backend/data/document_outputs/<stem>.md` | `tools.py::_default_output_path`（`Path(__file__).resolve().parent/"data"/"document_outputs"`） |
 
@@ -98,7 +107,7 @@ DsAgents/                      # 仓库根
 └── .gitignore                 # 忽略 .env、data/、.venv/、__pycache__/、scripts/ralph/ 等
 ```
 
-- **依赖（运行时）**：`backend/pyproject.toml` 的 `[project.dependencies]` 声明 `deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-core>=1.4.8`、`langchain-openai>=0.3.0`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-dotenv>=1.2.2`、`requests>=2.34.2`，版本由 `backend/uv.lock` 锁定，包管理器为 **uv**（安装：`cd backend && uv sync`）。`backend/` 是可安装项目 `dsagents`（version `0.1.0`，`requires-python = ">=3.11,<4.0"`，build-system `setuptools>=68`）。
+- **依赖（运行时）**：`backend/pyproject.toml` 的 `[project.dependencies]` 声明 `deepagents>=0.6.12`、`fastapi>=0.116.1`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7`、`langgraph-checkpoint-sqlite>=3.1.0`、`python-multipart>=0.0.20`、`python-dotenv>=1.2.2`、`requests>=2.34.2`、`uvicorn>=0.35.0`，版本由 `backend/uv.lock` 锁定，包管理器为 **uv**（安装：`cd backend && uv sync`）。`backend/` 是可安装项目 `dsagents`（version `0.1.0`，`requires-python = ">=3.11,<4.0"`，build-system `setuptools>=68`）。
 - **`backend/instantclient/`**：Oracle Instant Client 19.31（依赖产物，供可能的 Oracle 连接用，`.env.example` 含 `ORACLE_*` 键），但当前五大模块源码**未引用** Oracle，判断为预留/依赖产物，非运行时必经路径。
 - **`backend/.venv/`**：虚拟环境（依赖产物），`.gitignore` 忽略 `.venv/`。
 - **`backend/.env`**：运行时密钥与配置（`.gitignore` 忽略 `.env`），由 `session.py` 在导入时 `load_dotenv` 加载；`.env.example` 是模板（保留在仓库）。

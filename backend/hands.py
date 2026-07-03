@@ -4,9 +4,8 @@ import json
 from typing import Any, Callable, Protocol, Sequence
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain.messages import ToolMessage
 from langchain.tools.tool_node import ToolCallRequest
-from langgraph.types import Command
+from langgraph.config import get_stream_writer
 
 from session import SessionStore
 
@@ -47,9 +46,11 @@ class TraceMiddleware(AgentMiddleware):
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> Any:
         call = request.tool_call
+        writer = _stream_writer()
+        _emit_tool_status(writer, {"name": call.get("name"), "status": "started"})
         self.sessions.emit_event(
             self.session_id,
             "tool_request",
@@ -63,12 +64,14 @@ class TraceMiddleware(AgentMiddleware):
                 "tool_error",
                 {"name": call.get("name"), "error": repr(exc)},
             )
+            _emit_tool_status(writer, {"name": call.get("name"), "status": "error"})
             raise
         self.sessions.emit_event(
             self.session_id,
             "tool_response",
             {"name": call.get("name"), "result": result},
         )
+        _emit_tool_status(writer, {"name": call.get("name"), "status": "completed"})
         print(f"[tool] {call.get('name')} completed")
         return result
 
@@ -90,3 +93,16 @@ def _safe(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
+
+
+def _stream_writer() -> Callable[[Any], None] | None:
+    try:
+        return get_stream_writer()
+    except (KeyError, RuntimeError):
+        return None
+
+
+def _emit_tool_status(writer: Callable[[Any], None] | None, payload: dict[str, Any]) -> None:
+    if writer is None:
+        return
+    writer(payload)

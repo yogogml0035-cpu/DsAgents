@@ -1,6 +1,6 @@
 # 测试与验证 (TESTING)
 
-> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-02 本轮刷新：更正 brain factory 接线断言为 ChatAnthropic / Anthropic 协议）
+> 事实来源：backend/ 源码、backend/pyproject.toml + uv.lock（2026-07-03 本轮刷新：新增 HTTP / SSE / upload / `/artifacts/...` 映射自检）
 
 本文档如实反映"首个里程碑早期"的测试现状。当前**没有正式的自动化测试套件**，唯一的验证手段是 `self_check.py` 自检脚本。
 
@@ -15,7 +15,7 @@
 
 ## 2. self_check.py 的角色
 
-`backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document` 真实网络成功路径外的几乎所有核心逻辑。它通过 `python self_check.py` 或 `cd backend && python -m self_check` 运行（`if __name__ == "__main__": main()`）。
+`backend/self_check.py` 是一个**端到端冒烟自检脚本**（不是 pytest 测试），覆盖了除 `tools.parse_document` 真实网络成功路径外的几乎所有核心逻辑。它通过 `python backend/self_check.py`（仓库根，已激活环境）或 `cd backend && uv run python self_check.py` 运行（`if __name__ == "__main__": main()`）。
 
 ### 它验证什么（`main()` 函数，均通过裸 `assert`）
 
@@ -29,6 +29,11 @@
 | 上下文窗口派生（20 上限裁剪、剔除 leading 非 user 消息） | `session.context_window` |
 | TraceMiddleware 记录 model_request / tool_response，且异常被 re-raise | `hands.TraceMiddleware` |
 | `HarnessRuntime.run_turn` 单轮 + 多轮事件序列 `["user_message","assistant_message","user_message","assistant_message"]` | `harness.HarnessRuntime.run_turn` |
+| `HarnessRuntime.stream_turn` 流式事件转换：`messages`→`text_delta`、`custom`→`tool_status`、`values`→最终 assistant 内容 | `harness.HarnessRuntime.stream_turn` |
+| HTTP 阻塞接口：自动生成 `session_id`、传入 `session_id` 继续复用 | `api.py::POST /sessions/messages` |
+| SSE 接口：事件顺序包含 `session`、`text_delta`、`tool_status`、`done` | `api.py::POST /sessions/messages/stream` |
+| 上传接口：basename 清理、保存到 `artifacts/uploads/`、返回 `/artifacts/uploads/...` | `api.py::POST /files` |
+| `/artifacts/...` 虚拟路径映射与 `..` 逃逸拒绝 | `tools.parse_document` / `_resolve_document_path` |
 | 超大 payload 落盘 round-trip（`max_inline_bytes=10` → `artifacts/session-events/*.json`） | `session.SqliteSessionStore`（`max_inline_bytes`） |
 
 ### 它如何替身真实 Brain
@@ -49,11 +54,14 @@
 ```bash
 # 自检（推荐，不需要真实 LLM / 当前文档解析 provider 可达）
 python backend/self_check.py
-# 或：cd backend && python -m self_check
+# 或：cd backend && uv run python self_check.py
 
 # 单次会话冒烟（需真实 MiniMax key 与网络，会发 LLM 请求）
 python backend/session.py
 # 或：cd backend && python -m session
+
+# HTTP 服务（需真实 MiniMax key 与网络；上传/阻塞/SSE 三端点）
+cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
 `session.main()`（`session.py`）硬编码 `message = "你好"` + 随机 `session_id`，调用 `run_session` 后打印最后一条消息内容。**不是 `args` 未定义 bug**——`session.py:3` 的 `import argparse` 只是遗留未使用 import，`main()` 并未引用 `args`。
@@ -67,7 +75,7 @@ python backend/session.py
    ```bash
    python backend/self_check.py
    ```
-   看到末行 `self-check passed` 即表示 Session / Harness / Hands / Resources / Tools（除真实网络）链路正常。
+   看到末行 `self-check passed` 即表示 Session / Harness / Hands / Resources / Tools / HTTP / SSE / upload（除真实外部网络）链路正常。
 3. **带真实模型的集成验证**：调用编程入口而非冒烟 `main()`：
    ```python
    # 需在 backend/ 目录下，或把 backend/ 加入 PYTHONPATH
@@ -77,7 +85,7 @@ python backend/session.py
    ```
    前提：`backend/.env` 中配置了有效的 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`。
 
-> 没有独立的"健康检查"端点——本项目是库/运行时，无 HTTP server。验证以 `self_check` + `run_session` 为主。
+> 当前没有独立的 `/health` 端点。验证以 `self_check`、`run_session` 与 `api.py` 的本地 `TestClient` 契约检查为主。
 
 ## 5. 当前测试覆盖缺口（初步建议，不夸大）
 
