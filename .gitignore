@@ -9,5 +9,5 @@ backend/data/
 __pycache__/
 *.pyc
 
-
+Study/
 backend/.env
