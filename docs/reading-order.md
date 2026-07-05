@@ -6,11 +6,11 @@
 
 | 任务类型 | 先读 |
 |----------|------|
-| **改 backend 代码（业务/存储/runner）** | `backend/.planning/codebase/ARCHITECTURE.md`、`STRUCTURE.md`；改持久化回看 `docs/conventions.md` 的 Session 原则 |
+| **改 backend 代码（业务/存储/runner）** | `backend/.planning/codebase/ARCHITECTURE.md`、`STRUCTURE.md`；改持久化回看 `docs/conventions.md` 的 run-first 原则 |
 | **改文档解析工具 / DeepAgents Brain** | `backend/.planning/codebase/INTEGRATIONS.md`、`STACK.md`；provider 边界见 `INTERFACES.md` §1 |
 | **改集成 / Provider** | `INTERFACES.md`、`backend/.planning/codebase/INTEGRATIONS.md`；未证实关系见 `INTERFACES.md` §2 |
 | **加新子项目（如 frontend）** | `docs/conventions.md`（核心原则）、`ARCHITECTURE.md` §1、`coding_maps/SYSTEM_MAP.md` §4/§6 |
 
 ## 当前里程碑
 
-最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / 最小 session runner / 薄 HTTP run/upload 适配层）。HTTP 层已升级为 **run 中心模型**：阻塞/SSE/后台三种 POST 统一创建 `run_id`、写 `runs`/`run_events`，并提供 run 查询与文件上传。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md` §6。
+最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / run-first 执行核心 / 薄 HTTP run/upload 适配层）。HTTP 层为 **run 中心模型**：`POST /runs` 创建 `run_id`、写 `runs`/`run_events`，并提供 `GET /runs/{run_id}` 轮询（支持 `after_event_id` 增量）与 `POST /files` 上传。当前**无 SSE**，事件靠轮询。旧 session 模块/表/端点已在 commit `8890292` 移除。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md`。

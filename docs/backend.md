@@ -27,12 +27,7 @@
 
 ## 已删除
 
-- `session.py`
-- `POST /sessions/messages`
-- `POST /sessions/messages/stream`
-- `POST /sessions/messages/runs`
-- `GET /sessions/{session_id}/runs`
-- `from session import run_session`
+旧 session 模块/表/端点已移除（见 [INTERFACES.md](../INTERFACES.md) §1）；commit `8890292`。
 
 ## 并发与恢复
 

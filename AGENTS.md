@@ -5,11 +5,10 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 ## 关键约定
 
 - **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
-- **运行入口**：HTTP 用 `POST /runs`；自检用 `python backend/self_check.py`。如需程序内调用，用 `AgentResources` + `create_harness(resources).execute_run(...)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（无 `__init__.py` / `__main__.py`）。
-- **自检**：`python backend/self_check.py`（FakeBrain，结尾打印 `self-check passed`）。
+- **运行入口**：HTTP 用 `POST /runs`；自检用 `python backend/self_check.py`（FakeBrain，结尾打印 `self-check passed`）。程序内调用用 `AgentResources` + `create_harness(resources).execute_run(...)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（扁平顶层模块，无 `__init__.py` / `__main__.py`）。
 - **文档语言**：简体中文（保留代码标识符 / 路径 / 命令 / 配置键 / IP/端口原文）；不外泄密钥；证据不足标注"需确认"。
 
-> 核心运行时原则（能力可插拔、Session 是事件源、保持运行时薄、真实错误透传、优先删减范围）与文档维护规则见 [`docs/conventions.md`](docs/conventions.md)，每次改动 backend 前请先读。
+> 核心运行时原则（能力可插拔、run 是事件源、保持运行时薄、真实错误透传、优先删减范围）与文档维护规则见 [`docs/conventions.md`](docs/conventions.md)，每次改动 backend 前请先读。
 
 ## 详细文档
 

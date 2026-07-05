@@ -4,13 +4,13 @@
 
 ## 核心原则（全局人工约束）
 
-- **能力可插拔**：Brain（如 DeepAgents）、执行器、工具做成可插拔；项目自身拥有 Session、事件、资源、工具路由与运行时状态，不被硬编码到某个 runner、容器、模型或工作流。
-- **Session 是事件源，不是上下文窗口**：Session 以 append-only 事件存完整持久任务事实。摘要或裁剪视图可作为事件追加，但不得替代原始事件作为事实源。
-- **保持运行时薄**：读 Session 历史、派生上下文窗口、请求执行、写回结果事件。在真实 caller 需要前，不增加服务层、策略框架、工作流引擎、容器或宽泛的安全/配置系统。
+- **能力可插拔**：Brain（如 DeepAgents）、执行器、工具做成可插拔；项目自身拥有 run、事件、资源、工具路由与运行时状态，不被硬编码到某个 runner、容器、模型或工作流。
+- **run 是事件源**：`run_events` 表 append-only 存完整规范化事件与 raw chunk；`runs` 表是事件投影出的快照。短期上下文不再自建回放，统一交给 LangGraph `checkpointer` + `thread_id=session_id`。（旧 `session` 模块/表/事件回放已在 commit `8890292` 移除。）
+- **保持运行时薄**：提交 run、驱动 Brain、规范化 stream chunk、写回 run 事件。在真实 caller 需要前，不增加服务层、策略框架、工作流引擎、容器或宽泛的安全/配置系统。
 - **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
 - **简单性约束**：优先删减范围而非增加旋钮。
 
-> 完整阐述与"为什么"见 `ARCHITECTURE.md` §5 与 `backend/.planning/codebase/ARCHITECTURE.md` §4。
+> 完整阐述与"为什么"见 `ARCHITECTURE.md` §5（关键约束/当前风险）与 `backend/.planning/codebase/ARCHITECTURE.md`（内部架构与核心运行时原则）。
 
 ## 维护规则
 

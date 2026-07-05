@@ -1,100 +1,69 @@
 # ARCHITECTURE
 
+> 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
+> 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
+
 ## 1. 系统定位
 
-`DsAgents` 当前只有一个产品子项目：`backend/`。它是一个 **run-first agent runtime**：
+`DsAgents` 是一个 **agent 运行时底座**：把能力做成可插拔，而不绑定具体 runner、容器、模型或工作流。
 
-- 对话短期上下文不再由仓库自建 session 事件库回放。
-- LangGraph `checkpointer` + `thread_id=session_id` 是唯一的 thread-scoped 短期上下文来源。
-- 本地 SQLite 只保留一个窄用途 run ledger：记录 `POST /runs` 的输入、状态、规范化事件和完整 raw chunk。
+- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` / `ToolCatalog` 均为 `typing.Protocol`，由 `create_harness` 默认工厂注入，运行时不写死具体模型/工具实现（自检用 `_FakeBrainFactory` 替换）。
+- **run-first**：`session` 模块与 session 持久化层已在 commit `8890292` 移除；run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照。
+- **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
+- **入口形态**：HTTP（`POST /runs`，轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
+- **单子项目**：仓库当前只有 `backend/` 一个产品子项目（扁平顶层模块、绝对导入、`uv` 包管理）；当前源文档未确认任何前端子项目归属本仓库。
 
-当前对外只有三类稳定能力：
+## 2. 子系统职责
 
-- `POST /runs` / `GET /runs/{run_id}`：提交 run、轮询 run。
-- `POST /files`：上传文件到 `/artifacts/uploads/...`。
-- 程序内组合：`AgentResources` + `create_harness(resources).execute_run(...)`。
+| 子项目 | 目录 | 当前职责 | 边界（不做什么） |
+|--------|------|----------|------------------|
+| backend | `backend/` | run-first agent runtime：提交 run、轮询 run、上传文件、维护 LangGraph checkpointer/store 与本地 run ledger；能力层（Brain/Hands/Tools）可插拔 | 不提供 session 模块/表/事件回放；不提供 SSE；不提供鉴权/CORS；不绑定具体模型/工具实现；不提供跨进程锁或队列 |
 
-## 2. 模块边界
+backend 内部架构、目录组织、配置加载、事件源模型等实现事实见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) 与 [`backend/.planning/codebase/STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)。
 
-| 模块 | 文件 | 职责 |
-|------|------|------|
-| Run Ledger | `backend/run_ledger.py` | `dsagents_runs.db` 的 run 快照与 `run_events` 追加写入；大 payload/raw 外溢到 `backend/data/artifacts/run-events/` |
-| Harness | `backend/harness.py` | 组装 Brain、Tools、Middleware；执行 `brain.stream(...)` 并把 `messages/custom/values` 规范化为 run 事件 |
-| Hands | `backend/hands.py` | 最小 `ToolStatusMiddleware`；通过 `get_stream_writer()` 发 `tool_status started/completed/error` |
-| Resources | `backend/resources.py` | 装配 `SqliteRunLedger`、LangGraph `SqliteSaver` checkpointer、`SqliteStore`、`CompositeBackend` |
-| Tools | `backend/tools.py` | 当前唯一业务工具 `parse_document` |
-| HTTP | `backend/api.py` | 薄 FastAPI 适配层；进程内 per-session 单飞锁；后台线程执行 run |
+## 3. 推荐理解路径
 
-`backend/` 仍是扁平顶层模块，不是 Python 包；没有 `__init__.py` / `__main__.py`，模块内继续使用 `from harness import ...` 这类绝对导入。
+按任务类型的阅读顺序见 [`docs/reading-order.md`](docs/reading-order.md)（权威）与 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md) §6（系统层视图）。
 
-## 3. 主调用链
+系统级导航要点：理解系统边界与接口从本文件 → [`INTERFACES.md`](INTERFACES.md) → [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)；理解子系统职责从本文件 §2；理解稳定目录职责从本文件 §4。
 
-```
-POST /runs
-  ├─ 生成 run_id；session_id 为空则生成 uuid
-  ├─ 进程内按 session_id 获取 threading.Lock
-  ├─ resources.runs.create_run(run_id, session_id, input_message)
-  ├─ 后台线程调用 HarnessRuntime.execute_run(message, session_id, run_id)
-  └─ 立即返回 {"run_id","session_id","status":"queued"}
+## 4. 稳定目录职责（backend 顶层模块）
 
-HarnessRuntime.execute_run(...)
-  ├─ emit_run_status("running")
-  ├─ brain.stream(
-  │    {"messages": [{"role":"user","content": message}]},
-  │    config={"configurable":{"thread_id": session_id}},
-  │    stream_mode=["messages","custom","values"],
-  │    version="v2",
-  │  )
-  ├─ messages chunk → `thinking` / `text_delta`
-  ├─ custom chunk   → `tool_status`
-  ├─ values chunk   → `values`
-  ├─ 成功 → emit_run_status("succeeded", reply=...)
-  └─ 失败 → emit_run_status("failed", error=...)
-```
+`backend/` 是扁平顶层模块（非 Python 包）。顶层 `.py` 的系统级职责概览（不展开实现，详见 [`backend/.planning/codebase/STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)）：
 
-这里有两个故意保留的简单化：
+| 模块 | 系统级职责 |
+|------|-----------|
+| `api.py` | FastAPI HTTP 适配层（run-first 三端点 + 同 session 单飞锁 + 启动恢复） |
+| `harness.py` | run 执行核心 + Brain/Hands/Tools 装配 + 默认工厂 `create_harness` |
+| `hands.py` | 执行器/中间件抽象（`Hands` Protocol + `ToolStatusMiddleware`） |
+| `resources.py` | 资源装配器（`AgentResources`：run ledger + checkpointer + store + `CompositeBackend`） |
+| `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
+| `tools.py` | 工具抽象 + 默认业务工具 `parse_document`（调 MinerU） |
+| `self_check.py` | 端到端自检脚本（`_FakeBrain` 替身，非 pytest 套件） |
 
-- 同一 `session_id` 的并发保护只靠进程内 `threading.Lock`，不做跨进程锁。
-- run ledger 永久保留，不做清理策略、迁移脚本或历史兼容层。
+固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条活跃 SQLite 通道 + `artifacts/`（`uploads/` 上传落地、`run-events/` 大 payload 外溢）+ `document_outputs/`（`parse_document` 默认输出）。
 
-## 4. 持久化边界
+## 5. 系统层面维护约定
 
-`backend/data/` 下有三条独立 SQLite 通道：
+- **改动归属**：改 backend 代码后，**先更新** [`backend/.planning/codebase/`](backend/.planning/codebase/) 对应事实文档，**再视影响回看**根级 `ARCHITECTURE.md` / `INTERFACES.md` 与 `coding_maps/SYSTEM_MAP.md`（详见 [`AGENTS.md`](AGENTS.md) 关键约定）。
+- **文档分层维护**：根级三件套（系统边界与导航）→ `coding_maps/SYSTEM_MAP.md`（系统层跨子项目视图）→ `docs/*.md`（详细说明）→ `backend/.planning/codebase/*`（实现事实来源）。四层需手工保持一致。
+- **系统级文档不堆实现**：本文件与 `INTERFACES.md` 只描述系统边界与接口契约；具体表结构、主调用链细节、配置键清单归 backend 事实文档。
 
-- `dsagents_runs.db`：run ledger。表只有 `runs` 与 `run_events`。
-- `dsagents_store.db`：LangGraph store。
-- `dsagents_checkpoints.db`：LangGraph checkpointer。
+## 6. 关键约束
 
-当前 `runs` 基表直接存：
+- **run-first**：无 `session.py`、无 session 表、无 `context_window`、无 `RemoveMessage(REMOVE_ALL_MESSAGES)`、无 `run_turn`/`stream_turn`；旧 `from session import run_session` 已删除。
+- **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。
+- **`uv` 包管理**：安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
+- **`.env` 加载**：由 `harness.py` 与 `tools.py` 在导入时 `load_dotenv(Path(__file__).with_name(".env"))`（删除 `session.py` 后保留配置加载点）。
 
-- `run_id`
-- `session_id`
-- `input_message`
-- `status`
-- `created_at`
-- `updated_at`
-- `reply`
-- `error`
+## 7. 当前风险（系统级）
 
-`run_events` 只保留五类规范化事件：
+提炼自 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md)（每条证据见该文档），改动涉及以下面时按提示核对：
 
-- `status`
-- `thinking`
-- `text_delta`
-- `tool_status`
-- `values`
-
-每条 run event 同时保存完整 raw。小 JSON 直接入库；大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`，读取时透明回填。
-
-## 5. 关键约束
-
-- 旧 `session.py` / `dsagents_sessions.db` / `context_window` / `RemoveMessage(REMOVE_ALL_MESSAGES)` 已删除。
-- 旧 `/sessions/messages*` 和 `GET /sessions/{session_id}/runs` 已删除。
-- `.env` 由 `backend/harness.py` 与 `backend/tools.py` 在导入时加载，避免删除 `session.py` 后 MiniMax / MinerU 配置丢失。
-- 启动时若发现遗留 `queued` / `running` run，会统一补记为 `failed("执行已中断，请重试")`。
-
-## 6. 当前风险
-
-- run 锁是单进程内语义；多 worker 部署需确认是否接受。
-- run ledger 保存完整 raw chunk，便于调试，但也意味着错误与模型原始输出会长期留存。
-- 程序内没有单函数 one-shot API；仓库默认入口是 HTTP `POST /runs` 或直接使用 harness 组合。
+- **instantclient 入库（高危）**：`backend/instantclient/`（Oracle Instant Client 19.31，约 109MB）被 git 跟踪，但 backend 代码零引用。需确认是否应移出仓库。
+- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但 `backend/.env` 缺该键 → 真实调用 `parse_document` 立即 `RuntimeError`。`DEEPSEEK_*` / `ORACLE_*` / `LANGSMITH_*` / `CORS_ORIGINS` 均为代码零引用的死配置。
+- **run 锁单进程语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。
+- **文档同步**：四层文档手工保持一致。已知漂移源：`Study/` 全套以 session 为事实源（已被 `.gitignore` 忽略）。
+- **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
+- **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。
+- **测试覆盖**：无 pytest 套件、无 CI；回归靠 `python backend/self_check.py`（`_FakeBrain` 替身，不打真实 provider/MinerU）。
