@@ -10,7 +10,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器 Han
 - **形态**：单子项目仓库，唯一产品子项目是 `backend/`（扁平顶层模块，绝对导入 `from hands import ...`，包管理器 `uv`）。无前端子项目（当前源文档未确认任何前端代码归属本仓库）。
 - **架构**：run-first。`session` 模块与 session 持久化层已移除（commit `8890292`）；run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
-- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` / `ToolCatalog` 均为 `typing.Protocol`，由 `create_harness` 默认工厂注入，自检用 `_FakeBrainFactory` 替换。运行时不写死具体模型/工具实现。
+- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；工具保持普通 callable + `ToolCatalog`。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` / `ToolStatusHands` / `default_tool_catalog()`），自检用 `_FakeBrainFactory` 替换。运行时不写死具体模型实现。
 - **入口形态**：HTTP（`POST /runs`，run-first 轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
 
 详细运行时原则与维护规则见根级 [`docs/conventions.md`](../docs/conventions.md)（`AGENTS.md` 要求改动 backend 前必读）。

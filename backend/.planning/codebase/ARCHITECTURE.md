@@ -9,7 +9,7 @@
 
 - **Brain 可插拔**：`Brain` 是 `Protocol`（`harness.py`），任何实现了 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic）模型。
 - **执行器（Hands）可插拔**：`Hands` 是 `Protocol`，`Hands.middleware()` 返回一组 `AgentMiddleware`；默认 `ToolStatusHands` 只挂 `ToolStatusMiddleware`（发 `tool_status` custom event）。
-- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），`default_tool_catalog()` 当前只含 `parse_document`。
+- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前只含 `parse_document`。
 - 模型 / 后端存储 / 持久化通道都被收口在 `AgentResources` 中，由调用方注入。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。
@@ -64,7 +64,7 @@ Harness 层 (harness.py execute_run)
   -> 结束 => status=succeeded(reply=...)  /  异常 => status=failed(error=...)
 
 能力层
-  Brain / Hands / Tools （均 Protocol，可替换）
+  Brain / Hands（Protocol）+ Tools（callable catalog）
 
 持久化层
   run_ledger.py (SqliteRunLedger, dsagents_runs.db)
@@ -93,7 +93,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 
 ## 5. 核心运行时原则
 
-- **能力可插拔**：Brain / Hands / Tools / Resources 全部 Protocol 化，由工厂注入；运行时本身不写死具体实现。
+- **能力可插拔**：仅运行时注入边界 `Brain` / `BrainFactory` / `Hands` 使用 `Protocol`；Tools 用普通 callable + `ToolCatalog`，Resources 用具体类。默认实现从 `create_harness(...)` 进入，运行时本身不写死具体模型实现。
 - **run 是事件源**：状态是事件流的投影；查询靠事件表增量。
 - **保持运行时薄**：`HarnessRuntime.execute_run` 只做 chunk 规范化与事件转发，不做业务逻辑。
 - **真实错误透传**：异常 → `status=failed` + `error` 文本 + `raw={"status":"failed","error":repr(exc)}`；不吞错。

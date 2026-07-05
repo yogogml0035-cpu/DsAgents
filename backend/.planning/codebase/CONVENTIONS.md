@@ -37,7 +37,7 @@
 
 ## 4. 核心运行时原则（来自根级 `docs/conventions.md`，在代码中落地）
 
-- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；运行时通过依赖注入接收 `brain_factory`、`hands`、`tools`。`create_harness` 用默认实现，自检/测试用 `_FakeBrainFactory` 注入。
+- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；运行时通过依赖注入接收 `brain_factory`、`hands`、`tools`。`create_harness` 用默认实现，自检/测试用 `_FakeBrainFactory` 注入。工具保持普通 callable + `ToolCatalog`，不为单实现工具新增 Protocol/ABC。
 - **run 是事件源**：`run_events` 表 append-only；`runs` 表是当前快照。短期上下文靠 LangGraph `thread_id=session_id`，不再有 session 层。
 - **保持运行时薄**：`HarnessRuntime.execute_run` 只做「派发 payload → 解析 stream chunk → 写 run event」。不在运行时内引入服务层 / 工作流引擎。
 - **真实错误透传**：见 §5。
@@ -68,7 +68,8 @@
 
 ## 8. 类型与命名（已确认）
 
-- 协议接口用 `typing.Protocol`：`Brain`、`BrainFactory`、`Hands`、`RunLedger`（部分为隐式协议）。
+- `typing.Protocol` 只用于可注入能力边界：`Brain`、`BrainFactory`、`Hands`。默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory`、`ToolStatusHands`、`default_tool_catalog()`。
+- 外部框架要求继承时才继承框架基类：如 `ToolStatusMiddleware(AgentMiddleware)`、`RunRequest(BaseModel)`；不要为单实现小功能新增 Protocol/ABC。
 - 简单值对象用 `@dataclass(frozen=True)`：`RunEvent`、`RunSnapshot`、`ResourceConfig`、`ToolCatalog`。
 - 命名：模块/函数/方法 `snake_case`，类 `PascalCase`，常量 `UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`DEFAULT_SYSTEM_PROMPT`）。
 - 顶层文件统一 `from __future__ import annotations`，类型注解广泛使用 `X | None`、`dict[...]`、`list[...]`。

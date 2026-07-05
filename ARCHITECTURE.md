@@ -7,7 +7,7 @@
 
 `DsAgents` 是一个 **agent 运行时底座**：把能力做成可插拔，而不绑定具体 runner、容器、模型或工作流。
 
-- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` / `ToolCatalog` 均为 `typing.Protocol`，由 `create_harness` 默认工厂注入，运行时不写死具体模型/工具实现（自检用 `_FakeBrainFactory` 替换）。
+- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；工具保持普通 callable + `ToolCatalog`。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` / `ToolStatusHands` / `default_tool_catalog()`），运行时不写死具体模型实现（自检用 `_FakeBrainFactory` 替换）。
 - **run-first**：`session` 模块与 session 持久化层已在 commit `8890292` 移除；run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
 - **入口形态**：HTTP（`POST /runs`，轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
