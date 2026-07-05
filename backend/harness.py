@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence
 
 from deepagents import create_deep_agent
+from dotenv import load_dotenv
 from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import RemoveMessage
 from langchain_core.language_models import BaseChatModel
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
-from hands import Hands, TraceHands
+from hands import Hands, ToolStatusHands
 from resources import AgentResources
-from session import ContextWindow, RunEvent
+from run_ledger import RunEvent
 from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
+
+load_dotenv(Path(__file__).with_name(".env"))
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -27,8 +28,6 @@ DEFAULT_SYSTEM_PROMPT = (
 
 
 class Brain(Protocol):
-    def invoke(self, payload: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]: ...
-
     def stream(
         self,
         payload: dict[str, Any],
@@ -44,7 +43,6 @@ class BrainFactory(Protocol):
         resources: AgentResources,
         middleware: Sequence[AgentMiddleware],
         tools: Sequence[ToolHandler],
-        session_id: str,
     ) -> Brain: ...
 
 
@@ -67,7 +65,6 @@ class DeepAgentsBrainFactory:
         resources: AgentResources,
         middleware: Sequence[AgentMiddleware],
         tools: Sequence[ToolHandler],
-        session_id: str,
     ) -> Brain:
         return create_deep_agent(
             model=self.model,
@@ -78,13 +75,6 @@ class DeepAgentsBrainFactory:
             checkpointer=resources.checkpointer,
             store=resources.store,
         )
-
-
-@dataclass(frozen=True)
-class HarnessTurn:
-    session_id: str
-    context: ContextWindow
-    result: dict[str, Any]
 
 
 class HarnessRuntime:
@@ -101,28 +91,18 @@ class HarnessRuntime:
         self.tools = tools
         self.brain_factory = brain_factory
 
-    def run_turn(self, message: str, session_id: str) -> HarnessTurn:
-        context, brain = self._prepare_turn(message, session_id)
-        result = brain.invoke(
-            {"messages": _reset_messages(context)},
-            config={"configurable": {"thread_id": session_id}},
-        )
-
-        self.resources.sessions.emit_event(
-            session_id,
-            "assistant_message",
-            {"role": "assistant", "content": _assistant_content(result)},
-        )
-        return HarnessTurn(session_id=session_id, context=context, result=result)
-
     def execute_run(self, message: str, session_id: str, run_id: str) -> Iterator[RunEvent]:
         assistant_text = ""
         text_parts: list[str] = []
-        yield self.resources.sessions.emit_run_status(run_id, "running")
+        yield self.resources.runs.emit_run_status(run_id, "running")
         try:
-            context, brain = self._prepare_turn(message, session_id, run_id=run_id)
+            brain = self.brain_factory.create(
+                resources=self.resources,
+                middleware=self.hands.middleware(),
+                tools=self.tools.as_list(),
+            )
             for chunk in brain.stream(
-                {"messages": _reset_messages(context)},
+                {"messages": [{"role": "user", "content": message}]},
                 config={"configurable": {"thread_id": session_id}},
                 stream_mode=["messages", "custom", "values"],
                 version="v2",
@@ -132,40 +112,40 @@ class HarnessRuntime:
                 if chunk["type"] == "messages":
                     thinking = _thinking_delta(chunk["data"])
                     if thinking:
-                        yield self.resources.sessions.emit_run_event(
+                        yield self.resources.runs.emit_run_event(
                             run_id,
                             "thinking",
                             {"content": thinking},
-                            raw=chunk["data"],
+                            raw=chunk,
                         )
                     text = _message_delta(chunk["data"])
                     if text:
                         text_parts.append(text)
-                        yield self.resources.sessions.emit_run_event(
+                        yield self.resources.runs.emit_run_event(
                             run_id,
                             "text_delta",
                             {"content": text},
-                            raw=chunk["data"],
+                            raw=chunk,
                         )
                 elif chunk["type"] == "custom":
-                    yield self.resources.sessions.emit_run_event(
+                    yield self.resources.runs.emit_run_event(
                         run_id,
                         "tool_status",
                         _stream_payload(chunk["data"]),
-                        raw=chunk["data"],
+                        raw=chunk,
                     )
                 elif chunk["type"] == "values":
                     text = _assistant_text(chunk["data"])
                     if text:
                         assistant_text = text
-                    yield self.resources.sessions.emit_run_event(
+                    yield self.resources.runs.emit_run_event(
                         run_id,
                         "values",
                         {"text": text} if text else {},
-                        raw=chunk["data"],
+                        raw=chunk,
                     )
         except Exception as exc:
-            yield self.resources.sessions.emit_run_status(
+            yield self.resources.runs.emit_run_status(
                 run_id,
                 "failed",
                 error=_error_text(exc),
@@ -175,84 +155,18 @@ class HarnessRuntime:
 
         if not assistant_text and text_parts:
             assistant_text = "".join(text_parts)
-        self.resources.sessions.emit_event(
-            session_id,
-            "assistant_message",
-            {"role": "assistant", "content": assistant_text},
-        )
-        yield self.resources.sessions.emit_run_status(
+        yield self.resources.runs.emit_run_status(
             run_id,
             "succeeded",
             reply=assistant_text,
             raw={"status": "succeeded", "reply": assistant_text},
         )
 
-    def stream_turn(self, message: str, session_id: str) -> Iterator[tuple[str, dict[str, Any]]]:
-        context, brain = self._prepare_turn(message, session_id)
-        assistant_content = None
-        text_parts: list[str] = []
-
-        for chunk in brain.stream(
-            {"messages": _reset_messages(context)},
-            config={"configurable": {"thread_id": session_id}},
-            stream_mode=["messages", "custom", "values"],
-            version="v2",
-        ):
-            if not isinstance(chunk, dict):
-                continue
-            if chunk["type"] == "messages":
-                thinking = _thinking_delta(chunk["data"])
-                if thinking:
-                    yield ("thinking_delta", {"content": thinking})
-                text = _message_delta(chunk["data"])
-                if text:
-                    text_parts.append(text)
-                    yield ("text_delta", {"content": text})
-            elif chunk["type"] == "custom":
-                if isinstance(chunk["data"], dict):
-                    yield ("tool_status", chunk["data"])
-            elif chunk["type"] == "values":
-                content = _assistant_content(chunk["data"])
-                if content is not None:
-                    assistant_content = content
-
-        if assistant_content is None and text_parts:
-            assistant_content = "".join(text_parts)
-
-        self.resources.sessions.emit_event(
-            session_id,
-            "assistant_message",
-            {"role": "assistant", "content": assistant_content},
-        )
-
-    def _prepare_turn(
-        self,
-        message: str,
-        session_id: str,
-        *,
-        run_id: str | None = None,
-    ) -> tuple[ContextWindow, Brain]:
-        self.resources.sessions.ensure_session(session_id)
-        self.resources.sessions.emit_event(
-            session_id,
-            "user_message",
-            {"role": "user", "content": message},
-        )
-        context = self.resources.sessions.context_window(session_id)
-
-        brain = self.brain_factory.create(
-            resources=self.resources,
-            middleware=self.hands.middleware(session_id, run_id=run_id),
-            tools=self.tools.as_list(),
-            session_id=session_id,
-        )
-        return context, brain
-
 
 def create_harness(resources: AgentResources) -> HarnessRuntime:
     return HarnessRuntime(
         resources=resources,
-        hands=TraceHands(resources.sessions),
+        hands=ToolStatusHands(),
         tools=default_tool_catalog(),
         brain_factory=DeepAgentsBrainFactory(),
     )
@@ -268,20 +182,8 @@ def _assistant_content(result: dict[str, Any]) -> Any:
     return None
 
 
-def assistant_reply_text(result: dict[str, Any]) -> str:
-    content = _assistant_content(result)
-    text = _content_text(content)
-    if text:
-        return text
-    return _stringify_content(content)
-
-
 def _assistant_text(result: dict[str, Any]) -> str:
     return _content_text(_assistant_content(result))
-
-
-def _reset_messages(context: ContextWindow) -> list[Any]:
-    return [RemoveMessage(id=REMOVE_ALL_MESSAGES), *context.messages]
 
 
 def _message_delta(data: Any) -> str:
@@ -376,11 +278,3 @@ def _stream_payload(value: Any) -> dict[str, Any]:
 def _error_text(exc: Exception) -> str:
     text = str(exc).strip()
     return text or exc.__class__.__name__
-
-
-def _stringify_content(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, (str, int, float, bool)):
-        return str(content)
-    return repr(content)

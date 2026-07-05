@@ -1,46 +1,46 @@
 # 命令与入口
 
-> 根级 AGENTS.md 的详情文档之一。
+## 安装
 
-`backend/` 不是常规包（无 `__init__.py` / `__main__.py`），故**没有** `python -m backend.*`；脚本所在目录会自动加入 `sys.path`，直接运行即可。
-
-## 安装依赖
-
-在 `backend/` 下，用 uv 同步：
-
-```bash
-cd backend && uv sync
+```powershell
+cd backend
+uv sync
 ```
 
-## 端到端自检
+## 自检
 
-FakeBrain，验证核心原则与约束，结尾打印 `self-check passed`：
-
-```bash
+```powershell
 python backend/self_check.py
-# 或：cd backend && python -m self_check
 ```
 
-## 启动 HTTP 服务
+## 启动 HTTP
 
-Windows 下可直接运行：
-
-```bat
-scripts\start-backend.bat
+```powershell
+cd backend
+uv run uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-等价命令：
+## 调用 HTTP
 
-```bash
-cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000
+```powershell
+curl -X POST http://127.0.0.1:8000/runs ^
+  -H "Content-Type: application/json" ^
+  -d "{\"message\":\"帮我解析 /artifacts/uploads/demo.pdf\",\"session_id\":null}"
 ```
 
-## 通过 Python API 调用
-
-无独立 CLI 入口，需在 `backend/` 下或加入 `PYTHONPATH`：
-
-```bash
-cd backend && python -c "from session import run_session; run_session('帮我解析 xxx.pdf')"
+```powershell
+curl "http://127.0.0.1:8000/runs/<run_id>"
 ```
 
-> 导入入口是 `from session import run_session`（扁平顶层，无 `backend.` 前缀）。从仓库根直接 `import session` 会失败，需先把 `backend/` 加入 `PYTHONPATH` 或在该目录下运行。
+## 程序内调用
+
+仓库不再提供 `from session import run_session`。
+
+如需程序内调用，用：
+
+```python
+from resources import AgentResources, ResourceConfig
+from harness import create_harness
+```
+
+然后显式创建 run、执行 `execute_run(...)`、再从 `resources.runs.get_run(run_id)` 读取结果。

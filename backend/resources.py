@@ -8,7 +8,7 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.sqlite import SqliteStore
 
-from session import SqliteSessionStore
+from run_ledger import SqliteRunLedger
 
 # 数据目录固定在 backend/ 下，与 CWD 无关。
 _BACKEND_DIR = Path(__file__).resolve().parent
@@ -19,8 +19,8 @@ class ResourceConfig:
     data_dir: Path = _BACKEND_DIR / "data"
 
     @property
-    def session_db(self) -> Path:
-        return self.data_dir / "dsagents_sessions.db"
+    def run_db(self) -> Path:
+        return self.data_dir / "dsagents_runs.db"
 
     @property
     def store_db(self) -> Path:
@@ -43,7 +43,7 @@ class AgentResources:
     def __enter__(self) -> "AgentResources":
         self.config.data_dir.mkdir(parents=True, exist_ok=True)
         self.config.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        self.sessions = SqliteSessionStore(self.config.session_db, self.config.artifacts_dir)
+        self.runs = SqliteRunLedger(self.config.run_db, self.config.artifacts_dir)
 
         self.store = self._stack.enter_context(SqliteStore.from_conn_string(str(self.config.store_db)))
         self.store.setup()

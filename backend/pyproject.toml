@@ -25,4 +25,4 @@ dependencies = [
 # 这样模块内部 `from hands import ...` 等绝对导入在安装后同样可用。
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "hands", "harness", "resources", "session", "tools", "self_check"]
+py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "self_check"]

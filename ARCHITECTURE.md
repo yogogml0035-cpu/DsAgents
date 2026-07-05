@@ -1,108 +1,100 @@
-# 系统架构 (ARCHITECTURE)
+# ARCHITECTURE
 
-> 事实来源：backend/.planning/codebase/ 与 coding_maps/SYSTEM_MAP.md（2026-07-03 生成，本轮刷新）
+## 1. 系统定位
 
-本文件是 DsAgents 仓库的**系统级架构总览**，描述系统边界、子系统职责、推荐理解路径与稳定目录职责。底层实现细节请直接查阅 `backend/.planning/codebase/` 下的对应事实文档，本文不复制。接口与集成边界见根级 `INTERFACES.md`；跨项目导航见 `coding_maps/SYSTEM_MAP.md`；全局入口与原则见根级 `AGENTS.md`。
+`DsAgents` 当前只有一个产品子项目：`backend/`。它是一个 **run-first agent runtime**：
 
----
+- 对话短期上下文不再由仓库自建 session 事件库回放。
+- LangGraph `checkpointer` + `thread_id=session_id` 是唯一的 thread-scoped 短期上下文来源。
+- 本地 SQLite 只保留一个窄用途 run ledger：记录 `POST /runs` 的输入、状态、规范化事件和完整 raw chunk。
 
-## 1. 系统边界
+当前对外只有三类稳定能力：
 
-- **形态**：单子项目仓库，当前唯一产品子项目为 Python 项目 `backend/`。五大模块边界（Session / Harness / Hands / Resources / Tools）全部落在该项目内。
-- **对外形态**：`backend/` 同时暴露 **Python 导入 API**（`run_session`、`create_harness`、`parse_document` 等）和一个保持薄的 **FastAPI HTTP 层**（`POST /sessions/messages`、`POST /sessions/messages/stream`、`POST /sessions/messages/runs`、`GET /runs/{run_id}`、`GET /sessions/{session_id}/runs`、`POST /files`）。当前无鉴权、无 CORS middleware、无独立 `/health` 端点。
-- **模块形态**：`backend/` **不是常规 Python 包**——没有 `__init__.py` / `__main__.py`，而是以**扁平顶层模块**形式（`pyproject.toml` 的 `[tool.setuptools] package-dir = {"" = "."}` + `py-modules = [...]`）安装；模块间用绝对导入（`from session import ...`），**不带** `backend.` 前缀。
-- **无前端**：当前无前端子项目。`.env.example` 中的 `CORS_ORIGINS` 属预留边界，需确认（详见 `INTERFACES.md` §2）。
-- **里程碑**：交付最小可运行的 DeepAgents 解析演示——一个通用文档解析工具 + 一个 DeepAgents 工厂 + 一个 `CompositeBackend` 配置 + 一个最小 session runner + 一个薄 HTTP run/upload 适配层。刻意不引入账号体系、鉴权、租户层、复杂 service 框架或工作流引擎。
+- `POST /runs` / `GET /runs/{run_id}`：提交 run、轮询 run。
+- `POST /files`：上传文件到 `/artifacts/uploads/...`。
+- 程序内组合：`AgentResources` + `create_harness(resources).execute_run(...)`。
 
----
+## 2. 模块边界
 
-## 2. 子系统职责（backend 内部五大模块）
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| Run Ledger | `backend/run_ledger.py` | `dsagents_runs.db` 的 run 快照与 `run_events` 追加写入；大 payload/raw 外溢到 `backend/data/artifacts/run-events/` |
+| Harness | `backend/harness.py` | 组装 Brain、Tools、Middleware；执行 `brain.stream(...)` 并把 `messages/custom/values` 规范化为 run 事件 |
+| Hands | `backend/hands.py` | 最小 `ToolStatusMiddleware`；通过 `get_stream_writer()` 发 `tool_status started/completed/error` |
+| Resources | `backend/resources.py` | 装配 `SqliteRunLedger`、LangGraph `SqliteSaver` checkpointer、`SqliteStore`、`CompositeBackend` |
+| Tools | `backend/tools.py` | 当前唯一业务工具 `parse_document` |
+| HTTP | `backend/api.py` | 薄 FastAPI 适配层；进程内 per-session 单飞锁；后台线程执行 run |
 
-`backend/` 是 Harness 级 agent 运行时底座。核心设计是把能力（Brain、执行器、工具）做成可插拔，而项目自身拥有 Session、事件、资源、工具路由与运行时状态。
+`backend/` 仍是扁平顶层模块，不是 Python 包；没有 `__init__.py` / `__main__.py`，模块内继续使用 `from harness import ...` 这类绝对导入。
 
-| 模块 | 文件 | 核心职责 | 公开接口（类/函数） |
-|------|------|----------|----------------------|
-| **Session** | `backend/session.py` | 以 append-only 事件存完整持久任务事实；在同一 SQLite 边界追加 `runs`/`run_events`；从历史派生上下文窗口（不等于上下文窗口本身） | `SessionStore`、`SqliteSessionStore`、`SessionRecord`、`SessionEvent`、`RunRecord`、`RunEvent`、`RunSnapshot`、`ContextWindow`、`run_session`、`main` |
-| **Harness** | `backend/harness.py` | 读 Session 历史 → 派生上下文 → 请求 Brain 执行 → 写回事件；同时提供 HTTP run 的统一 streaming 执行路径（`execute_run`）；保持薄 | `Brain`、`BrainFactory`、`DeepAgentsBrainFactory`、`HarnessRuntime`、`HarnessTurn`、`create_harness` |
-| **Hands** | `backend/hands.py` | 通过 middleware 暴露模型/工具执行 trace，并把真实错误透传 | `Hands`、`TraceHands`、`TraceMiddleware` |
-| **Resources** | `backend/resources.py` | 持有持久存储（SQLite store/checkpointer）、检查点、产物路径、`CompositeBackend` 路由 | `ResourceConfig`、`AgentResources` |
-| **Tools** | `backend/tools.py` | 暴露可调用能力，不绑定单一 runner | `ToolCatalog`、`ToolHandler`、`parse_document`、`default_tool_catalog` |
-
-> `backend/api.py` 是薄 transport 适配层，不是第六个稳定边界；它通过 FastAPI lifespan 在启动时装配一次共享 `AgentResources` / `HarnessRuntime`，HTTP 三种 Agent POST 再统一复用 `HarnessRuntime.execute_run`。DeepAgents 在此仓库是**可插拔的 Brain / 子 Harness**，由 `BrainFactory` Protocol 注入，`self_check.py` 用 `_FakeBrain` 证明其可被替换。没有 `backend/__init__.py` 装配层。
-
-### 五大边界协作（运行时数据流）
-
-一次完整运行（入口 `run_session` → `HarnessRuntime.run_turn`）：
+## 3. 主调用链
 
 ```
-run_session(message, session_id)
-  └─ with AgentResources() 装配资源 (三 SQLite 库 + CompositeBackend)
-     └─ create_harness(resources).run_turn(message, session_id)
-        ├─① ensure_session(session_id)              确保会话存在
-        ├─② emit_event("user_message")              写入用户事件（append-only）
-        ├─③ context_window(session_id)              从事件历史派生最近 20 条消息
-        ├─④ brain_factory.create(...)               注入 middleware + tools + 后端
-        ├─⑤ brain.invoke(...)                       请求执行（Hands 的 middleware 透传 trace 并写回事件）
-        └─⑥ emit_event("assistant_message")         写回助手事件
-        → return HarnessTurn(session_id, context, result)
+POST /runs
+  ├─ 生成 run_id；session_id 为空则生成 uuid
+  ├─ 进程内按 session_id 获取 threading.Lock
+  ├─ resources.runs.create_run(run_id, session_id, input_message)
+  ├─ 后台线程调用 HarnessRuntime.execute_run(message, session_id, run_id)
+  └─ 立即返回 {"run_id","session_id","status":"queued"}
+
+HarnessRuntime.execute_run(...)
+  ├─ emit_run_status("running")
+  ├─ brain.stream(
+  │    {"messages": [{"role":"user","content": message}]},
+  │    config={"configurable":{"thread_id": session_id}},
+  │    stream_mode=["messages","custom","values"],
+  │    version="v2",
+  │  )
+  ├─ messages chunk → `thinking` / `text_delta`
+  ├─ custom chunk   → `tool_status`
+  ├─ values chunk   → `values`
+  ├─ 成功 → emit_run_status("succeeded", reply=...)
+  └─ 失败 → emit_run_status("failed", error=...)
 ```
 
-要点：上下文窗口（步骤③）是从 append-only 事件历史**派生**的视图，派生前先写入了用户事件（步骤②），执行 trace 由 Hands 的 middleware 产生（步骤⑤内 emit），最终助手回复再写回事件（步骤⑥）。`brain.invoke` 前用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 重置 langgraph 内部消息，再用 Session 派生的上下文重建——Session 是"单一事实源"而非 langgraph thread 状态。完整调用链与字段细节见 `backend/.planning/codebase/ARCHITECTURE.md` §4 与 `coding_maps/SYSTEM_MAP.md` §3。
+这里有两个故意保留的简单化：
 
-HTTP 入口只是在这条链路外包了一层薄适配：lifespan 启动时共享一套 `AgentResources` / `HarnessRuntime`；`POST /sessions/messages`、`/stream`、`/runs` 三种 Agent 入口统一创建 `run_id` 并复用 `HarnessRuntime.execute_run`；`GET /runs/{run_id}` 与 `GET /sessions/{session_id}/runs` 读取 `runs` / `run_events` 的投影视图；`POST /files` 继续直接落盘到 `backend/data/artifacts/uploads/` 后返回虚拟路径 `/artifacts/uploads/...`。
+- 同一 `session_id` 的并发保护只靠进程内 `threading.Lock`，不做跨进程锁。
+- run ledger 永久保留，不做清理策略、迁移脚本或历史兼容层。
 
----
+## 4. 持久化边界
 
-## 3. 推荐理解方式
+`backend/data/` 下有三条独立 SQLite 通道：
 
-按下面顺序阅读，可最快建立对系统的整体认知（路径相对仓库根）：
+- `dsagents_runs.db`：run ledger。表只有 `runs` 与 `run_events`。
+- `dsagents_store.db`：LangGraph store。
+- `dsagents_checkpoints.db`：LangGraph checkpointer。
 
-1. **先看全局原则**：`AGENTS.md`（五大边界、运行时规则、简洁约束）——理解 Harness 设计意图与不可破坏的边界。
-2. **再看系统架构**：本文件 §2——理解五大模块如何协作、调用链走向。
-3. **接着看目录与模块清单**：`backend/.planning/codebase/STRUCTURE.md`——理解每个文件做什么、入口怎么用、资源目录如何约定。
-4. **深入内部数据流与设计决策**：`backend/.planning/codebase/ARCHITECTURE.md`——理解 append-only 事件、Session≠上下文窗口、可恢复事件、薄 Harness、真实错误透传等关键决策的"为什么"。
-5. **接口与集成**：`INTERFACES.md` + `backend/.planning/codebase/INTEGRATIONS.md`——理解文档解析 provider / DeepAgents / SQLite 边界。
-6. **风险与维护**：`backend/.planning/codebase/CONCERNS.md`——理解外部依赖、安全、稳定性、范围蔓延等已知风险。
-7. **跨系统全景**：`coding_maps/SYSTEM_MAP.md`——理解调用链全貌、provider 边界、按任务分类的阅读指南与集成风险清单。
+当前 `runs` 基表直接存：
 
----
+- `run_id`
+- `session_id`
+- `input_message`
+- `status`
+- `created_at`
+- `updated_at`
+- `reply`
+- `error`
 
-## 4. 推荐目录职责
+`run_events` 只保留五类规范化事件：
 
-`backend/` 内每个文件的一句话职责（细节见 `backend/.planning/codebase/STRUCTURE.md` §2）：
+- `status`
+- `thinking`
+- `text_delta`
+- `tool_status`
+- `values`
 
-| 文件 | 职责 |
-|------|------|
-| `backend/session.py` | append-only 事件存储 + 上下文窗口派生 + 最小 runner；导入时 `load_dotenv` 加载 `backend/.env` |
-| `backend/api.py` | 薄 HTTP 适配层：run API（阻塞 / SSE / 后台 / 查询）与文件上传 |
-| `backend/harness.py` | 读历史 → 派生上下文 → 请求执行 → 写回事件（Brain 工厂 + 单轮运行时） |
-| `backend/hands.py` | 用 middleware 暴露 model/tool trace 并透传真实错误 |
-| `backend/resources.py` | 持有 SQLite store/checkpointer + `CompositeBackend` 路由；`data_dir` 锁定在 `backend/data/` |
-| `backend/tools.py` | 通用文档解析工具与工具注册（`ToolCatalog`） |
-| `backend/self_check.py` | 端到端自检五大边界与约束（FakeBrain，可作 `python self_check.py` 运行） |
+每条 run event 同时保存完整 raw。小 JSON 直接入库；大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`，读取时透明回填。
 
-**非产品知识目录**（不纳入架构理解，修改时不必联动本文档）：
+## 5. 关键约束
 
-- `scripts/ralph/` —— 被 `.gitignore` 忽略的自动化脚本。
-- `backend/instantclient/` —— Oracle Instant Client 19.31（Windows 二进制依赖产物，已提交进 git，无任何 Python 代码 import 它，与当前里程碑无关）。
-- `.agents/`、`.codex/`、`.review-push/` —— 本地 agent / 工具配置元数据。
+- 旧 `session.py` / `dsagents_sessions.db` / `context_window` / `RemoveMessage(REMOVE_ALL_MESSAGES)` 已删除。
+- 旧 `/sessions/messages*` 和 `GET /sessions/{session_id}/runs` 已删除。
+- `.env` 由 `backend/harness.py` 与 `backend/tools.py` 在导入时加载，避免删除 `session.py` 后 MiniMax / MinerU 配置丢失。
+- 启动时若发现遗留 `queued` / `running` run，会统一补记为 `failed("执行已中断，请重试")`。
 
-**运行时产物**（`.gitignore` 忽略，首次运行自动创建，不入库）：`backend/data/`（三 SQLite 库 + artifacts + `document_outputs/`）、`.venv/`、`.env`、`__pycache__/`。
+## 6. 当前风险
 
----
-
-## 5. 系统级维护建议
-
-改动 `backend/` 时须保护以下系统级边界与约定（提炼自根 `AGENTS.md` 与事实文档）：
-
-- **保护五大边界**：任何新增抽象必须保护 Session / Harness / Hands / Resources / Tools 之一，否则应删除。不要把能力硬编码到某个 runner、容器、模型或工作流。
-- **Session 是 append-only 单一事实源**：`emit_event` 只做 `insert`，从不 update/delete。任何派生视图（上下文窗口、摘要）都可从原始事件重建，但不可替代 raw events。改动持久化时不得破坏"事件不修改/不删除"。
-- **Session ≠ 上下文窗口**：`context_window()` 是给模型看的裁剪视图，不是真相。不要把裁剪视图当事实源。
-- **保持 Harness 与 HTTP 层都薄**：`HarnessRuntime.run_turn` / `execute_run` 维持少量清晰步骤；`api.py` 只做 transport 适配，不下沉成第二套业务层。
-- **真实错误透传**：`TraceMiddleware` 在 `except` 中 emit `*_error` 事件后 `raise`，`self_check.py` 断言错误必须穿透。改动错误处理时不得吞掉异常或包装失真。
-- **Tools 不绑定 runner**：工具能力可被任意 Brain 复用，经 `ToolCatalog` 注入。新增工具应走同一注册机制。
-- **Brain 可替换**：`BrainFactory` 是 Protocol，DeepAgents 并非硬绑定。改动 Brain 相关代码时保持 Protocol 边界，不要把 DeepAgents 耦合成唯一实现。
-- **资源路径与 CWD 无关**：`resources.py` 用 `_BACKEND_DIR = Path(__file__).resolve().parent` 把数据目录锁定在 `backend/data/`，脚本可从任意工作目录运行。
-- **改代码后同步事实层**：修改 `backend/` 实现后，应同步更新 `backend/.planning/codebase/` 下对应事实文档，再视影响范围回看本文件与 `INTERFACES.md`、`coding_maps/SYSTEM_MAP.md`。
-
-> 接口明细、Provider 边界、未证实关系与扩展入口见 `INTERFACES.md`。
+- run 锁是单进程内语义；多 worker 部署需确认是否接受。
+- run ledger 保存完整 raw chunk，便于调试，但也意味着错误与模型原始输出会长期留存。
+- 程序内没有单函数 one-shot API；仓库默认入口是 HTTP `POST /runs` 或直接使用 harness 组合。

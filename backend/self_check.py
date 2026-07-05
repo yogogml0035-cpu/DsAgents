@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import tempfile
 import threading
 import time
@@ -21,10 +20,10 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from api import INTERRUPTED_RUN_ERROR, create_app
-from hands import TraceHands
+from hands import ToolStatusHands, ToolStatusMiddleware
 from harness import DeepAgentsBrainFactory, HarnessRuntime, _thinking_delta
 from resources import AgentResources, ResourceConfig
-from session import SqliteSessionStore
+from run_ledger import SqliteRunLedger
 from tools import ToolCatalog, _extract_markdown, _find_value, default_tool_catalog, parse_document
 
 
@@ -35,20 +34,27 @@ class _StreamControl:
 
 
 class _FakeBrain:
-    def __init__(self, control: _StreamControl | None = None) -> None:
+    def __init__(self, threads: dict[str, list[str]], control: _StreamControl | None = None) -> None:
+        self.threads = threads
         self.control = control
 
-    def invoke(self, payload: dict, config: dict | None = None) -> dict:
-        assert getattr(payload["messages"][0], "id", None) == "__remove_all__"
-        text = payload["messages"][-1]["content"]
-        return {"messages": [SimpleNamespace(content=f"echo: {text}")]}
-
     def stream(self, payload: dict, config: dict | None = None, **kwargs: object):
-        assert getattr(payload["messages"][0], "id", None) == "__remove_all__"
+        assert len(payload["messages"]) == 1
+        assert payload["messages"][0]["role"] == "user"
+        assert getattr(payload["messages"][0], "id", None) is None
         assert kwargs["stream_mode"] == ["messages", "custom", "values"]
         assert kwargs["version"] == "v2"
-        text = payload["messages"][-1]["content"]
-        yield {"type": "values", "ns": (), "data": {"messages": [{"role": "user", "content": text}]}, "interrupts": ()}
+        assert config is not None
+        thread_id = config["configurable"]["thread_id"]
+        text = payload["messages"][0]["content"]
+        history = self.threads.setdefault(thread_id, [])
+        history.append(text)
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {"messages": [{"role": "user", "content": text}]},
+            "interrupts": (),
+        }
         yield {
             "type": "messages",
             "ns": (),
@@ -66,9 +72,14 @@ class _FakeBrain:
             assert self.control is not None
             self.control.started.set()
             assert self.control.release.wait(timeout=5), "hold run was never released"
-        yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo: "), {"langgraph_node": "model"})}
+        reply = f"echo[{len(history)}]: {text}"
+        yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo["), {"langgraph_node": "model"})}
         yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
-        yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content=text), {"langgraph_node": "model"})}
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (AIMessageChunk(content=f"{len(history)}]: {text}"), {"langgraph_node": "model"}),
+        }
         yield {
             "type": "values",
             "ns": (),
@@ -77,7 +88,7 @@ class _FakeBrain:
                     AIMessage(
                         content=[
                             {"type": "thinking", "thinking": "plan: "},
-                            {"type": "text", "text": f"echo: {text}"},
+                            {"type": "text", "text": reply},
                         ],
                         response_metadata={"model_provider": "anthropic"},
                     )
@@ -90,9 +101,10 @@ class _FakeBrain:
 class _FakeBrainFactory:
     def __init__(self, control: _StreamControl | None = None) -> None:
         self.control = control
+        self.threads: dict[str, list[str]] = {}
 
     def create(self, **_: object) -> _FakeBrain:
-        return _FakeBrain(self.control)
+        return _FakeBrain(self.threads, self.control)
 
 
 def main() -> None:
@@ -102,351 +114,304 @@ def main() -> None:
     assert default_tool_catalog().handlers[0].__name__ == "parse_document"
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        with patch.dict(os.environ, {}, clear=True):
-            env_path = Path(tmp) / ".env"
-            env_path.write_text(
-                "MINIMAX_API_KEY=test-key\n"
-                "MINIMAX_BASE_URL=https://minimax.example/anthropic\n"
-                "MINIMAX_MODEL=test-minimax\n",
-                encoding="utf-8",
-            )
-            load_dotenv(env_path)
-            factory = DeepAgentsBrainFactory()
-            assert factory.model.__class__.__name__ == "ChatAnthropic"
-            assert getattr(factory.model, "model", None) == "test-minimax"
-            assert factory.model.thinking == {"type": "adaptive"}
-            assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
-            assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
-
-        with patch.dict(os.environ, {}, clear=True):
-            source = Path(tmp) / "sample.pdf"
-            source.write_text("demo", encoding="utf-8")
-            try:
-                parse_document(str(source))
-            except RuntimeError as exc:
-                assert str(exc) == "Missing required environment variable: MINERU_BASE_URL"
-            else:
-                raise AssertionError("parse_document must fail fast when MINERU_BASE_URL is missing")
-
-        data_dir = Path(tmp) / "data"
-        with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
-            assert resources.config.session_db.exists()
-            assert resources.config.store_db.exists()
-            assert resources.config.checkpoint_db.exists()
-            assert resources.backend is not None
-
-            resources.sessions.ensure_session("s1")
-            resources.sessions.emit_event("s1", "note", {"ok": True})
-            note_events = resources.sessions.get_events("s1")
-            assert note_events[-1].payload["ok"] is True
-            resources.sessions.emit_event("s1", "user_message", {"role": "user", "content": "u"})
-            resources.sessions.emit_event("s1", "assistant_message", {"role": "assistant", "content": "a"})
-            assert resources.sessions.context_window("s1").messages == [
-                {"role": "user", "content": "u"},
-                {"role": "assistant", "content": "a"},
-            ]
-
-            resources.sessions.create_run("s1", "run-trace")
-            trace = TraceHands(resources.sessions).middleware("s1", run_id="run-trace")[0]
-            trace.wrap_model_call(
-                SimpleNamespace(messages=[{"role": "user", "content": "ping"}]),
-                lambda _request: SimpleNamespace(result=[SimpleNamespace(content="pong")]),
-            )
-            trace.wrap_tool_call(
-                SimpleNamespace(tool_call={"name": "demo", "args": {"value": 1}}),
-                lambda _request: {"ok": True},
-            )
-            trace_types = [event.event_type for event in resources.sessions.get_events("s1")]
-            run_trace_types = [event.event_type for event in resources.sessions.get_run_events("run-trace")]
-            assert "model_request" in trace_types
-            assert "tool_response" in trace_types
-            assert "model_request" in run_trace_types
-            assert "tool_response" in run_trace_types
-            tool_request = [event for event in resources.sessions.get_run_events("run-trace") if event.event_type == "tool_request"][-1]
-            assert tool_request.raw["args"] == {"value": 1}
-            tool_response = [event for event in resources.sessions.get_run_events("run-trace") if event.event_type == "tool_response"][-1]
-            assert tool_response.raw["result"] == {"ok": True}
-            resources.sessions.emit_run_status("run-trace", "succeeded", reply="ok")
-            try:
-                trace.wrap_model_call(
-                    SimpleNamespace(messages=[{"role": "user", "content": "bad"}]),
-                    lambda _request: (_ for _ in ()).throw(ValueError("bad model")),
-                )
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("model errors must be passed through")
-            assert resources.sessions.get_events("s1")[-1].event_type == "model_error"
-            try:
-                trace.wrap_tool_call(
-                    SimpleNamespace(tool_call={"name": "bad", "args": {}}),
-                    lambda _request: (_ for _ in ()).throw(RuntimeError("boom")),
-                )
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("tool errors must be passed through")
-            assert resources.sessions.get_events("s1")[-1].event_type == "tool_error"
-
-            harness = HarnessRuntime(
-                resources=resources,
-                hands=TraceHands(resources.sessions),
-                tools=ToolCatalog(()),
-                brain_factory=_FakeBrainFactory(),
-            )
-            turn = harness.run_turn("hello", "s2")
-            assert turn.result["messages"][-1].content == "echo: hello"
-            assert turn.context.messages == [{"role": "user", "content": "hello"}]
-            turn = harness.run_turn("again", "s2")
-            assert turn.context.messages == [
-                {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "echo: hello"},
-                {"role": "user", "content": "again"},
-            ]
-            turn_types = [event.event_type for event in resources.sessions.get_events("s2")]
-            assert turn_types == ["user_message", "assistant_message", "user_message", "assistant_message"]
-
-            resources.sessions.create_run("recover", "recover-run")
-            resources.sessions.emit_run_status("recover-run", "running")
-            failed_runs = resources.sessions.fail_incomplete_runs(INTERRUPTED_RUN_ERROR)
-            assert failed_runs == ["recover-run"]
-            recover_snapshot = resources.sessions.get_run("recover-run")
-            assert recover_snapshot.status == "failed"
-            assert recover_snapshot.error == INTERRUPTED_RUN_ERROR
-
-        oversized = SqliteSessionStore(data_dir / "dsagents_sessions.db", data_dir / "artifacts", max_inline_bytes=10)
-        oversized.emit_event("s3", "tool_response", {"content": "x" * 100})
-        large_event = oversized.get_events("s3")[-1]
-        assert large_event.payload["content"] == "x" * 100
-        oversized.create_run("s3", "big-run")
-        oversized.emit_run_event("big-run", "tool_response", {"name": "demo"}, raw={"content": "x" * 100})
-        large_run_event = oversized.get_run_events("big-run")[-1]
-        assert large_run_event.raw["content"] == "x" * 100
-        assert any((data_dir / "artifacts" / "session-events").glob("*.json"))
-        assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
-
-        api_data_dir = Path(tmp) / "api-data"
-        hold_control = _StreamControl()
-        harness_creations = {"count": 0}
-
-        def counted_harness(resources: AgentResources) -> HarnessRuntime:
-            harness_creations["count"] += 1
-            return _fake_harness(resources, control=hold_control)
-
-        app = create_app(
-            resource_config=ResourceConfig(data_dir=api_data_dir),
-            harness_factory=counted_harness,
-        )
-        with TestClient(app) as client:
-            message_response = client.post("/sessions/messages", json={"message": "hello", "session_id": None})
-            assert message_response.status_code == 200
-            payload = message_response.json()
-            session_id = payload["session_id"]
-            run_id = payload["run_id"]
-            assert payload == {
-                "session_id": session_id,
-                "run_id": run_id,
-                "status": "succeeded",
-                "reply": "echo: hello",
-            }
-            follow_up = client.post("/sessions/messages", json={"message": "again", "session_id": session_id})
-            assert follow_up.status_code == 200
-            follow_up_payload = follow_up.json()
-            assert follow_up_payload == {
-                "session_id": session_id,
-                "run_id": follow_up_payload["run_id"],
-                "status": "succeeded",
-                "reply": "echo: again",
-            }
-            assert harness_creations["count"] == 1
-
-            run_detail = client.get(f"/runs/{run_id}")
-            assert run_detail.status_code == 200
-            run_payload = run_detail.json()
-            assert run_payload["run"]["status"] == "succeeded"
-            event_types = [event["type"] for event in run_payload["events"]]
-            assert event_types[0] == "status"
-            assert event_types[1] == "status"
-            assert "thinking" in event_types
-            assert "text_delta" in event_types
-            assert "tool_status" in event_types
-            assert event_types[-1] == "status"
-            cursor = run_payload["events"][1]["event_id"]
-            cursor_payload = client.get(f"/runs/{run_id}", params={"after_event_id": cursor}).json()
-            assert len(cursor_payload["events"]) < len(run_payload["events"])
-            assert cursor_payload["events"][0]["event_id"] > cursor
-
-            with client.stream("POST", "/sessions/messages/stream", json={"message": "stream me", "session_id": session_id}) as response:
-                assert response.status_code == 200
-                events = _parse_sse("".join(response.iter_text()))
-            event_names = [event["event"] for event in events]
-            assert event_names[0] == "session"
-            assert event_names[-1] == "done"
-            assert all(name == "run_event" for name in event_names[1:-1])
-            assert events[0]["data"]["status"] == "queued"
-            streamed_types = [event["data"]["type"] for event in events[1:-1]]
-            assert streamed_types[0] == "status"
-            assert "thinking" in streamed_types
-            assert "text_delta" in streamed_types
-            assert "tool_status" in streamed_types
-            assert streamed_types[-1] == "status"
-
-            background = client.post("/sessions/messages/runs", json={"message": "hold", "session_id": session_id})
-            assert background.status_code == 200
-            background_payload = background.json()
-            assert background_payload == {
-                "session_id": session_id,
-                "run_id": background_payload["run_id"],
-                "status": "queued",
-            }
-            assert hold_control.started.wait(timeout=5)
-            conflict = client.post("/sessions/messages", json={"message": "blocked", "session_id": session_id})
-            assert conflict.status_code == 409
-            assert conflict.json() == {
-                "error": "该会话正在运行",
-                "active_run_id": background_payload["run_id"],
-            }
-
-            upload_response = client.post(
-                "/files",
-                files={"file": ("../report.pdf", b"demo upload", "application/pdf")},
-            )
-            assert upload_response.status_code == 200
-            upload_payload = upload_response.json()
-            assert upload_payload["file_path"].startswith("/artifacts/uploads/")
-            upload_name = Path(upload_payload["file_path"]).name
-            assert upload_name.endswith("_report.pdf")
-            upload_file = api_data_dir / "artifacts" / "uploads" / upload_name
-            assert upload_file.read_bytes() == b"demo upload"
-
-            hold_control.release.set()
-            background_run = _wait_for_run(client, background_payload["run_id"], "succeeded")
-            assert background_run["reply"] == "echo: hold"
-
-            session_runs = client.get(f"/sessions/{session_id}/runs")
-            assert session_runs.status_code == 200
-            session_runs_payload = session_runs.json()
-            assert [item["run_id"] for item in session_runs_payload[:3]] == [
-                background_payload["run_id"],
-                events[0]["data"]["run_id"],
-                follow_up_payload["run_id"],
-            ]
-            assert session_runs_payload[0]["reply_preview"] == "echo: hold"
-
-            failed = client.post("/sessions/messages", json={"message": "fail", "session_id": "failed-session"})
-            assert failed.status_code == 200
-            failed_payload = failed.json()
-            assert failed_payload == {
-                "session_id": "failed-session",
-                "run_id": failed_payload["run_id"],
-                "status": "failed",
-                "error": "planned failure",
-            }
-            failed_run = client.get(f"/runs/{failed_payload['run_id']}").json()
-            assert failed_run["run"]["status"] == "failed"
-            assert failed_run["run"]["error"] == "planned failure"
-            failed_types = [event["type"] for event in failed_run["events"]]
-            assert failed_types[0] == "status"
-            assert failed_types[1] == "status"
-            assert "thinking" in failed_types
-            assert failed_types[-1] == "status"
-            failed_session_runs = client.get("/sessions/failed-session/runs").json()
-            assert failed_session_runs[0]["error_preview"] == "planned failure"
-            with sqlite3.connect(api_data_dir / "dsagents_sessions.db") as conn:
-                assistant_count = conn.execute(
-                    """
-                    select count(*)
-                    from session_events
-                    where session_id = ? and event_type = 'assistant_message'
-                    """,
-                    ("failed-session",),
-                ).fetchone()[0]
-                session_count = conn.execute("select count(*) from sessions").fetchone()[0]
-            assert assistant_count == 0
-            assert session_count >= 2
-
-        cleanup_data_dir = Path(tmp) / "cleanup-api"
-        cleanup_store = SqliteSessionStore(cleanup_data_dir / "dsagents_sessions.db", cleanup_data_dir / "artifacts")
-        cleanup_store.create_run("cleanup-session", "cleanup-run")
-        cleanup_store.emit_run_status("cleanup-run", "running")
-        cleanup_factory_count = {"count": 0}
-
-        def cleanup_harness(resources: AgentResources) -> HarnessRuntime:
-            cleanup_factory_count["count"] += 1
-            return _fake_harness(resources)
-
-        cleanup_app = create_app(
-            resource_config=ResourceConfig(data_dir=cleanup_data_dir),
-            harness_factory=cleanup_harness,
-        )
-        with TestClient(cleanup_app) as cleanup_client:
-            cleanup_run = cleanup_client.get("/runs/cleanup-run")
-            assert cleanup_run.status_code == 200
-            cleanup_payload = cleanup_run.json()
-            assert cleanup_payload["run"]["status"] == "failed"
-            assert cleanup_payload["run"]["error"] == INTERRUPTED_RUN_ERROR
-            assert cleanup_payload["events"][-1]["type"] == "status"
-            assert cleanup_factory_count["count"] == 1
-
-        virtual_source = api_data_dir / "artifacts" / "uploads" / "source.pdf"
-        virtual_source.parent.mkdir(parents=True, exist_ok=True)
-        virtual_source.write_text("demo", encoding="utf-8")
-        with patch("tools._artifacts_root", return_value=(api_data_dir / "artifacts").resolve()):
-            with patch.dict(
-                os.environ,
-                {
-                    "MINERU_BASE_URL": "https://mineru.example",
-                    "MINERU_BACKEND": "pipeline",
-                    "MINERU_EFFORT": "standard",
-                    "MINERU_TIMEOUT_SECONDS": "10",
-                },
-                clear=True,
-            ):
-                with patch("tools._submit_mineru_task", return_value="task-1"), patch(
-                    "tools._wait_for_mineru_result",
-                    return_value={"md_content": "# parsed"},
-                ):
-                    parsed = json.loads(
-                        parse_document(
-                            "/artifacts/uploads/source.pdf",
-                            "/artifacts/generated/output.md",
-                        )
-                    )
-            assert Path(parsed["source"]) == virtual_source.resolve()
-            assert Path(parsed["output_path"]) == (api_data_dir / "artifacts" / "generated" / "output.md").resolve()
-            assert Path(parsed["output_path"]).read_text(encoding="utf-8") == "# parsed"
-            try:
-                parse_document("/artifacts/../x")
-            except ValueError as exc:
-                assert str(exc) == "Invalid /artifacts path: /artifacts/../x"
-            else:
-                raise AssertionError("parse_document must reject /artifacts path escapes")
+        _check_model_env_loading(tmp)
+        _check_parse_document_env_guard(tmp)
+        _check_resources_and_ledger(tmp)
+        _check_tool_status_middleware()
+        _check_harness(tmp)
+        _check_api(tmp)
+        _check_startup_recovery(tmp)
+        _check_virtual_artifacts(tmp)
 
     print("self-check passed")
 
 
-def _fake_harness(resources: AgentResources, control: _StreamControl | None = None) -> HarnessRuntime:
-    return HarnessRuntime(
-        resources=resources,
-        hands=TraceHands(resources.sessions),
-        tools=ToolCatalog(()),
-        brain_factory=_FakeBrainFactory(control),
-    )
-
-
-def _parse_sse(raw: str) -> list[dict[str, object]]:
-    events: list[dict[str, object]] = []
-    for block in raw.strip().split("\n\n"):
-        lines = [line for line in block.splitlines() if line]
-        if len(lines) != 2:
-            continue
-        events.append(
-            {
-                "event": lines[0].removeprefix("event: ").strip(),
-                "data": json.loads(lines[1].removeprefix("data: ").strip()),
-            }
+def _check_model_env_loading(tmp: str) -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        env_path = Path(tmp) / ".env"
+        env_path.write_text(
+            "MINIMAX_API_KEY=test-key\n"
+            "MINIMAX_BASE_URL=https://minimax.example/anthropic\n"
+            "MINIMAX_MODEL=test-minimax\n",
+            encoding="utf-8",
         )
-    return events
+        load_dotenv(env_path, override=True)
+        factory = DeepAgentsBrainFactory()
+        assert factory.model.__class__.__name__ == "ChatAnthropic"
+        assert getattr(factory.model, "model", None) == "test-minimax"
+        assert factory.model.thinking == {"type": "adaptive"}
+        assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
+        assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
+
+
+def _check_parse_document_env_guard(tmp: str) -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        source = Path(tmp) / "sample.pdf"
+        source.write_text("demo", encoding="utf-8")
+        try:
+            parse_document(str(source))
+        except RuntimeError as exc:
+            assert str(exc) == "Missing required environment variable: MINERU_BASE_URL"
+        else:
+            raise AssertionError("parse_document must fail fast when MINERU_BASE_URL is missing")
+
+
+def _check_resources_and_ledger(tmp: str) -> None:
+    data_dir = Path(tmp) / "data"
+    with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
+        assert resources.config.run_db.exists()
+        assert resources.config.store_db.exists()
+        assert resources.config.checkpoint_db.exists()
+        assert resources.backend is not None
+
+        queued = resources.runs.create_run("run-1", "s1", "hello")
+        assert queued.status == "queued"
+        assert queued.input_message == "hello"
+        resources.runs.emit_run_status("run-1", "running")
+        resources.runs.emit_run_event("run-1", "values", {"text": "draft"}, raw={"type": "values", "data": {"text": "draft"}})
+        resources.runs.emit_run_status("run-1", "succeeded", reply="ok")
+        snapshot = resources.runs.get_run("run-1")
+        assert snapshot.status == "succeeded"
+        assert snapshot.reply == "ok"
+        run_events = resources.runs.get_run_events("run-1")
+        assert [event.event_type for event in run_events] == ["status", "status", "values", "status"]
+        assert run_events[2].raw["type"] == "values"
+
+        resources.runs.create_run("recover-run", "recover", "hold")
+        resources.runs.emit_run_status("recover-run", "running")
+        resources.runs.create_run("queued-run", "recover", "later")
+        failed_runs = resources.runs.fail_incomplete_runs(INTERRUPTED_RUN_ERROR)
+        assert failed_runs == ["recover-run", "queued-run"]
+        assert resources.runs.get_run("recover-run").status == "failed"
+        assert resources.runs.get_run("queued-run").status == "failed"
+
+    oversized = SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "artifacts", max_inline_bytes=10)
+    oversized.create_run("big-run", "s-big", "blob")
+    oversized.emit_run_event(
+        "big-run",
+        "values",
+        {"content": "x" * 100},
+        raw={"type": "values", "data": {"content": "x" * 100}},
+    )
+    large_event = oversized.get_run_events("big-run")[-1]
+    assert large_event.payload["content"] == "x" * 100
+    assert large_event.raw["data"]["content"] == "x" * 100
+    assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
+
+
+def _check_tool_status_middleware() -> None:
+    middleware = ToolStatusMiddleware()
+    emitted: list[dict[str, str]] = []
+    with patch("hands.get_stream_writer", return_value=emitted.append):
+        result = middleware.wrap_tool_call(
+            SimpleNamespace(tool_call={"name": "demo", "args": {"value": 1}}),
+            lambda _request: {"ok": True},
+        )
+    assert result == {"ok": True}
+    assert emitted == [
+        {"name": "demo", "status": "started"},
+        {"name": "demo", "status": "completed"},
+    ]
+
+    emitted = []
+    with patch("hands.get_stream_writer", return_value=emitted.append):
+        try:
+            middleware.wrap_tool_call(
+                SimpleNamespace(tool_call={"name": "demo", "args": {}}),
+                lambda _request: (_ for _ in ()).throw(RuntimeError("boom")),
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("tool errors must be passed through")
+    assert emitted == [
+        {"name": "demo", "status": "started"},
+        {"name": "demo", "status": "error"},
+    ]
+
+
+def _check_harness(tmp: str) -> None:
+    data_dir = Path(tmp) / "harness-data"
+    factory = _FakeBrainFactory()
+    with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
+        harness = HarnessRuntime(
+            resources=resources,
+            hands=ToolStatusHands(),
+            tools=ToolCatalog(()),
+            brain_factory=factory,
+        )
+        resources.runs.create_run("run-h1", "thread-a", "hello")
+        events = list(harness.execute_run("hello", "thread-a", "run-h1"))
+        assert [event.event_type for event in events] == ["status", "values", "thinking", "text_delta", "tool_status", "text_delta", "values", "status"]
+        assert resources.runs.get_run("run-h1").reply == "echo[1]: hello"
+        raw_events = resources.runs.get_run_events("run-h1")
+        thinking_event = [event for event in raw_events if event.event_type == "thinking"][0]
+        assert thinking_event.raw["type"] == "messages"
+
+        resources.runs.create_run("run-h2", "thread-a", "again")
+        list(harness.execute_run("again", "thread-a", "run-h2"))
+        assert resources.runs.get_run("run-h2").reply == "echo[2]: again"
+
+
+def _check_api(tmp: str) -> None:
+    api_data_dir = Path(tmp) / "api-data"
+    hold_control = _StreamControl()
+    harness_creations = {"count": 0}
+    factory = _FakeBrainFactory(control=hold_control)
+
+    def fake_harness(resources: AgentResources) -> HarnessRuntime:
+        harness_creations["count"] += 1
+        return HarnessRuntime(
+            resources=resources,
+            hands=ToolStatusHands(),
+            tools=ToolCatalog(()),
+            brain_factory=factory,
+        )
+
+    app = create_app(
+        resource_config=ResourceConfig(data_dir=api_data_dir),
+        harness_factory=fake_harness,
+    )
+    with TestClient(app) as client:
+        first = client.post("/runs", json={"message": "hello", "session_id": None})
+        assert first.status_code == 200
+        first_payload = first.json()
+        session_id = first_payload["session_id"]
+        run_id = first_payload["run_id"]
+        assert first_payload == {
+            "run_id": run_id,
+            "session_id": session_id,
+            "status": "queued",
+        }
+        first_run = _wait_for_run(client, run_id, "succeeded")
+        assert first_run["reply"] == "echo[1]: hello"
+        assert harness_creations["count"] == 1
+
+        follow_up = client.post("/runs", json={"message": "again", "session_id": session_id})
+        assert follow_up.status_code == 200
+        follow_up_payload = follow_up.json()
+        follow_up_run = _wait_for_run(client, follow_up_payload["run_id"], "succeeded")
+        assert follow_up_run["reply"] == "echo[2]: again"
+
+        run_detail = client.get(f"/runs/{follow_up_payload['run_id']}")
+        assert run_detail.status_code == 200
+        run_payload = run_detail.json()
+        event_types = [event["type"] for event in run_payload["events"]]
+        assert event_types == ["status", "status", "values", "thinking", "text_delta", "tool_status", "text_delta", "values", "status"]
+        cursor = run_payload["events"][1]["event_id"]
+        cursor_payload = client.get(f"/runs/{follow_up_payload['run_id']}", params={"after_event_id": cursor}).json()
+        assert len(cursor_payload["events"]) < len(run_payload["events"])
+        assert cursor_payload["events"][0]["event_id"] > cursor
+
+        background = client.post("/runs", json={"message": "hold", "session_id": session_id})
+        assert background.status_code == 200
+        background_payload = background.json()
+        assert hold_control.started.wait(timeout=5)
+        running_payload = client.get(f"/runs/{background_payload['run_id']}").json()["run"]
+        assert running_payload["status"] == "running"
+        conflict = client.post("/runs", json={"message": "blocked", "session_id": session_id})
+        assert conflict.status_code == 409
+        assert conflict.json() == {
+            "error": "该会话正在运行",
+            "active_run_id": background_payload["run_id"],
+        }
+
+        upload_response = client.post(
+            "/files",
+            files={"file": ("../report.pdf", b"demo upload", "application/pdf")},
+        )
+        assert upload_response.status_code == 200
+        upload_payload = upload_response.json()
+        assert upload_payload["file_path"].startswith("/artifacts/uploads/")
+        upload_name = Path(upload_payload["file_path"]).name
+        assert upload_name.endswith("_report.pdf")
+        upload_file = api_data_dir / "artifacts" / "uploads" / upload_name
+        assert upload_file.read_bytes() == b"demo upload"
+
+        hold_control.release.set()
+        background_run = _wait_for_run(client, background_payload["run_id"], "succeeded")
+        assert background_run["reply"] == "echo[3]: hold"
+
+        failed = client.post("/runs", json={"message": "fail", "session_id": "resume-session"})
+        assert failed.status_code == 200
+        failed_payload = failed.json()
+        failed_run = _wait_for_run(client, failed_payload["run_id"], "failed")
+        assert failed_run["error"] == "planned failure"
+        resumed = client.post("/runs", json={"message": "recover", "session_id": "resume-session"})
+        assert resumed.status_code == 200
+        resumed_run = _wait_for_run(client, resumed.json()["run_id"], "succeeded")
+        assert resumed_run["reply"] == "echo[2]: recover"
+
+        unknown = client.get("/runs/missing-run")
+        assert unknown.status_code == 404
+        assert unknown.json() == {"error": "Unknown run: missing-run"}
+
+
+def _check_startup_recovery(tmp: str) -> None:
+    cleanup_data_dir = Path(tmp) / "cleanup-api"
+    cleanup_store = SqliteRunLedger(cleanup_data_dir / "dsagents_runs.db", cleanup_data_dir / "artifacts")
+    cleanup_store.create_run("cleanup-queued", "cleanup-session", "queued")
+    cleanup_store.create_run("cleanup-running", "cleanup-session", "running")
+    cleanup_store.emit_run_status("cleanup-running", "running")
+    cleanup_factory_count = {"count": 0}
+
+    def cleanup_harness(resources: AgentResources) -> HarnessRuntime:
+        cleanup_factory_count["count"] += 1
+        return HarnessRuntime(
+            resources=resources,
+            hands=ToolStatusHands(),
+            tools=ToolCatalog(()),
+            brain_factory=_FakeBrainFactory(),
+        )
+
+    cleanup_app = create_app(
+        resource_config=ResourceConfig(data_dir=cleanup_data_dir),
+        harness_factory=cleanup_harness,
+    )
+    with TestClient(cleanup_app) as cleanup_client:
+        queued_run = cleanup_client.get("/runs/cleanup-queued").json()
+        running_run = cleanup_client.get("/runs/cleanup-running").json()
+        assert queued_run["run"]["status"] == "failed"
+        assert queued_run["run"]["error"] == INTERRUPTED_RUN_ERROR
+        assert running_run["run"]["status"] == "failed"
+        assert running_run["run"]["error"] == INTERRUPTED_RUN_ERROR
+        assert cleanup_factory_count["count"] == 1
+
+
+def _check_virtual_artifacts(tmp: str) -> None:
+    api_data_dir = Path(tmp) / "api-data"
+    virtual_source = api_data_dir / "artifacts" / "uploads" / "source.pdf"
+    virtual_source.parent.mkdir(parents=True, exist_ok=True)
+    virtual_source.write_text("demo", encoding="utf-8")
+    with patch("tools._artifacts_root", return_value=(api_data_dir / "artifacts").resolve()):
+        with patch.dict(
+            os.environ,
+            {
+                "MINERU_BASE_URL": "https://mineru.example",
+                "MINERU_BACKEND": "pipeline",
+                "MINERU_EFFORT": "standard",
+                "MINERU_TIMEOUT_SECONDS": "10",
+            },
+            clear=True,
+        ):
+            with patch("tools._submit_mineru_task", return_value="task-1"), patch(
+                "tools._wait_for_mineru_result",
+                return_value={"md_content": "# parsed"},
+            ):
+                parsed = parse_document(
+                    "/artifacts/uploads/source.pdf",
+                    "/artifacts/generated/output.md",
+                )
+        parsed_payload = json.loads(parsed)
+        assert Path(parsed_payload["source"]) == virtual_source.resolve()
+        assert Path(parsed_payload["output_path"]) == (api_data_dir / "artifacts" / "generated" / "output.md").resolve()
+        assert Path(parsed_payload["output_path"]).read_text(encoding="utf-8") == "# parsed"
+        try:
+            parse_document("/artifacts/../x")
+        except ValueError as exc:
+            assert str(exc) == "Invalid /artifacts path: /artifacts/../x"
+        else:
+            raise AssertionError("parse_document must reject /artifacts path escapes")
 
 
 def _wait_for_run(client: TestClient, run_id: str, expected_status: str) -> dict[str, object]:
