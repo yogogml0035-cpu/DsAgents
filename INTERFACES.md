@@ -9,10 +9,11 @@
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
 | `POST /runs` | `{"message": str, "session_id": str\|null}` | `session_id` 为空生成 `uuid4().hex`；同 session 已有运行中 run → `409`；写 ledger 后起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
-| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标） | `200 {"run":{...},"events":[...]}`；未知 run `404 {"error":"Unknown run: ..."}` |
+| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
 | `POST /files` | multipart `file: UploadFile` | 落到 `data/artifacts/uploads/<uuid>_<cleaned_name>`；返回虚拟路径 | `200 {"file_path":"/artifacts/uploads/..."}` |
 
 - `after_event_id` 游标：为空返回全部事件；有值只返回 `event_id > after_event_id` 的增量事件。
+- `latest_content_event`：始终返回当前 run 全局最新的非 `status` 事件；没有非 `status` 事件时为 `null`；**不受** `after_event_id` 影响。
 - 事件类型固定五类：`status` / `thinking` / `text_delta` / `tool_status` / `values`。
 - 完整请求/响应 JSON 形状与 lifespan 行为见 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) §1。
 
@@ -55,12 +56,13 @@ brain.stream(
 - `thread_id = session_id`（短期上下文键）。
 - 三 channel 全部消费：`messages` → `thinking`/`text_delta`；`custom` → `tool_status`（来自 `ToolStatusMiddleware` 经 `get_stream_writer()`）；`values` → `values`（末位 assistant 文本作 reply）。
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`）。
+- LangGraph classic `stream(..., stream_mode=["messages","custom","values"], version="v2")` 仍是当前契约；`thread_id=session_id` 只作为 checkpointer 上下文键，不参与 run event 查询。
 
 ## 4. 存储接口边界
 
 `AgentResources`（`resources.py`）暴露三类持久资源：
 
-- `resources.runs`：`SqliteRunLedger`（标准库 `sqlite3`）
+- `resources.runs`：`SqliteRunLedger`（标准库 `sqlite3`；支持 `get_run` / `get_run_events` / `get_latest_content_event`）
 - `resources.store`：LangGraph `SqliteStore`
 - `resources.checkpointer`：LangGraph `SqliteSaver`
 

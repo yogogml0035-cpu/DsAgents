@@ -78,11 +78,17 @@ def create_app(
     @app.get("/runs/{run_id}")
     def get_run(run_id: str, after_event_id: int | None = None):
         try:
-            run = app.state.resources.runs.get_run(run_id)
-            events = app.state.resources.runs.get_run_events(run_id, after_event_id=after_event_id)
+            runs = app.state.resources.runs
+            run = runs.get_run(run_id)
+            events = runs.get_run_events(run_id, after_event_id=after_event_id)
+            latest_content_event = runs.get_latest_content_event(run_id)
         except KeyError:
             return JSONResponse(status_code=404, content={"error": f"Unknown run: {run_id}"})
-        return {"run": _run_body(run), "events": [_run_event_body(event) for event in events]}
+        return {
+            "run": _run_body(run),
+            "events": [_run_event_body(event) for event in events],
+            "latest_content_event": _run_event_body(latest_content_event) if latest_content_event else None,
+        }
 
     @app.post("/files")
     def post_file(file: UploadFile = File(...)) -> dict[str, str]:

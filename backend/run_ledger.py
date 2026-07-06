@@ -144,6 +144,31 @@ class SqliteRunLedger:
                 ).fetchall()
         return [self._read_run_event(row) for row in rows]
 
+    def get_latest_content_event(self, run_id: str) -> RunEvent | None:
+        self.get_run(run_id)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            row = conn.execute(
+                """
+                select
+                    event_id,
+                    run_id,
+                    type,
+                    created_at,
+                    payload_json,
+                    payload_artifact_path,
+                    raw_json,
+                    raw_artifact_path
+                from run_events
+                where run_id = ? and type != 'status'
+                order by event_id desc
+                limit 1
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._read_run_event(row)
+
     def emit_run_event(
         self,
         run_id: str,

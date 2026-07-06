@@ -167,6 +167,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
         queued = resources.runs.create_run("run-1", "s1", "hello")
         assert queued.status == "queued"
         assert queued.input_message == "hello"
+        assert resources.runs.get_latest_content_event("run-1") is None
         resources.runs.emit_run_status("run-1", "running")
         resources.runs.emit_run_event("run-1", "values", {"text": "draft"}, raw={"type": "values", "data": {"text": "draft"}})
         resources.runs.emit_run_status("run-1", "succeeded", reply="ok")
@@ -176,6 +177,29 @@ def _check_resources_and_ledger(tmp: str) -> None:
         run_events = resources.runs.get_run_events("run-1")
         assert [event.event_type for event in run_events] == ["status", "status", "values", "status"]
         assert run_events[2].raw["type"] == "values"
+        latest_content = resources.runs.get_latest_content_event("run-1")
+        assert latest_content is not None
+        assert latest_content.event_id == run_events[2].event_id
+
+        resources.runs.create_run("run-2", "s2", "multi")
+        resources.runs.emit_run_status("run-2", "running")
+        resources.runs.emit_run_event("run-2", "thinking", {"content": "plan"}, raw={"type": "messages"})
+        resources.runs.emit_run_event(
+            "run-2",
+            "tool_status",
+            {"name": "demo", "status": "started"},
+            raw={"type": "custom", "data": {"name": "demo", "status": "started"}},
+        )
+        latest_event = resources.runs.emit_run_event(
+            "run-2",
+            "text_delta",
+            {"content": "done"},
+            raw={"type": "messages", "data": {"content": "done"}},
+        )
+        resources.runs.emit_run_status("run-2", "succeeded", reply="done")
+        latest_content = resources.runs.get_latest_content_event("run-2")
+        assert latest_content is not None
+        assert latest_content.event_id == latest_event.event_id
 
         resources.runs.create_run("recover-run", "recover", "hold")
         resources.runs.emit_run_status("recover-run", "running")
@@ -196,6 +220,10 @@ def _check_resources_and_ledger(tmp: str) -> None:
     large_event = oversized.get_run_events("big-run")[-1]
     assert large_event.payload["content"] == "x" * 100
     assert large_event.raw["data"]["content"] == "x" * 100
+    latest_large_event = oversized.get_latest_content_event("big-run")
+    assert latest_large_event is not None
+    assert latest_large_event.payload["content"] == "x" * 100
+    assert latest_large_event.raw["data"]["content"] == "x" * 100
     assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
 
 
@@ -298,10 +326,16 @@ def _check_api(tmp: str) -> None:
         run_payload = run_detail.json()
         event_types = [event["type"] for event in run_payload["events"]]
         assert event_types == ["status", "status", "values", "thinking", "text_delta", "tool_status", "text_delta", "values", "status"]
-        cursor = run_payload["events"][1]["event_id"]
+        latest_content_event = run_payload["latest_content_event"]
+        assert latest_content_event is not None
+        assert latest_content_event["type"] == "values"
+        assert latest_content_event["payload"] == {"text": "echo[2]: again"}
+        cursor = latest_content_event["event_id"]
         cursor_payload = client.get(f"/runs/{follow_up_payload['run_id']}", params={"after_event_id": cursor}).json()
         assert len(cursor_payload["events"]) < len(run_payload["events"])
+        assert [event["type"] for event in cursor_payload["events"]] == ["status"]
         assert cursor_payload["events"][0]["event_id"] > cursor
+        assert cursor_payload["latest_content_event"] == latest_content_event
 
         background = client.post("/runs", json={"message": "hold", "session_id": session_id})
         assert background.status_code == 200
@@ -373,8 +407,10 @@ def _check_startup_recovery(tmp: str) -> None:
         running_run = cleanup_client.get("/runs/cleanup-running").json()
         assert queued_run["run"]["status"] == "failed"
         assert queued_run["run"]["error"] == INTERRUPTED_RUN_ERROR
+        assert queued_run["latest_content_event"] is None
         assert running_run["run"]["status"] == "failed"
         assert running_run["run"]["error"] == INTERRUPTED_RUN_ERROR
+        assert running_run["latest_content_event"] is None
         assert cleanup_factory_count["count"] == 1
 
 

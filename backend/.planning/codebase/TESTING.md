@@ -22,11 +22,11 @@ python backend/self_check.py
 | `main()` 前置断言 | `_thinking_delta`、`_find_value`、`_extract_markdown`、`default_tool_catalog().handlers[0].__name__ == "parse_document"` |
 | `_check_model_env_loading` | `DeepAgentsBrainFactory` 从 `MINIMAX_*` 构造 `ChatAnthropic`，`thinking={"type":"adaptive"}` |
 | `_check_parse_document_env_guard` | `parse_document` 缺 `MINERU_BASE_URL` 时 fail-fast（`RuntimeError`） |
-| `_check_resources_and_ledger` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json` |
+| `_check_resources_and_ledger` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；`get_latest_content_event()` 在仅 `status`、`values→status`、多非 `status`、大 payload artifact 场景下的返回；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json` |
 | `_check_tool_status_middleware` | `ToolStatusMiddleware` 成功发 `started→completed`，异常发 `started→error` 并透传异常 |
 | `_check_harness` | `execute_run` 事件序列 = `status/values/thinking/text_delta/tool_status/text_delta/values/status`；同 thread 续跑 reply 计数递增；thinking 事件 `raw["type"]=="messages"` |
-| `_check_api` | `POST /runs` 返回 `queued`；轮询到 `succeeded`；`GET /runs/{run_id}` 全量/增量（`after_event_id`）事件；同 `session_id` 并发返回 `409`；`/files` 上传与 `/artifacts/uploads/` 解析；失败 run `failed`+`error`；同 session 续跑成功；未知 run `404` |
-| `_check_startup_recovery` | app lifespan 启动时把遗留 `queued/running` run 标记 `failed`（`error == INTERRUPTED_RUN_ERROR`），harness 只创建一次 |
+| `_check_api` | `POST /runs` 返回 `queued`；轮询到 `succeeded`；`GET /runs/{run_id}` 默认返回 `latest_content_event`；`after_event_id` 只裁剪 `events[]`、不影响 `latest_content_event`；同 `session_id` 并发返回 `409`；`/files` 上传与 `/artifacts/uploads/` 解析；失败 run `failed`+`error`；同 session 续跑成功；未知 run `404` |
+| `_check_startup_recovery` | app lifespan 启动时把遗留 `queued/running` run 标记 `failed`（`error == INTERRUPTED_RUN_ERROR`）；仅有 `status` 事件时 `latest_content_event is None`；harness 只创建一次 |
 | `_check_virtual_artifacts` | `parse_document` 虚拟路径 `/artifacts/...` 解析与 `..` 路径穿越拒绝（`ValueError`） |
 
 ### 1.2 self_check 测试替身（已确认）

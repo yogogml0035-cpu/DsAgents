@@ -46,7 +46,7 @@ HTTP 层 (api.py)
     -> create_run(run_id, session_id, input_message)        # run_ledger
     -> threading.Thread -> _run_background
        -> HarnessRuntime.execute_run(message, session_id, run_id)
-  GET  /runs/{run_id}?after_event_id=N                      # 增量拉事件
+  GET  /runs/{run_id}?after_event_id=N                      # 增量拉 events[]，同时返回 latest_content_event
   POST /files                                                # 上传 -> /artifacts/uploads/
 
 Harness 层 (harness.py execute_run)
@@ -81,7 +81,7 @@ Harness 层 (harness.py execute_run)
 
 ## 4. 事件源模型（run 是事件源）
 
-每个 run 的进展以**事件**形式不可变追加到 `run_events` 表，并由 `event_id` 单调递增。`GET /runs/{run_id}?after_event_id=N` 仅靠事件表增量回放，无需额外会话状态。
+每个 run 的进展以**事件**形式不可变追加到 `run_events` 表，并由 `event_id` 单调递增。`GET /runs/{run_id}?after_event_id=N` 仅靠事件表增量回放，无需额外会话状态；同时可按 `run_id + type != 'status' + event_id desc limit 1` 取 `latest_content_event`。
 
 事件类型序列（典型成功 run）：
 
@@ -136,7 +136,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 - `POST /runs` 立即返回 `{"run_id","session_id","status":"queued"}`。
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
-- `GET /runs/{run_id}` 支持 `after_event_id` 增量；未知 run 返回 `404`。
+- `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
 - `POST /files` 返回虚拟路径 `/artifacts/uploads/<uuid>_<原名>`，落地到 `data/artifacts/uploads/`。
 
 ## 9. 配置加载
