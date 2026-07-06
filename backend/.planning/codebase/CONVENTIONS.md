@@ -22,7 +22,7 @@
 - `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `hands` / `harness` / `resources` / `run_ledger` / `tools` / `self_check`。新增顶层 `.py` 必须同步追加到此处。
 - **没有** `backend/__init__.py` / `backend/__main__.py`（已确认不存在）。
 - **没有** `python -m backend.*` 这种调用方式（包不是这么组织的）。
-- `tests/` 目录存在但当前为空（仅 `__pycache__/`，见 TESTING.md）。
+- 当前没有正式 `tests/` 测试源码目录（见 TESTING.md）。
 
 ## 3. 运行入口（已确认）
 

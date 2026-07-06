@@ -41,7 +41,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 | `tools.py` | 工具抽象 + 默认业务工具 `parse_document`（调 MinerU） |
 | `self_check.py` | 端到端自检脚本（`_FakeBrain` 替身，非 pytest 套件） |
 
-固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条活跃 SQLite 通道 + `artifacts/`（`uploads/` 上传落地、`run-events/` 大 payload 外溢）+ `document_outputs/`（`parse_document` 默认输出）。
+固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`run-events/` 大 payload 外溢）+ `document_outputs/`（`parse_document` 默认输出）。
 
 ## 5. 系统层面维护约定
 
@@ -60,10 +60,10 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md)（每条证据见该文档），改动涉及以下面时按提示核对：
 
-- **instantclient 入库（高危）**：`backend/instantclient/`（Oracle Instant Client 19.31，约 109MB）被 git 跟踪，但 backend 代码零引用。需确认是否应移出仓库。
-- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但 `backend/.env` 缺该键 → 真实调用 `parse_document` 立即 `RuntimeError`。`DEEPSEEK_*` / `ORACLE_*` / `LANGSMITH_*` / `CORS_ORIGINS` 均为代码零引用的死配置。
+- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但本地 `backend/.env` 可能缺该键 → 真实调用 `parse_document` 会立即 `RuntimeError`。
+- **配置文档边界**：长期文档只记录配置键与消费者，不抄录本地 `.env` 中的真实值、连接串或服务地址。
 - **run 锁单进程语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。
-- **文档同步**：四层文档手工保持一致。已知漂移源：`Study/` 全套以 session 为事实源（已被 `.gitignore` 忽略）。
+- **文档同步**：四层文档手工保持一致。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。
 - **测试覆盖**：无 pytest 套件、无 CI；回归靠 `python backend/self_check.py`（`_FakeBrain` 替身，不打真实 provider/MinerU）。

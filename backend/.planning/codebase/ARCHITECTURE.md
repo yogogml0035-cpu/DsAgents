@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
-> 事实来源：当前 `backend/` 源码（run-first runtime）
-> 最新变更：commit `8890292 refactor: 迁移到 run-first 架构，移除 session 相关代码`
+> 事实来源：当前 `backend/` 源码（run-first runtime）。
+> 本轮刷新已核对最近相关提交：`5329588`（`CompositeBackend` 路由收窄）、`b6bc3f3`（`latest_content_event`）、`3055899`（Protocol 文档同步）。
 
 ## 1. 架构定位
 
@@ -114,7 +114,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 
 ## 7. 存储边界
 
-`backend/data/` 固定三条**活跃**持久化通道（路径由 `ResourceConfig` 决定，与 CWD 无关）：
+`backend/data/` 固定三条**逻辑持久化通道**（路径由 `ResourceConfig` 决定，与 CWD 无关；文件会按需创建）：
 
 | 文件 | 通道 | 写入方 |
 |------|------|--------|
@@ -122,14 +122,14 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 | `dsagents_checkpoints.db` | LangGraph checkpointer | `SqliteSaver`（`thread_id=session_id`） |
 | `dsagents_store.db` | LangGraph store | `SqliteStore`（`namespace=("dsagents",)`） |
 
+其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。
+
 `dsagents_runs.db` 表结构：
 
 - `runs(run_id, session_id, input_message, status, created_at, updated_at, reply, error)` + `idx_runs_session_created(session_id, created_at desc)`
 - `run_events(event_id, run_id, type, created_at, payload_json, payload_artifact_path, raw_json, raw_artifact_path)` + `idx_run_events_run_order(run_id, event_id)`
 
 大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`（阈值 `max_inline_bytes=262_144`，可配置）。
-
-> 需确认（遗留物）：`backend/data/dsagents_sessions.db` 与 `backend/data/artifacts/session-events/` 在当前代码中**无任何引用**（旧 session 时代产物）。属孤儿文件，建议清理前确认无外部依赖。
 
 ## 8. 运行约束（已确认）
 

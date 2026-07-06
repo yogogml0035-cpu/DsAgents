@@ -79,14 +79,11 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 ### 4.2 LLM provider 边界
 
 - 生产 Brain 强耦合 Anthropic 客户端协议与 `thinking={"type":"adaptive"}`（`init_chat_model("anthropic:...")`）；环境变量 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 由 `harness.py` 在导入时 `load_dotenv`。
-- `DEEPSEEK_*` 在 `.env` 配置但代码零引用（死配置）。
 - 自检 Brain `_FakeBrain` 不触达真实 provider。
 
 ### 4.3 持久化边界
 
-`backend/data/` 固定三条**活跃** SQLite 通道（`runs`/`store`/`checkpoints`），完整文件→通道→写入方映射、表结构与 `CompositeBackend` 路由规则详见 [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §7。
-
-- **需确认（遗留物）**：`backend/data/dsagents_sessions.db` 与 `backend/data/artifacts/session-events/` 在当前代码中零引用，属旧 session 时代孤儿文件。
+`backend/data/` 固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射、表结构与 `CompositeBackend` 路由规则详见 [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §7。
 
 ### 4.4 文件 / artifacts 边界
 
@@ -97,7 +94,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 ### 4.5 鉴权 / 跨域边界（已确认缺失）
 
 - `api.py` 未注册任何 auth middleware；三个端点全部匿名可调。
-- `.env` 有 `CORS_ORIGINS`，但代码无 `CORSMiddleware` 注册 → 浏览器跨域实际不会被处理（死配置）。
+- 代码无 `CORSMiddleware` 注册 → 浏览器跨域实际不会被处理。
 
 ## 5. 依赖和归属规则
 
@@ -129,9 +126,9 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md)（每条证据见该文档）。改动涉及以下面时按提示核对：
 
-- **instantclient 入库（高危）**：`backend/instantclient/`（Oracle Instant Client 19.31，约 109MB）被 git 跟踪，但 backend 代码零引用（无 `oracledb` import、不读 `ORACLE_*`）。需确认是否应移出仓库。
-- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但 `backend/.env` 缺该键（仅 `.env.example` 有 `MINERU_EFFORT=high`）→ 真实调用 `parse_document` 立即 `RuntimeError`。`DEEPSEEK_*` / `ORACLE_*` / `LANGSMITH_*` / `CORS_ORIGINS` 均为代码零引用的死配置。
-- **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。已知漂移源：`Study/` 全套以 session 为事实源（已被 `.gitignore` 忽略）。
+- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但本地 `backend/.env` 可能缺该键 → 真实调用 `parse_document` 会立即 `RuntimeError`。
+- **配置文档边界**：长期文档只保留配置键、消费者与归属规则，不抄录本地 `.env` 的真实值、连接串或服务地址。
+- **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。
 - **明文密钥**：`backend/.env` 含真实密钥（虽 `.gitignore` 排除、git 未跟踪，但已落工作树）；`provider key` 经 `os.getenv` 直读无脱敏护栏。建议轮换并改用 secret manager。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。`_error_text` 在 `api.py` 与 `harness.py` 重复定义。
 - **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。

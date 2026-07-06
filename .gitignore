@@ -3,9 +3,11 @@
 /scripts/ralph/
 .review-push/
 .venv/
+.DS_Store
 .env
 data/
 backend/data/
+backend/instantclient/
 __pycache__/
 *.pyc
 

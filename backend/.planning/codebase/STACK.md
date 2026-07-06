@@ -9,7 +9,7 @@
 |---|---|---|
 | 语言 | Python | `pyproject.toml` |
 | 版本约束 | `>=3.11,<4.0` | `requires-python` |
-| 包管理器 | `uv`（非 pip） | 仓库根存在 `uv.lock` |
+| 包管理器 | `uv`（非 pip） | `backend/uv.lock` |
 | 构建 backend | `setuptools>=68`（`setuptools.build_meta`） | `[build-system]` |
 | 包名 / 版本 | `dsagents` / `0.1.0` | `[project]` |
 
@@ -54,7 +54,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 | 大 run event 外溢 | 文件系统 | `data/artifacts/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`） |
 | 上传文件 | 文件系统 | `data/artifacts/uploads/` | `api.py` |
 
-数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关。
+数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关；其中 `dsagents_runs.db`、`artifacts/uploads/` 这类路径会在首次运行对应流程时按需创建。
 
 ## 5. LLM Provider
 
@@ -82,10 +82,8 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 | LangGraph 流 | classic `stream(..., version="v2")`，`stream_mode=["messages","custom","values"]` |
 | 无 | Redis / DB 锁 / 消息队列 / worker 恢复器（仅启动时 `fail_incomplete_runs` 把遗留 `queued/running` 标 `failed`） |
 
-## 8. 需确认（仓库存在但代码层无引用）
+## 8. 需确认（存在但不由代码直接 import）
 
 | 项 | 状态 |
 |---|---|
-| `instantclient/`（Oracle Instant Client 19.31，Windows 二进制：`oci.dll`、`ojdbc8.jar` 等） | backend Python 代码无 import / 无 `ORACLE_CLIENT_LIB_DIR` 读取；`.env.example` 含 `ORACLE_*` 键但无代码消费 → 疑似遗留 / 计划中 |
-| `.env.example` 中的 `DEEPSEEK_*`、`LANGSMITH_*`、`CORS_ORIGINS` | backend 代码无引用 → 需确认是否由前端 / 部署脚本使用 |
 | `uvicorn` | 仅作为依赖声明存在，`api.py` 未 `import uvicorn`，运行方式需确认（外部 `uvicorn api:app` 命令） |

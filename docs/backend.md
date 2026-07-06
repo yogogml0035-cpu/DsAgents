@@ -25,6 +25,11 @@
 - `api.py`：薄 HTTP 适配
 - `tools.py`：`parse_document`
 
+## 数据与边界
+
+- `backend/data/` 是固定数据根；`dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db` 都由运行时按需创建。
+- 长期文档只记录配置键和边界，不抄录本地 `.env` 的真实值。
+
 ## 已删除
 
 旧 session 模块/表/端点已移除（见 [INTERFACES.md](../INTERFACES.md) §1）；commit `8890292`。

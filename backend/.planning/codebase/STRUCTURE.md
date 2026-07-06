@@ -1,7 +1,7 @@
 # STRUCTURE
 
-> 事实来源：当前 `backend/` 源码（run-first runtime）
-> 最新变更：commit `8890292 refactor: 迁移到 run-first 架构，移除 session 相关代码`
+> 事实来源：当前 `backend/` 源码（run-first runtime）。
+> 本轮刷新已核对最近相关提交：`5329588`、`b6bc3f3`、`3055899`。
 
 ## 1. 顶层模块组织
 
@@ -57,22 +57,18 @@ backend/
 ├── self_check.py
 ├── pyproject.toml          # package-dir=""  py-modules=[...]
 ├── uv.lock
-├── instantclient/          # Oracle Instant Client（instantclient_19_31 + META-INF）；与核心运行时无直接关系，需确认用途
-├── tests/
-│   └── __pycache__/        # 仅缓存，无活动测试文件
 └── data/                   # 固定数据目录（ResourceConfig.data_dir，与 CWD 无关）
-    ├── dsagents_runs.db            # run ledger（活跃）
-    ├── dsagents_checkpoints.db     # LangGraph checkpointer（活跃）
-    ├── dsagents_store.db           # LangGraph store（活跃）
-    ├── dsagents_sessions.db        # 需确认（遗留物，当前代码无引用）
+    ├── dsagents_runs.db            # run ledger；首次创建 run/进入 `AgentResources` 时按需生成
+    ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成；当前工作区已存在）
+    ├── dsagents_store.db           # LangGraph store（按需生成；当前工作区已存在）
     ├── artifacts/
-    │   ├── run-events/             # run 事件大 payload 外溢（*.json，活跃）
-    │   ├── uploads/                # POST /files 上传落地点（活跃）
-    │   └── session-events/         # 需确认（遗留物，当前代码无引用）
-    └── document_outputs/           # parse_document 默认输出目录（<stem>.md，活跃）
+    │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建；当前工作区已存在）
+    │   └── uploads/                # POST /files 上传落地点；首次上传时创建
+    └── document_outputs/           # parse_document 默认输出目录（<stem>.md，按需创建；当前工作区已存在）
 ```
 
 > 数据目录路径由 `ResourceConfig`（`resources.py`）决定，固定指向 `backend/data/`，不受进程 CWD 影响。
+> 代码约定的路径不等于文件一定已经存在：干净工作区里 `dsagents_runs.db` 与 `artifacts/uploads/` 可能尚未创建，只有在对应运行路径真正发生写入后才会出现。
 
 ## 4. 对外入口
 
@@ -85,6 +81,4 @@ backend/
 
 ## 5. 测试位置
 
-`backend/tests/`：**当前基本为空**，只有 `__pycache__/` 残留。唯一的“测试”是 `self_check.py`（基于 `TestClient` + `unittest.mock` 的内置端到端自检，非 pytest 套件）。`tests/test_stream_typing.py` 已在本次重构删除。
-
-> 需确认：是否计划在 `tests/` 下补充正式 pytest 用例，还是继续以 `self_check.py` 作为唯一回归手段。
+当前没有 `backend/tests/` 测试源码目录。唯一的“测试”是 `self_check.py`（基于 `TestClient` + `unittest.mock` 的内置端到端自检，非 pytest 套件）。`tests/test_stream_typing.py` 已在本次重构删除。

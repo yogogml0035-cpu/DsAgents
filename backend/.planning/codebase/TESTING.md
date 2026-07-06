@@ -1,6 +1,6 @@
 # TESTING
 
-> backend 子项目的测试与验证策略。事实来源 = `backend/self_check.py` 源码 + `backend/tests/` 现状 + `backend/pyproject.toml`。
+> backend 子项目的测试与验证策略。事实来源 = `backend/self_check.py` 源码 + `backend/pyproject.toml`。
 
 ## 1. 主要验证手段：self_check（已确认）
 
@@ -38,8 +38,7 @@ python backend/self_check.py
 
 ## 2. 测试目录现状（已确认）
 
-- `backend/tests/` **存在但基本为空**：当前只有 `tests/__pycache__/`，内含一个遗留的 `test_stream_typing.cpython-312.pyc`，**没有对应的 `.py` 源文件**。
-- 即：`backend/tests/` 下**没有**任何实际测试源码；不能视为可用测试套件。
+- 当前没有 `backend/tests/` 测试源码目录。
 - **没有** `conftest.py` / `pytest.ini` / `tox.ini`（仓库根与 `backend/` 下均无）。
 - `pytest` **未**声明在 `pyproject.toml` 依赖中（dev 依赖也未声明）。
 
@@ -52,8 +51,7 @@ python backend/self_check.py
 
 ## 4. 当前缺口（待补充）
 
-- **没有正式单元测试目录/套件**：`backend/tests/` 为空，验证完全集中在 `self_check.py` 这一个脚本。
+- **没有正式单元测试目录/套件**：验证完全集中在 `self_check.py` 这一个脚本。
 - **没有 CI**：仓库内未见 CI 配置；`self-check passed` 目前靠手工/agent 触发判定。
 - **没有 lint / type-check gate**：未配置 ruff / mypy / black 等门禁（pyproject.toml 无 `[tool.ruff]` 等段落）。
 - **没有真实 provider 集成测试**：self_check 全程用 `_FakeBrain` 与 patch 后的 MinerU；真实 `MINIMAX_*` / `MINERU_*` 调用没有自动化覆盖（需确认是否有手动冒烟流程）。
-- **`tests/` 残留**：`tests/__pycache__/test_stream_typing.cpython-312.pyc` 是孤儿产物，无源文件对应，建议清理或重建该测试。

@@ -66,7 +66,7 @@ brain.stream(
 - `resources.store`：LangGraph `SqliteStore`
 - `resources.checkpointer`：LangGraph `SqliteSaver`
 
-固定三条**活跃** SQLite 通道（`runs`/`store`/`checkpoints`），完整文件→通道→写入方映射与表结构详见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) §7。大 run event payload/raw（默认 `max_inline_bytes=262_144`）外溢到 `data/artifacts/run-events/*.json`；`CompositeBackend` 路由规则同样见该文档。
+固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射与表结构详见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) §7。大 run event payload/raw（默认 `max_inline_bytes=262_144`）外溢到 `data/artifacts/run-events/*.json`；`CompositeBackend` 路由规则同样见该文档。
 
 ## 5. LLM provider 边界
 
@@ -81,16 +81,9 @@ brain.stream(
 
 ## 6. 未证实的跨系统关系 / 需确认
 
-| 项 | 状态 | 说明 |
-|---|---|---|
-| `backend/instantclient/`（Oracle Instant Client 19.31） | 需确认 | 约 109MB 被 git 跟踪；backend 代码无 `oracledb`/`cx_Oracle` import、不读 `ORACLE_*`/`ORACLE_CLIENT_LIB_DIR`。疑似遗留资产或计划中能力 |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | 需确认 | `.env` 配置但代码零引用（死配置，易误导） |
-| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | 需确认 | `.env.example` 含键，代码零引用 |
-| `LANGSMITH_TRACING` / `LANGSMITH_ENDPOINT` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | 需确认 | `.env` 配置但代码零引用 |
-| `CORS_ORIGINS` | 需确认 | `.env` 有键，但 `api.py` 未注册 `CORSMiddleware` → 浏览器跨域实际不被处理 |
-| `data/dsagents_sessions.db` 与 `data/artifacts/session-events/` | 需确认 | 磁盘遗留，代码零引用（旧 session 时代孤儿文件） |
+当前系统文档未确认其它子项目或跨系统调用方；已删除的旧 session 接口见 §1。
 
-证据与建议见 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md) §1/§3/§9 与 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) §5/§7。
+证据与建议见 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md) 与 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md)。
 
 ## 7. 任务排查建议 / 可扩展集成入口
 
@@ -98,6 +91,7 @@ brain.stream(
 - **替换 LLM provider**：实现新的 `BrainFactory`（`harness.py` 的 `Brain` Protocol），通过 `create_harness` 注入；当前生产 brain 强耦合 Anthropic 协议与 `thinking` 参数，切换 provider 需同步调整 stream chunk 解析。
 - **新增工具**：实现 `ToolHandler`（callable），注册进 `default_tool_catalog()`（`tools.py`）；`Hands` 中间件会自动发 `tool_status` 事件。
 - **新增持久化通道**：在 `resources.py` 的 `CompositeBackend` 路由表追加前缀；不要直接在 harness 写文件。
-- **加鉴权 / CORS**：当前 `api.py` 未注册任何 auth/CORS middleware（已确认缺失）；若需开放给浏览器，需显式补 `CORSMiddleware` 并激活 `CORS_ORIGINS`。
+- **加鉴权 / CORS**：当前 `api.py` 未注册任何 auth/CORS middleware（已确认缺失）；若需开放给浏览器，需显式补 `CORSMiddleware` 和对应配置键。
+- **写系统文档**：只记录配置键、边界和消费者，不把本地 `.env` 的真实值、连接串或服务地址写回长期文档。
 - **跨进程部署**：单飞锁仅进程内语义；多 worker 部署前需引入跨进程锁或单进程约束。
 - **验证入口**：HTTP 行为变更已被 `self_check.py` 的 `_check_api` / `_check_startup_recovery`（`TestClient`）覆盖；backend 代码变更跑 `python backend/self_check.py` 必须看到结尾 `self-check passed`。

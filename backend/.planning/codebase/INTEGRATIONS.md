@@ -16,7 +16,7 @@
 
 > 注：当前**无 SSE / `StreamingResponse` / `text/event-stream`**，事件获取靠轮询 `GET /runs/{run_id}?after_event_id=...`。
 > 注：`after_event_id` **只影响 `events[]`**；`latest_content_event` 始终返回该 run 当前最新的非 `status` 事件，没有则为 `null`。
-> 注：当前**未注册 `CORSMiddleware`**（代码无；`.env.example` 的 `CORS_ORIGINS` 无消费者 → 需确认）。
+> 注：当前**未注册 `CORSMiddleware`**，也没有 CORS 配置消费者。
 
 ### lifespan
 
@@ -94,21 +94,14 @@ brain.stream(
 - `harness.py`
 - `tools.py`
 
-`.env.example` 键清单（**仅键名 / 默认占位**）：
+文档只记录**键名、用途与代码消费者**，不重复本地 `.env` 中的真实值或任何敏感示例。`.env.example` 提供的是示例占位，不应被当成运行时事实来源。
 
-| 键 | 默认占位（来自 `.env.example`） | backend 代码消费者 | 状态 |
-|---|---|---|---|
-| `MINIMAX_API_KEY` | （空） | `harness.py` | 已确认 |
-| `MINIMAX_BASE_URL` | `https://api.minimaxi.com/anthropic` | `harness.py` | 已确认 |
-| `MINIMAX_MODEL` | `MiniMax-M3` | `harness.py` | 已确认 |
-| `MINERU_BASE_URL` | `http://10.11.0.110:6006` | `tools.py` | 已确认 |
-| `MINERU_BACKEND` | `hybrid-engine` | `tools.py` | 已确认 |
-| `MINERU_EFFORT` | `high` | `tools.py` | 已确认 |
-| `MINERU_TIMEOUT_SECONDS` | `900` | `tools.py` | 已确认 |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | — | 无 | 需确认（代码无引用） |
-| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | — | 无 | 需确认（代码无引用，见 §7） |
-| `LANGSMITH_TRACING` / `LANGSMITH_ENDPOINT` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | — | 无 | 需确认（代码无引用） |
-| `CORS_ORIGINS` | `http://localhost:8500,...` | 无 | 需确认（未注册 CORS middleware） |
+`.env.example` 键清单：
+
+| 键 | backend 代码消费者 | 状态 |
+|---|---|---|
+| `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `harness.py` | 已确认 |
+| `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` | `tools.py` | 已确认 |
 
 ## 6. 外部 HTTP 调用（requests）
 
@@ -123,15 +116,3 @@ brain.stream(
 工具 `parse_document`：解析本地文件 → 写 markdown 到 `data/document_outputs/<stem>.md`（或指定 `output_path`）→ 返回 JSON（`task_id/source/output_path/markdown_bytes`）。
 
 `default_tool_catalog()` 当前只注册一个工具：`parse_document`。
-
-## 7. instantclient/ 定位（需确认）
-
-`backend/instantclient/` 内含 Oracle Instant Client 19.31 for Windows 二进制（`instantclient_19_31/`，含 `oci.dll`、`ojdbc8.jar`、`oraocci19.dll`、`orasql19.dll` 等，及 `BASIC_LITE_LICENSE`）。
-
-| 事实 | 状态 |
-|---|---|
-| backend Python 代码**无** `oracledb` / `cx_Oracle` / `oracle` import | 已确认 |
-| backend Python 代码**不读取** `ORACLE_*` / `ORACLE_CLIENT_LIB_DIR` | 已确认 |
-| `.env.example` 含 `ORACLE_*` 键 | 已确认 |
-
-结论：当前 instantclient 与 backend 运行时**无代码层集成**，疑似遗留资产或计划中能力 → **需确认**用途与是否应保留。
