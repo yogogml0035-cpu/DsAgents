@@ -45,7 +45,7 @@
 
 - **已确认**｜三个 db 职责明确（`resources.py:21-31`）：
   - `dsagents_runs.db` — run 与 run_events（`run_ledger.py`，自建表 `runs` / `run_events`，含 `idx_runs_session_created` / `idx_run_events_run_order`）。
-  - `dsagents_store.db` — LangGraph `SqliteStore`（`/memories/`、`/conversation_history/`、`/logs/` 路由，见 `resources.py:55-66`）。
+  - `dsagents_store.db` — LangGraph `SqliteStore`（仅 `/memories/` 显式长期记忆路由，见 `resources.py:55-64`）。
   - `dsagents_checkpoints.db` — LangGraph `SqliteSaver` checkpointer（`thread_id=session_id`）。
 - **已确认**｜`dsagents_sessions.db` 是**孤儿文件**（磁盘存在，代码零引用）—— 见 §1。
 - **风险**｜三 db 各自独立连接、无跨库事务；`run_ledger` 每次操作都 `sqlite3.connect()` 短连接（`run_ledger.py:47/76/108/158/190/222`），高并发下锁竞争与写吞吐有限（SQLite 默认 WAL 未显式开启）。

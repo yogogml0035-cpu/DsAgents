@@ -48,7 +48,7 @@
 | `resources.checkpointer` | `SqliteSaver.from_conn_string(...)`（`langgraph.checkpoint.sqlite`） | `data/dsagents_checkpoints.db` | `.setup()` |
 | `resources.store` | `SqliteStore.from_conn_string(...)`（`langgraph.store.sqlite`） | `data/dsagents_store.db` | `.setup()` |
 | `resources.runs` | `SqliteRunLedger`（标准库 `sqlite3`） | `data/dsagents_runs.db` | `_setup()` 建表 |
-| `resources.backend` | `CompositeBackend(default=StateBackend(), routes={...})`（`deepagents.backends`） | 路由到 store / 文件系统 | — |
+| `resources.backend` | `CompositeBackend(default=StateBackend(), routes={...})`（`deepagents.backends`） | 路由到 store / 文件系统 / state | — |
 
 LangGraph 调用约定（`harness.py`）：
 
@@ -83,9 +83,9 @@ brain.stream(
 
 | 虚拟前缀 | backend | 说明 |
 |---|---|---|
-| `/memories/`、`/conversation_history/`、`/logs/` | `StoreBackend(store, namespace=("dsagents",))` | 跨会话持久（SQLite store） |
+| `/memories/` | `StoreBackend(store, namespace=("dsagents",))` | 显式长期记忆，跨会话持久（SQLite store） |
 | `/artifacts/`、`/large_tool_results/` | `FilesystemBackend(root_dir=artifacts_dir, virtual_mode=True)` | 落磁盘 |
-| 默认 | `StateBackend()` | 进程内 state |
+| 其它（含 `/conversation_history/`、`/logs/`） | `StateBackend()` | 同 `thread_id` 图状态；不进入跨 session store |
 
 ## 5. 环境变量集成（python-dotenv）
 

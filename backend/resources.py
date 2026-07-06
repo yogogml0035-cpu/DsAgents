@@ -58,8 +58,6 @@ class AgentResources:
             default=StateBackend(),
             routes={
                 "/memories/": persistent,
-                "/conversation_history/": persistent,
-                "/logs/": persistent,
                 "/artifacts/": disk,
                 "/large_tool_results/": disk,
             },

@@ -75,9 +75,9 @@ Harness 层 (harness.py execute_run)
 
 装配关系（`resources.py`）：`CompositeBackend` 路由：
 
-- `/memories/`、`/conversation_history/`、`/logs/` → `StoreBackend`（持久化到 store）
+- `/memories/` → `StoreBackend`（显式长期记忆，持久化到 store）
 - `/artifacts/`、`/large_tool_results/` → `FilesystemBackend`（落 `data/artifacts/`，virtual_mode=True）
-- 其它 → `StateBackend`（图状态）
+- 其它（含 DeepAgents 内部 `/conversation_history/` 与未使用的 `/logs/`）→ `StateBackend`（同 `thread_id` 图状态，不进跨 session store）
 
 ## 4. 事件源模型（run 是事件源）
 

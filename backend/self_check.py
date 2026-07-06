@@ -163,6 +163,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert resources.config.store_db.exists()
         assert resources.config.checkpoint_db.exists()
         assert resources.backend is not None
+        assert set(resources.backend.routes) == {"/memories/", "/artifacts/", "/large_tool_results/"}
 
         queued = resources.runs.create_run("run-1", "s1", "hello")
         assert queued.status == "queued"

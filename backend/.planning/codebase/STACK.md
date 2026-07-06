@@ -50,7 +50,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 | `SqliteRunLedger` | 标准库 `sqlite3` | `data/dsagents_runs.db` | `resources.py`、`run_ledger.py` |
 | `SqliteStore` | LangGraph store | `data/dsagents_store.db` | `resources.py` |
 | `SqliteSaver` | LangGraph checkpointer | `data/dsagents_checkpoints.db` | `resources.py` |
-| `CompositeBackend` | `deepagents.backends` | 路由 `/memories/` `/conversation_history/` `/logs/` → `StoreBackend`；`/artifacts/` `/large_tool_results/` → `FilesystemBackend`；默认 `StateBackend` | `resources.py` |
+| `CompositeBackend` | `deepagents.backends` | 路由 `/memories/` → `StoreBackend`；`/artifacts/` `/large_tool_results/` → `FilesystemBackend`；默认 `StateBackend`（含 `/conversation_history/`、`/logs/`） | `resources.py` |
 | 大 run event 外溢 | 文件系统 | `data/artifacts/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`） |
 | 上传文件 | 文件系统 | `data/artifacts/uploads/` | `api.py` |
 
