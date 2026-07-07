@@ -11,6 +11,8 @@ from typing import Any
 
 
 RUN_STATUSES = {"queued", "running", "succeeded", "failed"}
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+RUN_LEDGER_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class SqliteRunLedger:
         self._setup()
 
     def create_run(self, run_id: str, session_id: str, input_messages_json: str) -> RunSnapshot:
-        created_at = _utcnow()
+        created_at = _now_text()
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """
@@ -178,7 +180,7 @@ class SqliteRunLedger:
         *,
         raw: Any | None = None,
     ) -> RunEvent:
-        created_at = _utcnow()
+        created_at = _now_text()
         safe_payload = _safe(payload)
         safe_raw = safe_payload if raw is None else _safe(raw)
         with closing(sqlite3.connect(self.db_path)) as conn:
@@ -205,7 +207,7 @@ class SqliteRunLedger:
     ) -> RunEvent:
         if status not in RUN_STATUSES:
             raise ValueError(f"Unsupported run status: {status}")
-        created_at = _utcnow()
+        created_at = _now_text()
         payload: dict[str, Any] = {"status": status}
         if reply is not None:
             payload["reply"] = reply
@@ -377,7 +379,64 @@ class SqliteRunLedger:
                 on run_events(run_id, event_id)
                 """
             )
+            self._migrate(conn)
             conn.commit()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        current_version = int(conn.execute("pragma user_version").fetchone()[0])
+        if current_version < 1:
+            self._normalize_existing_timestamps(conn, assume_naive_utc=True)
+            conn.execute(f"pragma user_version = {RUN_LEDGER_SCHEMA_VERSION}")
+
+    def _normalize_existing_timestamps(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        assume_naive_utc: bool,
+    ) -> None:
+        run_updates: list[tuple[str, str, str]] = []
+        for run_id, created_at, updated_at in conn.execute(
+            "select run_id, created_at, updated_at from runs"
+        ).fetchall():
+            normalized_created_at = _normalize_timestamp_text(
+                created_at,
+                assume_naive_utc=assume_naive_utc,
+            )
+            normalized_updated_at = _normalize_timestamp_text(
+                updated_at,
+                assume_naive_utc=assume_naive_utc,
+            )
+            if normalized_created_at != created_at or normalized_updated_at != updated_at:
+                run_updates.append((normalized_created_at, normalized_updated_at, run_id))
+        if run_updates:
+            conn.executemany(
+                """
+                update runs
+                set created_at = ?, updated_at = ?
+                where run_id = ?
+                """,
+                run_updates,
+            )
+
+        event_updates: list[tuple[str, int]] = []
+        for event_id, created_at in conn.execute(
+            "select event_id, created_at from run_events"
+        ).fetchall():
+            normalized_created_at = _normalize_timestamp_text(
+                created_at,
+                assume_naive_utc=assume_naive_utc,
+            )
+            if normalized_created_at != created_at:
+                event_updates.append((normalized_created_at, event_id))
+        if event_updates:
+            conn.executemany(
+                """
+                update run_events
+                set created_at = ?
+                where event_id = ?
+                """,
+                event_updates,
+            )
 
 
 def _safe(value: Any) -> Any:
@@ -392,5 +451,17 @@ def _safe(value: Any) -> Any:
     return repr(value)
 
 
-def _utcnow() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_text() -> str:
+    return datetime.now().astimezone().strftime(TIMESTAMP_FORMAT)
+
+
+def _normalize_timestamp_text(value: str, *, assume_naive_utc: bool) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        if not assume_naive_utc:
+            return parsed.strftime(TIMESTAMP_FORMAT)
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().strftime(TIMESTAMP_FORMAT)

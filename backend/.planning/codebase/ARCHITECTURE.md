@@ -130,6 +130,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 
 - `runs(run_id, session_id, input_messages_json, status, created_at, updated_at, reply, error)` + `idx_runs_session_created(session_id, created_at desc)`
 - `run_events(event_id, run_id, type, created_at, payload_json, payload_artifact_path, raw_json, raw_artifact_path)` + `idx_run_events_run_order(run_id, event_id)`
+- run ledger 时间字段统一写成本机时区秒级文本 `YYYY-MM-DD HH:mm:ss`；首次迁移会把旧的 UTC ISO 8601/UTC 秒级文本归一化到本机时区，之后靠 `PRAGMA user_version` 避免重复平移。
 
 大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`（阈值 `max_inline_bytes=262_144`，可配置）。
 

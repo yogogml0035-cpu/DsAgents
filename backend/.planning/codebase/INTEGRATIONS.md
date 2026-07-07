@@ -18,6 +18,7 @@
 > 注：`after_event_id` **只影响 `events[]`**；`latest_content_event` 始终返回该 run 当前最新的非 `status` 事件，没有则为 `null`。
 > 注：`POST /runs` **不再支持**旧 `{"message":"..."}` 请求体。
 > 注：当前**未注册 `CORSMiddleware`**，也没有 CORS 配置消费者。
+> 注：run / event 响应里的时间字段当前统一为本机时区秒级文本 `YYYY-MM-DD HH:mm:ss`；旧 UTC 时间在首次迁移时会被平移到本机时区。
 
 ### artifact block 与上传能力
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from api import INTERRUPTED_RUN_ERROR
@@ -38,8 +40,11 @@ def _check_resources_and_ledger(tmp: str) -> None:
         snapshot = resources.runs.get_run("run-1")
         assert snapshot.status == "succeeded"
         assert snapshot.reply == "ok"
+        _assert_second_precision_timestamp(snapshot.created_at)
+        _assert_second_precision_timestamp(snapshot.updated_at)
         run_events = resources.runs.get_run_events("run-1")
         assert [event.event_type for event in run_events] == ["status", "status", "values", "status"]
+        assert all(_is_second_precision_timestamp(event.created_at) for event in run_events)
         assert run_events[2].raw["type"] == "values"
         latest_content = resources.runs.get_latest_content_event("run-1")
         assert latest_content is not None
@@ -89,6 +94,64 @@ def _check_resources_and_ledger(tmp: str) -> None:
     assert latest_large_event.payload["content"] == "x" * 100
     assert latest_large_event.raw["data"]["content"] == "x" * 100
     assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
+
+    legacy_db = data_dir / "legacy.db"
+    legacy = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    legacy.create_run("legacy-run", "legacy-session", messages_json([user_message(text_block("legacy"))]))
+    with sqlite3.connect(legacy_db) as conn:
+        conn.execute(
+            """
+            update runs
+            set created_at = ?, updated_at = ?
+            where run_id = ?
+            """,
+            ("2026-07-07T08:18:59.740303+00:00", "2026-07-07 09:42:01", "legacy-run"),
+        )
+        conn.execute(
+            """
+            update run_events
+            set created_at = ?
+            where run_id = ?
+            """,
+            ("2026-07-07 09:40:16", "legacy-run"),
+        )
+        conn.execute("pragma user_version = 0")
+        conn.commit()
+    normalized = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    normalized_run = normalized.get_run("legacy-run")
+    assert normalized_run.created_at == _local_expected_from_utc_iso("2026-07-07T08:18:59.740303+00:00")
+    assert normalized_run.updated_at == _local_expected_from_utc_naive("2026-07-07 09:42:01")
+    assert normalized.get_run_events("legacy-run")[0].created_at == _local_expected_from_utc_naive("2026-07-07 09:40:16")
+    normalized_again = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    assert normalized_again.get_run("legacy-run").updated_at == normalized_run.updated_at
+    assert normalized_again.get_run_events("legacy-run")[0].created_at == normalized.get_run_events("legacy-run")[0].created_at
+
+
+def _assert_second_precision_timestamp(value: str) -> None:
+    assert _is_second_precision_timestamp(value)
+
+
+def _is_second_precision_timestamp(value: str) -> bool:
+    if "T" in value or "." in value or len(value) != 19:
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    return True
+
+
+def _local_expected_from_utc_iso(value: str) -> str:
+    return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _local_expected_from_utc_naive(value: str) -> str:
+    return (
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        .replace(tzinfo=timezone.utc)
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M:%S")
+    )
 
 
 if __name__ == "__main__":

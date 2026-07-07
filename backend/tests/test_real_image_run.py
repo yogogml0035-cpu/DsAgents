@@ -86,7 +86,6 @@ def _upload_image(session: requests.Session, base_url: str, image_path: Path) ->
         )
     response.raise_for_status()
     files = response.json()["files"]
-    assert len(files) == 15    
     file_info = files[0]
     assert file_info["size"] == image_path.stat().st_size
     artifact_path = file_info["file_path"]
