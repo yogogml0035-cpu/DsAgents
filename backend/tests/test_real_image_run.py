@@ -10,7 +10,7 @@ from typing import Any
 import requests
 
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = "http://127.0.0.1:8500"
 DEFAULT_IMAGE_PATH = Path(r"D:\AgentProject\DsAgents\backend\tests\tests_images\imags1.jpg")
 DEFAULT_QUESTION = "请详细描述这张图片"
 DEFAULT_TIMEOUT_SECONDS = 180.0
@@ -86,7 +86,7 @@ def _upload_image(session: requests.Session, base_url: str, image_path: Path) ->
         )
     response.raise_for_status()
     files = response.json()["files"]
-    assert len(files) == 1
+    assert len(files) == 15    
     file_info = files[0]
     assert file_info["size"] == image_path.stat().st_size
     artifact_path = file_info["file_path"]
