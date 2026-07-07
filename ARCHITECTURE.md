@@ -7,7 +7,7 @@
 
 `DsAgents` 是一个 **agent 运行时底座**：把能力做成可插拔，而不绑定具体 runner、容器、模型或工作流。
 
-- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；工具保持普通 callable + `ToolCatalog`。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` / `ToolStatusHands` / `default_tool_catalog()`），运行时不写死具体模型实现（自检用 `_FakeBrainFactory` 替换）。
+- **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；工具保持普通 callable + `ToolCatalog`。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` / `ToolStatusHands` / `default_tool_catalog()`），运行时不写死具体模型实现（本地测试用 `FakeBrainFactory` 替换）。
 - **run-first**：`session` 模块与 session 持久化层已在 commit `8890292` 移除；run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
 - **入口形态**：HTTP（`POST /runs`，轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
@@ -33,13 +33,12 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 | 模块 | 系统级职责 |
 |------|-----------|
-| `api.py` | FastAPI HTTP 适配层（run-first 三端点 + 同 session 单飞锁 + 启动恢复） |
+| `api.py` | FastAPI HTTP 适配层（run-first 三端点：`POST /runs` / `GET /runs/{run_id}` / `POST /upload` + 同 session 单飞锁 + 启动恢复） |
 | `harness.py` | run 执行核心 + Brain/Hands/Tools 装配 + 默认工厂 `create_harness` |
 | `hands.py` | 执行器/中间件抽象（`Hands` Protocol + `ToolStatusMiddleware`） |
 | `resources.py` | 资源装配器（`AgentResources`：run ledger + checkpointer + store + `CompositeBackend`） |
 | `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
 | `tools.py` | 工具抽象 + 默认业务工具 `parse_document`（调 MinerU） |
-| `self_check.py` | 端到端自检脚本（`_FakeBrain` 替身，非 pytest 套件） |
 
 固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`run-events/` 大 payload 外溢）+ `document_outputs/`（`parse_document` 默认输出）。
 
@@ -60,10 +59,10 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md)（每条证据见该文档），改动涉及以下面时按提示核对：
 
-- **配置漂移（高危）**：`tools.py` 读 `MINERU_EFFORT`，但本地 `backend/.env` 可能缺该键 → 真实调用 `parse_document` 会立即 `RuntimeError`。
+- **配置完整性**：`parse_document` 对 `MINERU_*` 必需键 fail-fast；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
 - **配置文档边界**：长期文档只记录配置键与消费者，不抄录本地 `.env` 中的真实值、连接串或服务地址。
 - **run 锁单进程语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。
 - **文档同步**：四层文档手工保持一致。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。
-- **测试覆盖**：无 pytest 套件、无 CI；回归靠 `python backend/self_check.py`（`_FakeBrain` 替身，不打真实 provider/MinerU）。
+- **测试覆盖**：无 pytest 套件、无 CI；回归按影响范围直接运行 `backend/tests/test_*.py` 脚本，普通本地脚本用 `FakeBrain` 替身，不打真实 provider/MinerU。

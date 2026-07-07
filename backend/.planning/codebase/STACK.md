@@ -20,7 +20,7 @@
 ```toml
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "self_check"]
+py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 ```
 
 - `backend/` 内的 `.py` 直接作为顶层模块安装。
@@ -33,12 +33,13 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 |---|---|---|---|
 | `deepagents` | `>=0.6.12` | Agent 主体；`create_deep_agent(...)` 装配可流式 agent | `harness.py`、`resources.py`（`CompositeBackend` 等） |
 | `fastapi` | `>=0.116.1` | HTTP 框架；`create_app()` → `FastAPI(lifespan=...)` | `api.py` |
+| `httpx2` | `>=2.5.0` | `fastapi.testclient.TestClient` 的 HTTP 客户端传输层，用于本地 HTTP 断言且避免 `starlette.testclient` 对 `httpx` 的弃用警告 | `backend/tests/test_api.py`、`backend/tests/test_support.py` |
 | `langchain` | `>=1.3.11` | `init_chat_model`、`AgentMiddleware`、`ToolCallRequest` | `harness.py`、`hands.py` |
-| `langchain-anthropic` | `>=1.4.8` | LLM provider（Anthropic 兼容客户端，实际可指向 MiniMax 端点） | 经 `init_chat_model("anthropic:...")` 间接使用；自检断言 `ChatAnthropic` |
-| `langchain-core` | `>=1.4.8` | `BaseChatModel`、`AIMessage` / `AIMessageChunk` | `harness.py`、`self_check.py` |
+| `langchain-anthropic` | `>=1.4.8` | LLM provider（Anthropic 兼容客户端，实际可指向 MiniMax 端点） | 经 `init_chat_model("anthropic:...")` 间接使用；测试脚本断言 `ChatAnthropic` |
+| `langchain-core` | `>=1.4.8` | `BaseChatModel`、`AIMessage` / `AIMessageChunk` | `harness.py`、`backend/tests/test_support.py`、`backend/tests/test_harness.py` |
 | `langgraph` | `>=1.2.7` | Agent 编排 / 流式 API；`get_stream_writer` | `hands.py`；harness 调用 `brain.stream(..., version="v2")` |
 | `langgraph-checkpoint-sqlite` | `>=3.1.0` | LangGraph checkpointer（`SqliteSaver`） | `resources.py` |
-| `python-multipart` | `>=0.0.20` | `POST /files` 文件上传解析（`UploadFile`） | `api.py` |
+| `python-multipart` | `>=0.0.20` | `POST /upload` 多文件上传解析（`UploadFile`） | `api.py` |
 | `python-dotenv` | `>=1.2.2` | `.env` 加载 | `harness.py`、`tools.py` 各自 `load_dotenv(...)` |
 | `requests` | `>=2.34.2` | 外部 HTTP（MinerU 任务提交/轮询/取结果） | `tools.py` |
 | `uvicorn` | `>=0.35.0` | ASGI 服务器（运行 FastAPI app） | 依赖声明；`api.py` 未直接 import，由外部 `uvicorn` 命令拉起 |
@@ -61,7 +62,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 | Provider | 集成方式 | 证据 |
 |---|---|---|
 | Anthropic 兼容（生产） | `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`；由 `DeepAgentsBrainFactory` 注入 `create_deep_agent(model=...)` | `harness.py` |
-| `FakeBrain`（自检） | `_FakeBrain` / `_FakeBrainFactory`，模拟 `stream(...)` 产出 `values/messages/custom` chunk | `self_check.py` |
+| `FakeBrain`（本地测试） | `FakeBrain` / `FakeBrainFactory`，模拟 `stream(...)` 产出 `values/messages/custom` chunk | `backend/tests/test_support.py` |
 
 ## 6. 配置加载
 

@@ -26,7 +26,7 @@ run 是唯一的执行单位与查询单位。本次重构（`8890292`）已完�
 ### 两个等价入口
 
 1. **HTTP 入口**（`api.py`）：`POST /runs` 创建 run 并立即返回 `queued`，run 在后台线程执行。
-2. **程序内入口**：`AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(message, session_id, run_id)`，返回 `Iterator[RunEvent]`。`self_check.py` 走这条路。
+2. **程序内入口**：`AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`，返回 `Iterator[RunEvent]`。本地测试脚本中的 harness 测试也走这条路。
 
 ### `session_id` 的现状（需澄清，易误读）
 
@@ -42,18 +42,20 @@ run 是唯一的执行单位与查询单位。本次重构（`8890292`）已完�
 
 ```text
 HTTP 层 (api.py)
-  POST /runs(message, session_id?)
-    -> create_run(run_id, session_id, input_message)        # run_ledger
+  POST /upload(files[])
+    -> 保存到 /artifacts/uploads/<uuid>_<filename>
+  POST /runs(messages, session_id?)
+    -> create_run(run_id, session_id, input_messages_json)  # run_ledger
     -> threading.Thread -> _run_background
-       -> HarnessRuntime.execute_run(message, session_id, run_id)
+       -> HarnessRuntime.execute_run(messages, session_id, run_id)
   GET  /runs/{run_id}?after_event_id=N                      # 增量拉 events[]，同时返回 latest_content_event
-  POST /files                                                # 上传 -> /artifacts/uploads/
 
 Harness 层 (harness.py execute_run)
   -> emit status=running
+  -> text block 原样保留；artifact block -> "Uploaded artifact: /artifacts/uploads/..."
   -> brain_factory.create(resources, middleware, tools)     # 装配 Brain
   -> brain.stream(
-       {"messages":[{"role":"user","content":message}]},
+       {"messages": normalized_messages},
        config={"configurable":{"thread_id": session_id}},
        stream_mode=["messages","custom","values"],
        version="v2",
@@ -105,12 +107,12 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 |------|--------|------|
 | `AgentResources` | `resources.py` | 资源装配器（context manager）：run ledger + store + checkpointer + CompositeBackend；`ResourceConfig` 给出固定路径 |
 | `create_harness(resources)` | `harness.py` | 默认 Harness 工厂：`HarnessRuntime(resources, ToolStatusHands(), default_tool_catalog(), DeepAgentsBrainFactory())` |
-| `HarnessRuntime.execute_run(message, session_id, run_id)` | `harness.py` | run 执行核心，产出 `Iterator[RunEvent]` |
+| `HarnessRuntime.execute_run(messages, session_id, run_id)` | `harness.py` | run 执行核心，产出 `Iterator[RunEvent]` |
 | `Brain` / `BrainFactory` | `harness.py` | 模型/Agent 抽象（Protocol） |
 | `Hands` / `ToolStatusHands` | `hands.py` | 中间件装配抽象（Protocol）+ 默认实现 |
 | `SqliteRunLedger` | `run_ledger.py` | run 元数据 + 事件 + 大 payload 外溢 |
 | `ToolCatalog` / `ToolHandler` | `tools.py` | 工具集合抽象；`default_tool_catalog()` 默认装配 |
-| `_FakeBrain` / `_FakeBrainFactory` | `self_check.py` | 自检用的 Brain 替身（流式产出固定 chunk） |
+| `FakeBrain` / `FakeBrainFactory` | `backend/tests/test_support.py` | 本地测试用的 Brain 替身（流式产出固定 chunk） |
 
 ## 7. 存储边界
 
@@ -126,7 +128,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 
 `dsagents_runs.db` 表结构：
 
-- `runs(run_id, session_id, input_message, status, created_at, updated_at, reply, error)` + `idx_runs_session_created(session_id, created_at desc)`
+- `runs(run_id, session_id, input_messages_json, status, created_at, updated_at, reply, error)` + `idx_runs_session_created(session_id, created_at desc)`
 - `run_events(event_id, run_id, type, created_at, payload_json, payload_artifact_path, raw_json, raw_artifact_path)` + `idx_run_events_run_order(run_id, event_id)`
 
 大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`（阈值 `max_inline_bytes=262_144`，可配置）。
@@ -137,7 +139,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
 - `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
-- `POST /files` 返回虚拟路径 `/artifacts/uploads/<uuid>_<原名>`，落地到 `data/artifacts/uploads/`。
+- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<uuid>_<原名>` 路径、原名、mime、size。
 
 ## 9. 配置加载
 

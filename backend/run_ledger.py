@@ -27,12 +27,13 @@ class RunEvent:
 class RunSnapshot:
     run_id: str
     session_id: str
-    input_message: str
+    input_messages_json: str
     status: str
     created_at: str
     updated_at: str
     reply: str | None = None
     error: str | None = None
+
 
 class SqliteRunLedger:
     def __init__(self, db_path: Path, artifacts_dir: Path, max_inline_bytes: int = 262_144) -> None:
@@ -42,7 +43,7 @@ class SqliteRunLedger:
         self.run_artifacts_dir.mkdir(parents=True, exist_ok=True)
         self._setup()
 
-    def create_run(self, run_id: str, session_id: str, input_message: str) -> RunSnapshot:
+    def create_run(self, run_id: str, session_id: str, input_messages_json: str) -> RunSnapshot:
         created_at = _utcnow()
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
@@ -50,7 +51,7 @@ class SqliteRunLedger:
                 insert into runs(
                     run_id,
                     session_id,
-                    input_message,
+                    input_messages_json,
                     status,
                     created_at,
                     updated_at,
@@ -59,7 +60,7 @@ class SqliteRunLedger:
                 )
                 values (?, ?, ?, ?, ?, ?, null, null)
                 """,
-                (run_id, session_id, input_message, "queued", created_at, created_at),
+                (run_id, session_id, input_messages_json, "queued", created_at, created_at),
             )
             self._insert_event(
                 conn,
@@ -79,7 +80,7 @@ class SqliteRunLedger:
                 select
                     run_id,
                     session_id,
-                    input_message,
+                    input_messages_json,
                     status,
                     created_at,
                     updated_at,
@@ -95,7 +96,7 @@ class SqliteRunLedger:
         return RunSnapshot(
             run_id=row[0],
             session_id=row[1],
-            input_message=row[2],
+            input_messages_json=row[2],
             status=row[3],
             created_at=row[4],
             updated_at=row[5],
@@ -341,7 +342,7 @@ class SqliteRunLedger:
                 create table if not exists runs (
                     run_id text primary key,
                     session_id text not null,
-                    input_message text not null,
+                    input_messages_json text not null,
                     status text not null,
                     created_at text not null,
                     updated_at text not null,

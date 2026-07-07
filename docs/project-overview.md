@@ -6,7 +6,7 @@
 
 - 对话短期上下文：LangGraph `checkpointer` + `thread_id=session_id`
 - 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建
-- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /files`
+- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`
 
 ## 技术栈指针
 

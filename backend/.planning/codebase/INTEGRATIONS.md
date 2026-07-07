@@ -10,13 +10,20 @@
 
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
-| `POST /runs` | `{"message": str, "session_id": str\|null}`（`RunRequest`） | `session_id` 为空生成 `uuid4().hex`；`run_id = uuid4().hex`；获取单飞锁 → 写 ledger → 起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
+| `POST /runs` | `{"session_id": str\|null, "messages": [{"role": str, "content": [{"type":"text","text":str} \| {"type":"artifact","path":str}]}...]}`（`RunRequest`） | `session_id` 为空生成 `uuid4().hex`；`run_id = uuid4().hex`；获取单飞锁 → 写 ledger → 起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；校验失败 `422`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
 | `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
-| `POST /files` | multipart `file: UploadFile` | 落到 `<artifacts_dir>/uploads/<uuid>_<cleaned_name>`；返回虚拟路径 | `200 {"file_path":"/artifacts/uploads/..."}` |
+| `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `<artifacts_dir>/uploads/<uuid>_<cleaned_name>`；只保存文件，不解析 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
 
 > 注：当前**无 SSE / `StreamingResponse` / `text/event-stream`**，事件获取靠轮询 `GET /runs/{run_id}?after_event_id=...`。
 > 注：`after_event_id` **只影响 `events[]`**；`latest_content_event` 始终返回该 run 当前最新的非 `status` 事件，没有则为 `null`。
+> 注：`POST /runs` **不再支持**旧 `{"message":"..."}` 请求体。
 > 注：当前**未注册 `CORSMiddleware`**，也没有 CORS 配置消费者。
+
+### artifact block 与上传能力
+
+- `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。
+- `HarnessRuntime.execute_run(...)` 会把 `artifact` block 转成文本提示：`Uploaded artifact: /artifacts/uploads/...`，再把归一化后的 `messages[]` 发给 Brain。
+- 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
 
 ### lifespan
 
@@ -28,8 +35,8 @@
 | 边界 | 实现 | 证据 |
 |---|---|---|
 | 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", api_key=<KEY>, base_url=<URL>, thinking={"type":"adaptive"})` → `ChatAnthropic`；`create_deep_agent(model=..., tools=..., system_prompt=..., middleware=..., backend=..., checkpointer=..., store=...)` | `harness.py` |
-| 自检 brain | `_FakeBrain` / `_FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `self_check.py` |
-| 系统 prompt | `DEFAULT_SYSTEM_PROMPT`（文档处理 agent，引导调用 `parse_document`，写入 `/memories/`、`/artifacts/`） | `harness.py` |
+| 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `backend/tests/test_support.py` |
+| 系统 prompt | `DEFAULT_SYSTEM_PROMPT`（本地 `/artifacts/` 路径优先引导 `read_file` 看图片/媒体，`parse_document` 做文档抽取） | `harness.py` |
 
 环境变量（**仅键名 / 用途，不含值**）：
 
@@ -54,15 +61,16 @@ LangGraph 调用约定（`harness.py`）：
 
 ```python
 brain.stream(
-    {"messages": [{"role": "user", "content": message}]},
+    {"messages": normalized_messages},
     config={"configurable": {"thread_id": session_id}},
     stream_mode=["messages", "custom", "values"],
     version="v2",
 )
 ```
 
-- payload 只含当前 user message（多轮记忆依赖 checkpointer/store，不在 payload 重放）
+- payload 只含当前请求里的 `messages[]`，不重放本地 session 历史
 - `thread_id = session_id`
+- `text` block 原样保留；`artifact` block 转成文本路径提示
 - `messages` / `custom` / `values` 三 channel 全部消费
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`），不只是 `chunk["data"]`
 - run event 查询维度始终是 `run_id`；`thread_id=session_id` 只用于 checkpointer 上下文，不参与 `run_events` 查询
@@ -74,6 +82,7 @@ brain.stream(
 | multipart 解析 | `python-multipart`（依赖）+ FastAPI `UploadFile = File(...)` | `api.py` |
 | 物理落点 | `<artifacts_dir>/uploads/<uuid>_<cleaned_name>`，`mkdir(parents=True, exist_ok=True)` | `api.py` |
 | 虚拟路径 | `/artifacts/uploads/<name>`（`_virtual_upload_path`） | `api.py` |
+| 返回元数据 | `name` / `mime_type` / `size` / `file_path` | `api.py` |
 | 文件名清洗 | `_clean_filename`：去路径、strip，空则 `"upload"` | `api.py` |
 | artifacts 根 | `ResourceConfig.artifacts_dir = data_dir / "artifacts"` | `resources.py` |
 

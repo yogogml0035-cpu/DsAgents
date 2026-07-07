@@ -4,18 +4,20 @@
 
 `backend/` 已切到 run-first：
 
-- 发送给 Brain 的 payload 只包含当前 user message。
+- `POST /runs` 只接收当前 `messages[]`；每条 `content` 必须是 blocks。
+- 发送给 Brain 的 payload 仍只包含当前请求里的消息数组；`artifact` block 会在进入 Brain 前转成文本路径提示。
 - `thread_id=session_id` 交给 LangGraph `checkpointer` 维护短期上下文。
 - 本地不再维护 session 事件事实源，不再回放 `context_window`，也不再发 `RemoveMessage(REMOVE_ALL_MESSAGES)`。
 
 ## 现在的主链
 
-1. `POST /runs` 创建 `run_id`，写 `resources.runs.create_run(...)`。
-2. 后台线程调用 `HarnessRuntime.execute_run(...)`。
-3. `brain.stream(..., stream_mode=["messages","custom","values"], version="v2")` 产出 raw chunk。
-4. `harness.py` 把 chunk 规范化成 `status/thinking/text_delta/tool_status/values`。
-5. `run_ledger.py` 记录快照、规范化事件和完整 raw。
-6. `GET /runs/{run_id}` 按需返回 run 快照、增量 `events[]` 和当前最新的 `latest_content_event`。
+1. `POST /upload` 可选保存一个或多个文件，返回 `/artifacts/uploads/...` 路径。
+2. `POST /runs` 创建 `run_id`，把 `messages[]` 序列化写入 `resources.runs.create_run(...)`。
+3. 后台线程调用 `HarnessRuntime.execute_run(messages, ...)`。
+4. `brain.stream(..., stream_mode=["messages","custom","values"], version="v2")` 产出 raw chunk。
+5. `harness.py` 把 chunk 规范化成 `status/thinking/text_delta/tool_status/values`。
+6. `run_ledger.py` 记录快照、规范化事件和完整 raw。
+7. `GET /runs/{run_id}` 按需返回 run 快照、增量 `events[]` 和当前最新的 `latest_content_event`。
 
 ## 模块分工
 
@@ -29,6 +31,7 @@
 ## 数据与边界
 
 - `backend/data/` 是固定数据根；`dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db` 都由运行时按需创建。
+- 上传只负责保存文件并返回 artifact 路径；常见办公文件和任意图片都可以上传。是否能被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
 - 长期文档只记录配置键和边界，不抄录本地 `.env` 的真实值。
 
 ## 已删除

@@ -1,57 +1,65 @@
 # TESTING
 
-> backend 子项目的测试与验证策略。事实来源 = `backend/self_check.py` 源码 + `backend/pyproject.toml`。
+> backend 子项目的测试与验证策略。事实来源 = `backend/tests/test_*.py` + `backend/pyproject.toml`。
 
-## 1. 主要验证手段：self_check（已确认）
+## 1. 主要验证手段：直接运行测试脚本（已确认）
 
-当前**没有**正式 pytest 套件；唯一且主要的验证入口是：
+当前**没有** pytest 套件，也没有总控自检脚本。backend 代码变更按影响范围直接运行对应脚本：
 
 ```powershell
-python backend/self_check.py
+cd backend
+python -m tests.test_api
 ```
 
-- 用 `_FakeBrainFactory` / `_FakeBrain` 替换真实 Brain（**不**打真实 LLM / 不打真实 MinerU）。
-- `main()` 在所有检查通过后打印 `self-check passed`；任一 `assert` 失败则抛异常退出非零。**这是通过判定的字符串契约。**
-- 用 `tempfile.TemporaryDirectory` 做隔离，不污染 `backend/data/`。
-- 用 `unittest.mock.patch` / `patch.dict(os.environ, ..., clear=True)` 替身网络与环境。
+- 测试脚本使用 `assert`；任一断言失败则抛异常退出非零。
+- 普通本地脚本使用 `FakeBrain` / `FakeBrainFactory`，**不**打真实 LLM，也**不**打真实 MinerU。
+- 继续使用 `tempfile.TemporaryDirectory` 做隔离，不污染 `backend/data/`。
+- 继续使用 `unittest.mock.patch` / `patch.dict(os.environ, ..., clear=True)` 替身网络与环境。
 
-### 1.1 self_check 覆盖点（已确认，对应源码 `_check_*`）
+## 2. 测试目录与模块分工（已确认）
 
-| 检查函数 | 覆盖事实 |
+`backend/tests/` 当前文件：
+
+| 文件 | 作用 |
 | --- | --- |
-| `main()` 前置断言 | `_thinking_delta`、`_find_value`、`_extract_markdown`、`default_tool_catalog().handlers[0].__name__ == "parse_document"` |
-| `_check_model_env_loading` | `DeepAgentsBrainFactory` 从 `MINIMAX_*` 构造 `ChatAnthropic`，`thinking={"type":"adaptive"}` |
-| `_check_parse_document_env_guard` | `parse_document` 缺 `MINERU_BASE_URL` 时 fail-fast（`RuntimeError`） |
-| `_check_resources_and_ledger` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；`get_latest_content_event()` 在仅 `status`、`values→status`、多非 `status`、大 payload artifact 场景下的返回；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json` |
-| `_check_tool_status_middleware` | `ToolStatusMiddleware` 成功发 `started→completed`，异常发 `started→error` 并透传异常 |
-| `_check_harness` | `execute_run` 事件序列 = `status/values/thinking/text_delta/tool_status/text_delta/values/status`；同 thread 续跑 reply 计数递增；thinking 事件 `raw["type"]=="messages"` |
-| `_check_api` | `POST /runs` 返回 `queued`；轮询到 `succeeded`；`GET /runs/{run_id}` 默认返回 `latest_content_event`；`after_event_id` 只裁剪 `events[]`、不影响 `latest_content_event`；同 `session_id` 并发返回 `409`；`/files` 上传与 `/artifacts/uploads/` 解析；失败 run `failed`+`error`；同 session 续跑成功；未知 run `404` |
-| `_check_startup_recovery` | app lifespan 启动时把遗留 `queued/running` run 标记 `failed`（`error == INTERRUPTED_RUN_ERROR`）；仅有 `status` 事件时 `latest_content_event is None`；harness 只创建一次 |
-| `_check_virtual_artifacts` | `parse_document` 虚拟路径 `/artifacts/...` 解析与 `..` 路径穿越拒绝（`ValueError`） |
+| `test_tools.py` | `parse_document` env guard、`/artifacts/...` 路径解析、`_find_value` / `_extract_markdown` / `default_tool_catalog()` |
+| `test_run_ledger.py` | `AgentResources` / `SqliteRunLedger`、`input_messages_json`、`latest_content_event`、大 payload 外溢、启动恢复 |
+| `test_harness.py` | `DeepAgentsBrainFactory` env 加载、`ToolStatusMiddleware`、`HarnessRuntime.execute_run(messages, ...)`、artifact block 归一化 |
+| `test_api.py` | `POST /upload`、`POST /runs` 新契约、`latest_content_event`、`after_event_id`、同 session 冲突、失败后续跑、启动恢复 |
+| `test_support.py` | `FakeBrain` / `FakeBrainFactory` / `StreamControl` / message helper / `wait_for_run` |
+| `test_real_image_run.py` | 手动真实 HTTP 集成脚本：上传图片 → `POST /runs` → 轮询 `GET /runs/{run_id}` 读取 `latest_content_event` / 最终 `reply`；直接运行时触达真实服务与模型，`run()` 默认跳过 |
 
-### 1.2 self_check 测试替身（已确认）
+命名约定：
 
-- `_FakeBrainFactory.create(**_)` → `_FakeBrain`：证明 Brain 可替换。
-- `_FakeBrain.stream`：断言 `len(payload["messages"])==1` 且无 `id`（证明 payload 只含当前 user message）；按 `thread_id` 维护最小 history（list）以验证失败 run 后同 thread 续跑不回滚。
-- 特殊输入：`"fail"` → `raise RuntimeError("planned failure")`；`"hold"` → 用 `_StreamControl` 阻塞，制造并发冲突窗口。
+- backend 测试脚本统一放 `backend/tests/`
+- 文件名统一 `test_*.py`
+- 可执行测试脚本保留 `run()`，并用 `if __name__ == "__main__": run()` 支持 `python -m tests.test_xxx`
+- `test_support.py` 只放共享替身/辅助函数，不作为独立验证入口
+
+## 3. 当前覆盖点（已确认）
+
+| 模块 | 覆盖事实 |
+| --- | --- |
+| `test_tools.py` | `parse_document` 缺 `MINERU_BASE_URL` 时 fail-fast；`/artifacts/...` 虚拟路径可解析回物理路径并拒绝 `..` 越权；工具基础函数可用 |
+| `test_run_ledger.py` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；run 输入字段为 `input_messages_json`；`get_latest_content_event()` 在仅 `status`、`values→status`、多非 `status`、大 payload artifact 场景下的返回；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json` |
+| `test_harness.py` | `DeepAgentsBrainFactory` 从 `MINIMAX_*` 构造 `ChatAnthropic`；`ToolStatusMiddleware` 成功发 `started→completed`，异常发 `started→error` 并透传；`execute_run(messages, ...)` 事件序列 = `status/values/thinking/text_delta/tool_status/text_delta/values/status`；同 `thread_id` 续跑 reply 计数递增；artifact block 进入 Brain 前会被归一化为文本路径提示 |
+| `test_api.py` | `POST /upload` 支持单文件、多文件、混合文件；`POST /files` 返回 `404`；`POST /runs` 只接受 `messages[] + content blocks`，旧 `message` 请求失败；上传后引用 artifact 路径的 run 可轮询到 `succeeded`；`after_event_id` 只裁剪 `events[]`，不影响 `latest_content_event`；同 `session_id` 并发返回 `409`；失败 run 后同 session 可续跑；未知 run 返回 `404`；app 启动时会清理遗留 `queued/running` run |
+
+## 4. 测试替身与策略（已确认）
+
+- `FakeBrainFactory.create(**_)` → `FakeBrain`：证明 Brain 可替换。
+- `FakeBrain.stream(...)`：断言 Brain 侧收到的是 `messages[]` 与 text blocks；按 `thread_id` 维护最小 history，以验证失败 run 后同 thread 续跑不回滚。
+- `StreamControl`：用 `"hold"` 输入制造并发冲突窗口。
 - 网络/环境替身：`patch("hands.get_stream_writer")`、`patch("tools._artifacts_root")`、`patch("tools._submit_mineru_task")`、`patch("tools._wait_for_mineru_result")`、`patch.dict(os.environ, ..., clear=True)`。
 
-## 2. 测试目录现状（已确认）
+## 5. 验证流程（按变更类型）
 
-- 当前没有 `backend/tests/` 测试源码目录。
-- **没有** `conftest.py` / `pytest.ini` / `tox.ini`（仓库根与 `backend/` 下均无）。
-- `pytest` **未**声明在 `pyproject.toml` 依赖中（dev 依赖也未声明）。
+- **仅文档变更**：`git diff --check`（检查空白/行尾错误）。
+- **代码变更**（`backend/*.py` 或 `backend/tests/*.py`）：按影响范围跑对应 `cd backend && python -m tests.test_xxx`。
+- **HTTP 行为变更**：默认已被 `backend/tests/test_api.py` 覆盖，无需手动起服务。
 
-## 3. 验证流程（按变更类型）
+## 6. 当前缺口（待补充）
 
-- **仅文档变更**：`git diff --check`（检查空白/行尾错误），无需跑 self_check。
-- **代码变更**（`backend/*.py`）：在改完后跑 `python backend/self_check.py`，必须看到结尾的 `self-check passed`。
-  - 根级 `AGENTS.md` 已把它列为 backend 代码变更的验证入口。
-- **HTTP 行为变更**：self_check 的 `_check_api` / `_check_startup_recovery` 已用 `fastapi.testclient.TestClient` 覆盖，无需手动起服务。
-
-## 4. 当前缺口（待补充）
-
-- **没有正式单元测试目录/套件**：验证完全集中在 `self_check.py` 这一个脚本。
-- **没有 CI**：仓库内未见 CI 配置；`self-check passed` 目前靠手工/agent 触发判定。
-- **没有 lint / type-check gate**：未配置 ruff / mypy / black 等门禁（pyproject.toml 无 `[tool.ruff]` 等段落）。
-- **没有真实 provider 集成测试**：self_check 全程用 `_FakeBrain` 与 patch 后的 MinerU；真实 `MINIMAX_*` / `MINERU_*` 调用没有自动化覆盖（需确认是否有手动冒烟流程）。
+- **没有 pytest / CI**：当前测试仍是 `assert` 风格脚本，不是 pytest 套件，也没有 CI 自动执行。
+- **没有 lint / type-check gate**：未配置 ruff / mypy / black 等门禁（`pyproject.toml` 无对应 `[tool.*]` 段）。
+- **普通本地脚本没有真实 provider 覆盖**：普通本地脚本不触达真实 `MINIMAX_*` / `MINERU_*`；`backend/tests/test_real_image_run.py` 可手动打本地 HTTP 服务与真实模型，MinerU 端到端仍只适合手动或 env-gated 冒烟。

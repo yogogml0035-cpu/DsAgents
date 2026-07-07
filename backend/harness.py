@@ -20,10 +20,16 @@ load_dotenv(Path(__file__).with_name(".env"))
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a document-processing agent. When a user provides a local file path "
-    "and asks to parse PDF, image, DOCX, PPTX, or XLSX files, call "
-    "`parse_document`. Persist important notes under /memories/ and write large "
-    "outputs under /artifacts/."
+    "You are a document-processing agent. When a user provides a local "
+    "/artifacts/ path, use `read_file` for images or media inspection and "
+    "`parse_document` for documents when structured extraction is needed. "
+    "Persist important notes under /memories/ and write large outputs under "
+    "/artifacts/."
+)
+
+ARTIFACT_REFERENCE_HINT = (
+    "Uploaded artifact: {path}. Use read_file for images/media or "
+    "parse_document for documents when needed."
 )
 
 
@@ -91,9 +97,10 @@ class HarnessRuntime:
         self.tools = tools
         self.brain_factory = brain_factory
 
-    def execute_run(self, message: str, session_id: str, run_id: str) -> Iterator[RunEvent]:
+    def execute_run(self, messages: Sequence[dict[str, Any]], session_id: str, run_id: str) -> Iterator[RunEvent]:
         assistant_text = ""
         text_parts: list[str] = []
+        normalized_messages = _normalize_messages(messages)
         yield self.resources.runs.emit_run_status(run_id, "running")
         try:
             brain = self.brain_factory.create(
@@ -102,7 +109,7 @@ class HarnessRuntime:
                 tools=self.tools.as_list(),
             )
             for chunk in brain.stream(
-                {"messages": [{"role": "user", "content": message}]},
+                {"messages": normalized_messages},
                 config={"configurable": {"thread_id": session_id}},
                 stream_mode=["messages", "custom", "values"],
                 version="v2",
@@ -170,6 +177,31 @@ def create_harness(resources: AgentResources) -> HarnessRuntime:
         tools=default_tool_catalog(),
         brain_factory=DeepAgentsBrainFactory(),
     )
+
+
+def _normalize_messages(messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": message["role"],
+            "content": _normalize_content_blocks(message["content"]),
+        }
+        for message in messages
+    ]
+
+
+def _normalize_content_blocks(blocks: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized_blocks: list[dict[str, str]] = []
+    for block in blocks:
+        if block["type"] == "artifact":
+            normalized_blocks.append(
+                {
+                    "type": "text",
+                    "text": ARTIFACT_REFERENCE_HINT.format(path=block["path"]),
+                }
+            )
+            continue
+        normalized_blocks.append({"type": "text", "text": block["text"]})
+    return normalized_blocks
 
 
 def _assistant_content(result: dict[str, Any]) -> Any:

@@ -5,22 +5,24 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 ## 关键约定
 
 - **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
-- **运行入口**：HTTP 用 `POST /runs`；自检用 `python backend/self_check.py`（FakeBrain，结尾打印 `self-check passed`）。程序内调用用 `AgentResources` + `create_harness(resources).execute_run(...)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（扁平顶层模块，无 `__init__.py` / `__main__.py`）。
+- **运行入口**：HTTP 用 `POST /runs` 与 `POST /upload`；程序内调用用 `AgentResources` + `create_harness(resources).execute_run(messages, session_id, run_id)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（扁平顶层模块，无 `__init__.py` / `__main__.py`）。
 - **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界（当前 `Brain` / `BrainFactory` / `Hands`）；默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory`、`ToolStatusHands`、`default_tool_catalog()`。普通工具保持 callable + `ToolCatalog`，资源 / ledger 保持具体类；不要为单实现小功能新增 Protocol/ABC。外部框架要求继承时才继承框架基类（如 `AgentMiddleware`）。
-- **验证入口**：仅文档变更至少跑 `git diff --check`；backend 代码变更跑 `python backend/self_check.py` 并看到结尾 `self-check passed`。
+- **验证入口**：仅文档变更至少跑 `git diff --check`；backend 代码变更按影响范围直接跑对应测试脚本，例如 `cd backend && python -m tests.test_api`。没有总控自检脚本，不要新增 `self_check.py` / 聚合 runner。
+- **测试目录**：backend 测试放 `backend/tests/`，脚本以 `test_*.py` 命名；每个可执行测试脚本保留 `run()`，并用 `if __name__ == "__main__": run()` 支持 `python -m tests.test_xxx` 直接执行。共享替身/工具可放 `test_support.py`，不承载独立断言入口。
+- **真实集成测试**：会触达真实 HTTP 服务、模型、MinerU 或外部网络的脚本必须显式命名/标注，并默认与普通本地脚本分开运行；不要把真实调用混进普通回归脚本。
 - **文档语言**：简体中文（保留代码标识符 / 路径 / 命令 / 配置键 / IP/端口原文）；不外泄密钥；只记录配置键与用途，不把本地 `.env` 值写进长期文档；证据不足标注"需确认"。
 
 > 核心运行时原则（能力可插拔、run 是事件源、保持运行时薄、真实错误透传、优先删减范围）与文档维护规则见 [`docs/conventions.md`](docs/conventions.md)，每次改动 backend 前请先读。
 
-## 详细文档
+## 按需文档入口
 
 - [项目总览](docs/project-overview.md) — 定位 / 技术栈 / 文档分层 / 运行时规则
 - [核心原则与维护规则](docs/conventions.md) — 全局人工约束（改动前必读）
-- [命令与入口](docs/commands.md) — 开发 / 自检 / HTTP / 导入调用
+- [命令与入口](docs/commands.md) — 开发 / 测试 / HTTP / 导入调用
 - [按任务分类的阅读顺序](docs/reading-order.md) — 任务类型 → 应先读哪些文档
 - [backend 架构与约定](docs/backend.md) — 根级视角的 backend 摘要
 
-## 系统级文档
+## 系统级文档入口
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — 系统边界、子系统职责、理解路径、稳定目录职责
 - [`INTERFACES.md`](INTERFACES.md) — 已确认接口边界、未证实跨系统关系、provider 边界、可扩展集成入口

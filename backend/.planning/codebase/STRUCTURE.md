@@ -9,18 +9,18 @@
 
 | 模块 | 职责（一两句话） |
 |------|------------------|
-| `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /files`；run 后台线程调度、同 session 并发保护、启动恢复 |
+| `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`；run 后台线程调度、同 session 并发保护、启动恢复、多文件上传落盘 |
 | `harness.py` | run 执行核心：`HarnessRuntime.execute_run` 装配 Brain/Hands/Tools 并把 `brain.stream(...)` 的 chunk 规范化为 `RunEvent`；含 `create_harness` 默认工厂与 `DeepAgentsBrainFactory` |
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
 | `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
 | `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_document`（调 MinerU 解析文档为 markdown） |
-| `self_check.py` | 端到端自检脚本：用 `_FakeBrain`/`_FakeBrainFactory` 替身跑通 resources/ledger/middleware/harness/api/启动恢复/虚拟 artifacts |
 
 已删除（本次重构）：
 
 - `session.py`（旧 session 模块）
 - `tests/test_stream_typing.py`
+- `self_check.py`（旧自检聚合入口）
 
 无 `__init__.py`、无 `__main__.py`。
 
@@ -31,7 +31,7 @@
 ```toml
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "self_check"]
+py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 ```
 
 含义：`backend/` 目录本身作为安装根，内部 `.py` 直接安装为顶层模块。因此模块内一律使用**绝对导入**：
@@ -54,7 +54,14 @@ backend/
 ├── resources.py
 ├── run_ledger.py
 ├── tools.py
-├── self_check.py
+├── tests/
+│   ├── __init__.py
+│   ├── test_api.py
+│   ├── test_harness.py
+│   ├── test_run_ledger.py
+│   ├── test_real_image_run.py
+│   ├── test_support.py
+│   └── test_tools.py
 ├── pyproject.toml          # package-dir=""  py-modules=[...]
 ├── uv.lock
 └── data/                   # 固定数据目录（ResourceConfig.data_dir，与 CWD 无关）
@@ -63,7 +70,7 @@ backend/
     ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
     │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建）
-    │   └── uploads/                # POST /files 上传落地点；首次上传时创建
+    │   └── uploads/                # POST /upload 上传落地点；首次写入时创建
     └── document_outputs/           # parse_document 默认输出目录（<stem>.md，按需创建）
 ```
 
@@ -73,12 +80,20 @@ backend/
 ## 4. 对外入口
 
 - **HTTP**（`api.py`，`app = create_app()`）：
-  - `POST /runs` —— body `{message, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
-  - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[]}`，未知 run 返回 `404`
-  - `POST /files` —— multipart 上传，返回虚拟路径 `/artifacts/uploads/<uuid>_<原名>`
-- **自检**：推荐从仓库根运行 `python backend/self_check.py`；在 `backend/` 目录内运行 `python self_check.py` 也会走同一脚本，并在通过时打印 `self-check passed`。
-- **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(message, session_id, run_id)`。
+  - `POST /upload` —— multipart `files[]`，支持一个或多个文件，返回 `{files:[{file_path,name,mime_type,size}]}`
+  - `POST /runs` —— body `{messages, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
+  - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event}`，未知 run 返回 `404`
+- **测试脚本**：按影响范围从 `backend/` 目录运行对应脚本，例如 `python -m tests.test_api`、`python -m tests.test_harness`。
+- **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`。
 
 ## 5. 测试位置
 
-当前没有 `backend/tests/` 测试源码目录。唯一的“测试”是 `self_check.py`（基于 `TestClient` + `unittest.mock` 的内置端到端自检，非 pytest 套件）。`tests/test_stream_typing.py` 已在本次重构删除。
+`backend/tests/` 是当前测试源码目录，断言分布在：
+
+- `test_tools.py`：`parse_document` env guard、`/artifacts/...` 路径解析、工具基础函数
+- `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复
+- `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化
+- `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、并发冲突、失败后续跑、启动恢复
+- `test_real_image_run.py`：手动真实图片 HTTP 集成测试
+
+当前仍**不是 pytest 套件**；没有总控 runner，回归按影响范围直接运行对应 `test_*.py` 脚本。

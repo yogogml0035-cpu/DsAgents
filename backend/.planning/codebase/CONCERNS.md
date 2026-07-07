@@ -6,19 +6,19 @@
 
 - **已确认**｜代码层已彻底去 session：`session.py` 已删除，`grep` 在 `backend/*.py`（非 `.venv`）中无 `run_session` / `sessions.db` / `session.py` 引用；`run_ledger.py` 接管原 session 职责。
 - **已清理**｜旧 session 磁盘遗留 `data/dsagents_sessions.db` 与 `data/artifacts/session-events/` 已删除；代码只引用 `dsagents_runs.db` / `dsagents_store.db` / `dsagents_checkpoints.db`（见 `resources.py:23-31`）。
-- **已确认**｜`pyproject.toml` 的 `py-modules` 已更新为 `["api","hands","harness","resources","run_ledger","tools","self_check"]`，无 `session`。
+- **已确认**｜`pyproject.toml` 的 `py-modules` 已更新为 `["api","hands","harness","resources","run_ledger","tools"]`，无 `session` / `self_check`。
 - **已确认（文档已同步）**｜`docs/backend.md` 的「已删除」节已压缩为指向 `INTERFACES.md` §1 的一句话引用；旧 session 端点的完整清单唯一权威出处为 `INTERFACES.md` §1。
-- **已复核**｜`Study/` 当前内容已按 run-first 叙事组织，不再作为旧 session 事实源风险记录。
+- **已确认**｜长期事实以当前代码和本目录文档为准；被 `.gitignore` 排除的个人研究目录不作为项目事实来源。
 
 ## 2. 安全关注点
 
 | 项 | 状态 | 证据 |
 |---|---|---|
-| `.env` 含本地凭据与服务地址 | 已确认（已缓解） | `backend/.env` 在当前工作区存在，包含 MiniMax / MinerU 等本地配置；`.gitignore` 含 `backend/.env`，`git ls-files` 未跟踪该文件。**风险**：虽然未入库，但明文配置仍会在本地备份、截图、文档复制时泄露；建议轮换历史密钥并迁移到 secret manager。 |
+| `.env` 属于私有配置文件 | 已确认（已缓解） | `.gitignore` 排除 `backend/.env`，`git ls-files` 未跟踪该文件。长期文档只记录配置键与消费者，不读取、不抄录本地值；分享工作区前仍需检查私有配置和运行时数据。 |
 | provider key 通过 `os.getenv` 直读 | 已确认 | `harness.py:53-57` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL")` 直接构造 `init_chat_model`，无校验/无脱敏日志护栏。 |
-| 文档解析服务配置为明文字符串 | 已确认 | 本地 `.env` 与 `.env.example` 都保留 `MINERU_*` 连接配置键；即使值不入库，开发文档也不应抄录这些本地内容。 |
-| `data/*.db` 含运行时数据 | 已确认（已缓解） | `backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。从 `run_ledger.py` 可直接确认 `input_message`、`reply`、`error` 与 `run_events.raw` 会入库；上传文件本体则落在 `data/artifacts/uploads/`。分享前需同时清理数据库与 artifacts。 |
-| 无鉴权 / 无用户隔离 | 已确认 | `api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/files` 全部匿名可调。 |
+| 文档解析服务配置通过环境变量传入 | 已确认 | `tools.py` 读取 `MINERU_*` 键；开发文档只记录键名与用途，不写本地服务地址或连接串。 |
+| `data/*.db` 含运行时数据 | 已确认（已缓解） | `backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。从 `run_ledger.py` 可直接确认 `input_messages_json`、`reply`、`error` 与 `run_events.raw` 会入库；上传文件本体则落在 `data/artifacts/uploads/`。分享前需同时清理数据库与 artifacts。 |
+| 无鉴权 / 无用户隔离 | 已确认 | `api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/upload` 全部匿名可调。 |
 | CORS 未实现 | 已确认 | `grep` 在 `api.py` 中无 `CORSMiddleware` / `add_middleware` —— 浏览器跨域实际不会被处理。 |
 
 ## 3. 仓库体积 / 入库风险
@@ -28,9 +28,9 @@
 
 ## 4. 测试覆盖不足
 
-- **已确认**｜当前没有 `backend/tests/` 测试源码目录；旧 `tests/test_stream_typing.py` 在 commit 8890292 被删除，孤儿 `__pycache__` 已清理。
-- **已确认**｜实际验证依赖 `self_check.py`（430 行，非 pytest，主入口 `main()`，结尾打印 `self-check passed`），用 `_FakeBrain` 替代真实模型，覆盖：env 加载、parse_document env 守卫、resources/ledger、tool status middleware、harness、API（TestClient）、startup recovery、virtual artifacts。**未覆盖**：真实 provider 调用、`parse_document` 端到端 MinerU、并发/锁竞争、超大 raw chunk 落盘。
-- **风险**：无 CI 可运行的自动化测试断言；回归靠人工跑 `python backend/self_check.py`。
+- **已确认**｜当前测试源码位于 `backend/tests/`：`test_tools.py`、`test_run_ledger.py`、`test_harness.py`、`test_api.py`、`test_real_image_run.py`，共享替身在 `test_support.py`。
+- **已确认**｜没有总控自检脚本；实际验证按影响范围直接运行 `cd backend && python -m tests.test_xxx`。普通本地脚本仍用 `FakeBrain` 替代真实模型，并 patch MinerU；覆盖：env 加载、parse_document env 守卫、resources/ledger、tool status middleware、harness、API（TestClient）、startup recovery、virtual artifacts。`test_real_image_run.py` 是手动真实 HTTP / 模型集成脚本。
+- **风险**：无 CI 可运行的自动化测试断言；回归靠人工选择并运行对应测试脚本。
 
 ## 5. 错误透传约定
 
@@ -57,12 +57,12 @@
 ## 8. 文档同步风险
 
 - **已确认**｜文档分四层需手工保持一致：根 `AGENTS.md`/`ARCHITECTURE.md`/`INTERFACES.md` → `coding_maps/SYSTEM_MAP.md` → `docs/*.md` → `backend/.planning/codebase/*`。`AGENTS.md` 明确要求"改代码后先更新 `.planning/codebase/` 再回看上层"。
-- **风险**｜`MINERU_EFFORT` 见 §9 这类配置漂移靠人工核对，无自动化校验。
+- **风险**｜`MINERU_*` 这类必需配置缺失只能在运行时 fail-fast 暴露，目前无自动化配置完整性校验。
 
-## 9. 配置漂移（已确认，高危）
+## 9. 配置完整性风险（已确认）
 
-- **已确认**｜`tools.py:45` `_required_env("MINERU_EFFORT")`，但 `backend/.env` **缺少 `MINERU_EFFORT`**（仅有 `MINERU_BASE_URL`/`MINERU_BACKEND`/`MINERU_TIMEOUT_SECONDS`）→ 一旦真实调用 `parse_document`，立即 `RuntimeError("Missing required environment variable: MINERU_EFFORT")`。`.env.example:13` 才有 `MINERU_EFFORT=high`。
-- **建议**：本地 `.env` 补 `MINERU_EFFORT`，并避免重新加入无消费者配置键。
+- **已确认**｜`tools.py` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` 都走 `_required_env(...)`；任一缺失都会在真实调用 `parse_document` 时 fail-fast。
+- **建议**：维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。
 
 ## 10. 并发 / 运行时边界
 

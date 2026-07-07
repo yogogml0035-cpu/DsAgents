@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import mimetypes
 import shutil
 import threading
 import uuid
@@ -7,11 +9,11 @@ from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from harness import HarnessRuntime, create_harness
 from resources import AgentResources, ResourceConfig
@@ -21,8 +23,30 @@ INTERRUPTED_RUN_ERROR = "执行已中断，请重试"
 
 
 class RunRequest(BaseModel):
-    message: str
+    model_config = ConfigDict(extra="forbid")
     session_id: str | None = None
+    messages: list["RunMessage"]
+
+
+class TextBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["text"]
+    text: str
+
+
+class ArtifactBlock(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["artifact"]
+    path: str
+
+
+ContentBlock = Annotated[TextBlock | ArtifactBlock, Field(discriminator="type")]
+
+
+class RunMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str
+    content: list[ContentBlock]
 
 
 def create_app(
@@ -53,18 +77,23 @@ def create_app(
     def post_run(request: RunRequest):
         session_id = request.session_id or uuid.uuid4().hex
         run_id = uuid.uuid4().hex
+        messages = [message.model_dump(mode="json") for message in request.messages]
         conflict = _acquire_session_run(app, session_id, run_id)
         if conflict is not None:
             return _conflict_response(conflict)
         try:
-            app.state.resources.runs.create_run(run_id, session_id, request.message)
+            app.state.resources.runs.create_run(
+                run_id,
+                session_id,
+                json.dumps(messages, ensure_ascii=False),
+            )
         except Exception:
             _release_session_run(app, session_id)
             raise
 
         worker = threading.Thread(
             target=_run_background,
-            args=(app, session_id, run_id, request.message),
+            args=(app, session_id, run_id, messages),
             daemon=True,
         )
         try:
@@ -90,18 +119,27 @@ def create_app(
             "latest_content_event": _run_event_body(latest_content_event) if latest_content_event else None,
         }
 
-    @app.post("/files")
-    def post_file(file: UploadFile = File(...)) -> dict[str, str]:
+    @app.post("/upload")
+    def post_upload(files: list[UploadFile] = File(...)) -> dict[str, list[dict[str, Any]]]:
+        return {"files": [_store_upload(file, config) for file in files]}
+
+    def _store_upload(file: UploadFile, resource_config: ResourceConfig) -> dict[str, Any]:
         filename = _clean_filename(file.filename)
         stored_name = f"{uuid.uuid4().hex}_{filename}"
-        target = config.artifacts_dir / "uploads" / stored_name
+        target = resource_config.artifacts_dir / "uploads" / stored_name
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with target.open("wb") as handle:
                 shutil.copyfileobj(file.file, handle)
         finally:
             file.file.close()
-        return {"file_path": _virtual_upload_path(target.name)}
+        mime_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        return {
+            "file_path": _virtual_upload_path(target.name),
+            "name": filename,
+            "mime_type": mime_type,
+            "size": target.stat().st_size,
+        }
 
     return app
 
@@ -109,9 +147,9 @@ def create_app(
 app = create_app()
 
 
-def _run_background(app: FastAPI, session_id: str, run_id: str, message: str) -> None:
+def _run_background(app: FastAPI, session_id: str, run_id: str, messages: list[dict[str, Any]]) -> None:
     try:
-        for _ in app.state.harness.execute_run(message, session_id, run_id):
+        for _ in app.state.harness.execute_run(messages, session_id, run_id):
             pass
     except Exception as exc:
         _ensure_failed_run(app, run_id, exc)
