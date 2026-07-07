@@ -22,25 +22,25 @@ backend 测试统一放在 `backend/tests/test_*.py`。按改动影响范围直�
 
 ```powershell
 cd backend
-uv run uvicorn api:app --host 0.0.0.0 --port 8000
+uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
 
 ## 调用 HTTP
 
 ```powershell
-curl -X POST http://127.0.0.1:8000/upload ^
+curl -X POST http://127.0.0.1:8500/upload ^
   -F "files=@demo.pdf" ^
   -F "files=@diagram.png"
 ```
 
 ```powershell
-curl -X POST http://127.0.0.1:8000/runs ^
+curl -X POST http://127.0.0.1:8500/runs ^
   -H "Content-Type: application/json" ^
   -d "{\"session_id\":null,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"帮我看看这个文件\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/demo.pdf\"}]}]}"
 ```
 
 ```powershell
-curl "http://127.0.0.1:8000/runs/<run_id>"
+curl "http://127.0.0.1:8500/runs/<run_id>"
 ```
 
 常见办公文件和任意图片都可以先用 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型的多模态能力。

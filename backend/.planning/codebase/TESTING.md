@@ -1,6 +1,7 @@
 # TESTING
 
 > backend 子项目的测试与验证策略。事实来源 = `backend/tests/test_*.py` + `backend/pyproject.toml`。
+> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区迁移测试）、`bc383ac`（测试端口配置）。
 
 ## 1. 主要验证手段：直接运行测试脚本（已确认）
 
@@ -27,7 +28,7 @@ python -m tests.test_api
 | `test_harness.py` | `DeepAgentsBrainFactory` env 加载、`ToolStatusMiddleware`、`HarnessRuntime.execute_run(messages, ...)`、artifact block 归一化 |
 | `test_api.py` | `POST /upload`、`POST /runs` 新契约、`latest_content_event`、`after_event_id`、同 session 冲突、失败后续跑、启动恢复 |
 | `test_support.py` | `FakeBrain` / `FakeBrainFactory` / `StreamControl` / message helper / `wait_for_run` |
-| `test_real_image_run.py` | 手动真实 HTTP 集成脚本：上传图片 → `POST /runs` → 轮询 `GET /runs/{run_id}` 读取 `latest_content_event` / 最终 `reply`；直接运行时触达真实服务与模型，`run()` 默认跳过 |
+| `test_real_image_run.py` | 手动真实 HTTP 集成脚本：上传图片 → `POST /runs` → 轮询 `GET /runs/{run_id}` 读取 `latest_content_event` / 最终 `reply`；直接运行时触达真实服务与模型，`run()` 默认跳过。默认服务地址 `DEFAULT_BASE_URL = "http://127.0.0.1:8500"`（可被 `DSAGENTS_API_BASE_URL` 覆盖），与 `scripts/start-backend.bat` 端口一致 |
 
 命名约定：
 
@@ -41,7 +42,7 @@ python -m tests.test_api
 | 模块 | 覆盖事实 |
 | --- | --- |
 | `test_tools.py` | `parse_document` 缺 `MINERU_BASE_URL` 时 fail-fast；`/artifacts/...` 虚拟路径可解析回物理路径并拒绝 `..` 越权；工具基础函数可用 |
-| `test_run_ledger.py` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；run 输入字段为 `input_messages_json`；`get_latest_content_event()` 在仅 `status`、`values→status`、多非 `status`、大 payload artifact 场景下的返回；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json` |
+| `test_run_ledger.py` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；run 输入字段为 `input_messages_json`；`get_latest_content_event()` 在仅 `status`、`values→status`、多非 `status`、大 payload artifact 场景下的返回；`fail_incomplete_runs` 启动恢复；大 payload（`max_inline_bytes=10`）外溢到 `artifacts/run-events/*.json`；时间戳迁移：旧 UTC ISO / naive UTC 文本经 `_normalize_existing_timestamps(assume_naive_utc=True)` 平移到本机时区，且对已是本机时区的文本再次迁移保持不变（幂等，对应 `normalized_again` 断言） |
 | `test_harness.py` | `DeepAgentsBrainFactory` 从 `MINIMAX_*` 构造 `ChatAnthropic`；`ToolStatusMiddleware` 成功发 `started→completed`，异常发 `started→error` 并透传；`execute_run(messages, ...)` 事件序列 = `status/values/thinking/text_delta/tool_status/text_delta/values/status`；同 `thread_id` 续跑 reply 计数递增；artifact block 进入 Brain 前会被归一化为文本路径提示 |
 | `test_api.py` | `POST /upload` 支持单文件、多文件、混合文件；`POST /files` 返回 `404`；`POST /runs` 只接受 `messages[] + content blocks`，旧 `message` 请求失败；上传后引用 artifact 路径的 run 可轮询到 `succeeded`；`after_event_id` 只裁剪 `events[]`，不影响 `latest_content_event`；同 `session_id` 并发返回 `409`；失败 run 后同 session 可续跑；未知 run 返回 `404`；app 启动时会清理遗留 `queued/running` run |
 

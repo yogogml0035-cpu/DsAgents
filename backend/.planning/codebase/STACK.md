@@ -1,7 +1,8 @@
 # STACK
 
 > 技术栈快照。所有事实均基于当前代码（`pyproject.toml` + backend 顶层模块）核对。
-> 本文件优先记录代码与仓库配置可直接证实的事实；无法从源码单独证明的运行命令会引用仓库内现有文档约定。
+> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本文件优先记录代码与仓库配置可直接证实的事实；运行命令优先以仓库内 `scripts/start-backend.bat` 与测试默认值为准。
 
 ## 1. 运行时 / 语言
 
@@ -87,4 +88,6 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 
 | 项 | 说明 |
 |---|---|
-| `uvicorn` | 仅作为依赖声明存在，`api.py` 不直接 `import uvicorn`；仓库命令文档约定从 `backend/` 目录外部执行 `uv run uvicorn api:app --host 0.0.0.0 --port 8000` |
+| `uvicorn` | 仅作为依赖声明存在，`api.py` 不直接 `import uvicorn`；由外部命令拉起 `api:app` |
+| 启动命令 | `scripts/start-backend.bat`：`cd backend` 后 `uv run uvicorn api:app --host 0.0.0.0 --port 8500` |
+| 默认端口 | `8500`（与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL = "http://127.0.0.1:8500"` 一致） |

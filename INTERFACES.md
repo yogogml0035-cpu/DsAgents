@@ -4,7 +4,7 @@
 
 ## 1. HTTP API 边界
 
-三个端点（入口模块 `api.py`，`app = create_app()`，预期 `uvicorn api:app` 拉起）。**当前无 SSE / `StreamingResponse`**，事件获取靠轮询。
+三个端点（入口模块 `api.py`，`create_app(*, resource_config=None, harness_factory=create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块级 `app = create_app()`；预期 `uvicorn api:app` 拉起，默认 `--port 8500`）。**当前无 SSE / `StreamingResponse`**，事件获取靠轮询。
 
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|

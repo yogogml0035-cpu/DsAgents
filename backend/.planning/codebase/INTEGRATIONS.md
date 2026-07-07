@@ -1,10 +1,11 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
+> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
-入口模块：`api.py`。`create_app()` 返回 `FastAPI(lifespan=lifespan)`，模块底部 `app = create_app()`，预期由 `uvicorn api:app` 拉起（uvicorn 作为依赖声明存在，但 `api.py` 未直接 import）。
+入口模块：`api.py`。`create_app(*, resource_config: ResourceConfig | None = None, harness_factory: Callable[[AgentResources], HarnessRuntime] = create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块底部 `app = create_app()`，预期由 `uvicorn api:app` 拉起（uvicorn 作为依赖声明存在，但 `api.py` 未直接 import；测试用 `harness_factory` 注入 `FakeBrainFactory`）。
 
 ### 端点契约
 

@@ -54,6 +54,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 - **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。
 - **`uv` 包管理**：安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
 - **`.env` 加载**：由 `harness.py` 与 `tools.py` 在导入时 `load_dotenv(Path(__file__).with_name(".env"))`（删除 `session.py` 后保留配置加载点）。
+- **run ledger 时间戳**：统一写本机时区秒级文本 `YYYY-MM-DD HH:mm:ss`；首次进入 `AgentResources` 时由 `_migrate`（`pragma user_version`）把旧 UTC / naive UTC 文本幂等平移到本机时区（commit `c8cc563`）。
 
 ## 7. 当前风险（系统级）
 

@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新已核对最近相关提交：`5329588`（`CompositeBackend` 路由收窄）、`b6bc3f3`（`latest_content_event`）、`3055899`（Protocol 文档同步）。
+> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）、`5329588`（`CompositeBackend` 路由收窄）、`b6bc3f3`（`latest_content_event`）。
 
 ## 1. 架构定位
 
@@ -62,8 +62,9 @@ Harness 层 (harness.py execute_run)
      )
   -> chunk[type=messages] => thinking / text_delta
   -> chunk[type=custom]   => tool_status
-  -> chunk[type=values]   => values（取末位 assistant 文本作 reply）
-  -> 结束 => status=succeeded(reply=...)  /  异常 => status=failed(error=...)
+  -> chunk[type=values]   => values（取末位 assistant 文本作 reply 候选）
+  -> 结束 => status=succeeded(reply=assistant_text 或拼接 text_parts)
+                                              /  异常 => status=failed(error=...)
 
 能力层
   Brain / Hands（Protocol）+ Tools（callable catalog）
@@ -106,6 +107,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 | 抽象 | 定义处 | 作用 |
 |------|--------|------|
 | `AgentResources` | `resources.py` | 资源装配器（context manager）：run ledger + store + checkpointer + CompositeBackend；`ResourceConfig` 给出固定路径 |
+| `create_app(*, resource_config, harness_factory)` | `api.py` | FastAPI 工厂：在 lifespan 里装配 `AgentResources`、`fail_incomplete_runs`、harness、单飞锁注册表；模块级 `app = create_app()` |
 | `create_harness(resources)` | `harness.py` | 默认 Harness 工厂：`HarnessRuntime(resources, ToolStatusHands(), default_tool_catalog(), DeepAgentsBrainFactory())` |
 | `HarnessRuntime.execute_run(messages, session_id, run_id)` | `harness.py` | run 执行核心，产出 `Iterator[RunEvent]` |
 | `Brain` / `BrainFactory` | `harness.py` | 模型/Agent 抽象（Protocol） |
@@ -132,6 +134,15 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 - `run_events(event_id, run_id, type, created_at, payload_json, payload_artifact_path, raw_json, raw_artifact_path)` + `idx_run_events_run_order(run_id, event_id)`
 - run ledger 时间字段统一写成本机时区秒级文本 `YYYY-MM-DD HH:mm:ss`；首次迁移会把旧的 UTC ISO 8601/UTC 秒级文本归一化到本机时区，之后靠 `PRAGMA user_version` 避免重复平移。
 
+### 时间戳迁移机制（`c8cc563`，已确认）
+
+`SqliteRunLedger._setup` 末尾调用 `_migrate(conn)`：
+
+- 读 `pragma user_version`；当前 `< 1` 时执行迁移，迁移后写 `pragma user_version = RUN_LEDGER_SCHEMA_VERSION`（`RUN_LEDGER_SCHEMA_VERSION = 1`）。
+- 迁移体调用 `_normalize_existing_timestamps(conn, assume_naive_utc=True)`，遍历 `runs.created_at/updated_at` 与 `run_events.created_at`，逐行用 `_normalize_timestamp_text` 重写。
+- `_normalize_timestamp_text`：先用 `datetime.fromisoformat(value.replace("Z","+00:00"))` 解析；解析失败原样返回；无时区信息时按 `assume_naive_utc=True` 视作 UTC（`replace(tzinfo=timezone.utc)`），再 `astimezone()` 转本机时区并 `strftime(TIMESTAMP_FORMAT)`。
+- 迁移幂等：对本机时区文本再次解析会带上本地 tz，再 `astimezone()` 回到同一字符串（`test_run_ledger.py` 的 `normalized_again` 断言验证）。
+
 大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`（阈值 `max_inline_bytes=262_144`，可配置）。
 
 ## 8. 运行约束（已确认）
@@ -149,7 +160,7 @@ status(queued) -> status(running) -> values/thinking/text_delta/tool_status/... 
 - `harness.py`（MiniMax 模型相关：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`）
 - `tools.py`（MinerU 相关：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS`）
 
-这样 `session.py` 删除后，相关环境变量仍在正常调用路径被读取。
+这两个加载点覆盖了全部需要环境变量的调用路径。
 
 ## 10. 这里没有（已确认的范围边界）
 

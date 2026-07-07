@@ -2,6 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
+> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 系统目的和仓库形态
 
@@ -82,6 +83,8 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 完整契约（请求/响应 JSON 形状、错误码）见 [`INTERFACES.md`](../INTERFACES.md) §1 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
 `after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
 
+`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。
+
 ### 4.2 LLM provider 边界
 
 - 生产 Brain 强耦合 Anthropic 客户端协议与 `thinking={"type":"adaptive"}`（`init_chat_model("anthropic:...")`）；环境变量 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 由 `harness.py` 在导入时 `load_dotenv`。
@@ -89,7 +92,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 ### 4.3 持久化边界
 
-`backend/data/` 固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射、表结构与 `CompositeBackend` 路由规则详见 [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §7。
+`backend/data/` 固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射、表结构与 `CompositeBackend` 路由规则详见 [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §7。run ledger 时间字段统一为本机时区秒级文本（`YYYY-MM-DD HH:mm:ss`），并通过 `pragma user_version` + `_migrate` 做一次性幂等迁移（`assume_naive_utc=True`），把旧 UTC / naive UTC 文本平移到本机时区（commit `c8cc563`，已在 `test_run_ledger.py` 验证幂等）。
 
 ### 4.4 文件 / artifacts 边界
 

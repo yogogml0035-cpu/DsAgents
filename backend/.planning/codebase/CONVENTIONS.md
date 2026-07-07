@@ -31,7 +31,7 @@
 | HTTP 上传文件 | `POST /upload`（multipart 字段名 `files`，支持 1 个或多个文件） |
 | HTTP 提交 run | `POST /runs`（body `{session_id?, messages[]}`），轮询 `GET /runs/{run_id}` |
 | 测试脚本 / 主要验证 | 按影响范围运行 `cd backend && python -m tests.test_xxx` |
-| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8000` |
+| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `scripts/start-backend.bat`、`tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致） |
 | 程序内调用 | `AgentResources(config)` + `create_harness(resources).execute_run(messages, session_id, run_id)` |
 
 - **没有** `from session import run_session`（已确认 grep 无此导入，且无 `session.py`）。Session 概念已移除，改由 `thread_id=session_id` + run ledger 承载。
