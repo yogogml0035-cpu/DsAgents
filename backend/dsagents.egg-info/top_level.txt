@@ -1,7 +1,0 @@
-api
-hands
-harness
-resources
-run_ledger
-self_check
-tools
