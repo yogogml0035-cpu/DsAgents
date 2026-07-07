@@ -46,7 +46,7 @@ python backend/self_check.py
 
 - **仅文档变更**：`git diff --check`（检查空白/行尾错误），无需跑 self_check。
 - **代码变更**（`backend/*.py`）：在改完后跑 `python backend/self_check.py`，必须看到结尾的 `self-check passed`。
-  - 需确认：仓库根 AGENTS.md 未明确写出此验证流程文本，本条按"代码变更必须自检通过"的常识与 self_check 设计意图给出；若 CI/PR 规则有更细要求，以根级 AGENTS.md / 上游规则为准。
+  - 根级 `AGENTS.md` 已把它列为 backend 代码变更的验证入口。
 - **HTTP 行为变更**：self_check 的 `_check_api` / `_check_startup_recovery` 已用 `fastapi.testclient.TestClient` 覆盖，无需手动起服务。
 
 ## 4. 当前缺口（待补充）

@@ -46,7 +46,7 @@ HarnessRuntime.execute_run(...)
   ├─ 成功 → emit status=succeeded(reply=...)
   └─ 异常 → emit status=failed(error=...)（真实错误透传，不吞）
 
-GET /runs/{run_id}?after_event_id=N  → 读 runs 快照 + 增量 run_events
+GET /runs/{run_id}?after_event_id=N  → 读 runs 快照 + 增量 run_events + latest_content_event
 POST /files                          → /artifacts/uploads/<uuid>_<filename>
 ```
 
@@ -71,10 +71,11 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 | 方法 / 路径 | 行为 | 返回 |
 |---|---|---|
 | `POST /runs` | body `{message, session_id?}`；同 session 已有运行中 run → `409` | `200 {run_id, session_id, status:"queued"}` |
-| `GET /runs/{run_id}` | query `after_event_id?`；未知 run → `404` | `200 {run, events[]}` |
+| `GET /runs/{run_id}` | query `after_event_id?`；未知 run → `404` | `200 {run, events[], latest_content_event}` |
 | `POST /files` | multipart `file`；落到 `data/artifacts/uploads/` | `200 {file_path:"/artifacts/uploads/..."}` |
 
 完整契约（请求/响应 JSON 形状、错误码）见 [`INTERFACES.md`](../INTERFACES.md) §1 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
+`after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
 
 ### 4.2 LLM provider 边界
 

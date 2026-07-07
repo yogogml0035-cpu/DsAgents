@@ -13,4 +13,4 @@
 
 ## 当前里程碑
 
-最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / run-first 执行核心 / 薄 HTTP run/upload 适配层）。HTTP 层为 **run 中心模型**：`POST /runs` 创建 `run_id`、写 `runs`/`run_events`，并提供 `GET /runs/{run_id}` 轮询（支持 `after_event_id` 增量）与 `POST /files` 上传。当前**无 SSE**，事件靠轮询。旧 session 模块/表/端点已在 commit `8890292` 移除。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md`。
+最小可运行 DeepAgents 解析演示已交付（通用文档解析工具 / DeepAgents 工厂 / CompositeBackend / run-first 执行核心 / 薄 HTTP run/upload 适配层）。HTTP 层为 **run 中心模型**：`POST /runs` 创建 `run_id`、写 `runs`/`run_events`，并提供 `GET /runs/{run_id}` 轮询（支持 `after_event_id` 增量，返回 `latest_content_event`）与 `POST /files` 上传。当前**无 SSE**，事件靠轮询。旧 session 模块/表/端点已在 commit `8890292` 移除。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md`。

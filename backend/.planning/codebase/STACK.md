@@ -1,7 +1,7 @@
 # STACK
 
 > 技术栈快照。所有事实均基于当前代码（`pyproject.toml` + backend 顶层模块）核对。
-> 标注「需确认」表示存在但代码层无引用、用途待核实。
+> 本文件优先记录代码与仓库配置可直接证实的事实；无法从源码单独证明的运行命令会引用仓库内现有文档约定。
 
 ## 1. 运行时 / 语言
 
@@ -82,8 +82,8 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools", "se
 | LangGraph 流 | classic `stream(..., version="v2")`，`stream_mode=["messages","custom","values"]` |
 | 无 | Redis / DB 锁 / 消息队列 / worker 恢复器（仅启动时 `fail_incomplete_runs` 把遗留 `queued/running` 标 `failed`） |
 
-## 8. 需确认（存在但不由代码直接 import）
+## 8. 运行命令说明（代码外约定）
 
-| 项 | 状态 |
+| 项 | 说明 |
 |---|---|
-| `uvicorn` | 仅作为依赖声明存在，`api.py` 未 `import uvicorn`，运行方式需确认（外部 `uvicorn api:app` 命令） |
+| `uvicorn` | 仅作为依赖声明存在，`api.py` 不直接 `import uvicorn`；仓库命令文档约定从 `backend/` 目录外部执行 `uv run uvicorn api:app --host 0.0.0.0 --port 8000` |

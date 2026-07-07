@@ -59,12 +59,12 @@ backend/
 ├── uv.lock
 └── data/                   # 固定数据目录（ResourceConfig.data_dir，与 CWD 无关）
     ├── dsagents_runs.db            # run ledger；首次创建 run/进入 `AgentResources` 时按需生成
-    ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成；当前工作区已存在）
-    ├── dsagents_store.db           # LangGraph store（按需生成；当前工作区已存在）
+    ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成）
+    ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
-    │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建；当前工作区已存在）
+    │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建）
     │   └── uploads/                # POST /files 上传落地点；首次上传时创建
-    └── document_outputs/           # parse_document 默认输出目录（<stem>.md，按需创建；当前工作区已存在）
+    └── document_outputs/           # parse_document 默认输出目录（<stem>.md，按需创建）
 ```
 
 > 数据目录路径由 `ResourceConfig`（`resources.py`）决定，固定指向 `backend/data/`，不受进程 CWD 影响。
@@ -76,7 +76,7 @@ backend/
   - `POST /runs` —— body `{message, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
   - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[]}`，未知 run 返回 `404`
   - `POST /files` —— multipart 上传，返回虚拟路径 `/artifacts/uploads/<uuid>_<原名>`
-- **自检**：`python self_check.py`（在 `backend/` 内运行），通过 `_FakeBrain` 跑通全链路并打印 `self-check passed`。
+- **自检**：推荐从仓库根运行 `python backend/self_check.py`；在 `backend/` 目录内运行 `python self_check.py` 也会走同一脚本，并在通过时打印 `self-check passed`。
 - **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(message, session_id, run_id)`。
 
 ## 5. 测试位置

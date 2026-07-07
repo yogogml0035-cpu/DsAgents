@@ -15,6 +15,7 @@
 3. `brain.stream(..., stream_mode=["messages","custom","values"], version="v2")` 产出 raw chunk。
 4. `harness.py` 把 chunk 规范化成 `status/thinking/text_delta/tool_status/values`。
 5. `run_ledger.py` 记录快照、规范化事件和完整 raw。
+6. `GET /runs/{run_id}` 按需返回 run 快照、增量 `events[]` 和当前最新的 `latest_content_event`。
 
 ## 模块分工
 

@@ -17,7 +17,7 @@
 | `.env` 含本地凭据与服务地址 | 已确认（已缓解） | `backend/.env` 在当前工作区存在，包含 MiniMax / MinerU 等本地配置；`.gitignore` 含 `backend/.env`，`git ls-files` 未跟踪该文件。**风险**：虽然未入库，但明文配置仍会在本地备份、截图、文档复制时泄露；建议轮换历史密钥并迁移到 secret manager。 |
 | provider key 通过 `os.getenv` 直读 | 已确认 | `harness.py:53-57` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL")` 直接构造 `init_chat_model`，无校验/无脱敏日志护栏。 |
 | 文档解析服务配置为明文字符串 | 已确认 | 本地 `.env` 与 `.env.example` 都保留 `MINERU_*` 连接配置键；即使值不入库，开发文档也不应抄录这些本地内容。 |
-| `data/*.db` 含运行时数据 | 已确认（已缓解） | `backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。**需确认**：`.db` 内是否含用户上传内容/模型回复（`input_message`、`reply`、raw chunk 均入库），若分享需先清理。 |
+| `data/*.db` 含运行时数据 | 已确认（已缓解） | `backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。从 `run_ledger.py` 可直接确认 `input_message`、`reply`、`error` 与 `run_events.raw` 会入库；上传文件本体则落在 `data/artifacts/uploads/`。分享前需同时清理数据库与 artifacts。 |
 | 无鉴权 / 无用户隔离 | 已确认 | `api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/files` 全部匿名可调。 |
 | CORS 未实现 | 已确认 | `grep` 在 `api.py` 中无 `CORSMiddleware` / `add_middleware` —— 浏览器跨域实际不会被处理。 |
 
