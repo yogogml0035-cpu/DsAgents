@@ -22,14 +22,14 @@ load_dotenv(Path(__file__).with_name(".env"))
 DEFAULT_SYSTEM_PROMPT = (
     "You are a document-processing agent. When a user provides a local "
     "/artifacts/ path, use `read_file` for images or media inspection and "
-    "`parse_document` for documents when structured extraction is needed. "
+    "`parse_documents` for documents when structured extraction is needed. "
     "Persist important notes under /memories/ and write large outputs under "
     "/artifacts/."
 )
 
 ARTIFACT_REFERENCE_HINT = (
     "Uploaded artifact: {path}. Use read_file for images/media or "
-    "parse_document for documents when needed."
+    "parse_documents for documents when needed."
 )
 
 

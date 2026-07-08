@@ -65,7 +65,7 @@ GET /runs/{run_id}?after_event_id=N  → 读 runs 快照 + 增量 run_events + l
 | 边界 | 用途 | 集成方式 | 证据 |
 |------|------|----------|------|
 | Anthropic 兼容（生产） | LLM | `DeepAgentsBrainFactory` 用 `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`，注入 `create_deep_agent(...)`；实际端点可指向 MiniMax | `harness.py` |
-| MinerU（内网 HTTP） | 文档解析（`parse_document` 工具） | `tools.py` 用 `requests` 调 `POST {MINERU_BASE_URL}/tasks`、轮询 `GET /tasks/{id}`、`GET /tasks/{id}/result` | `tools.py` |
+| MinerU（内网 HTTP） | 文档解析（`parse_documents` 工具） | `tools.py` 用 `requests` 一次 `POST {MINERU_BASE_URL}/tasks` 提交多个文件、轮询 `GET /tasks/{id}`、`GET /tasks/{id}/result` | `tools.py` |
 | LangGraph savers | checkpointer / store 持久化 | `SqliteSaver` / `SqliteStore`（本地 SQLite） | `resources.py` |
 
 provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2/§5/§6 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md) §5。
@@ -99,8 +99,8 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 - 上传：`POST /upload` → `data/artifacts/uploads/<uuid>_<cleaned_name>`，返回虚拟路径 `/artifacts/uploads/...` 与元数据数组。
 - 工具层 `tools._resolve_document_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权。
-- `parse_document` 默认输出到 `data/document_outputs/<stem>.md`。
-- `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_document` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
+- `parse_documents` 默认把成功结果写到 `data/artifacts/downloads/<artifact-stem>_<YYYYMMDDHHMMSS>.md`。
+- `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
 
 ### 4.5 鉴权 / 跨域边界（已确认缺失）
 
@@ -137,7 +137,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md)（每条证据见该文档）。改动涉及以下面时按提示核对：
 
-- **配置完整性**：`parse_document` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 必需键 fail-fast；`MINERU_EFFORT` 可留空；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
+- **配置完整性**：`parse_documents` 在存在可提交文件时对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 必需键 fail-fast；`MINERU_EFFORT` 可留空；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
 - **配置文档边界**：长期文档只保留配置键、消费者与归属规则，不抄录本地 `.env` 的真实值、连接串或服务地址。
 - **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。
 - **私有配置**：`backend/.env` 被 `.gitignore` 排除且不应进入长期文档；provider key 经 `os.getenv` 直读，无统一脱敏或 secret manager 封装。

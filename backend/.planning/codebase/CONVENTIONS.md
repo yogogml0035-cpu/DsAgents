@@ -51,7 +51,7 @@
   - `HarnessRuntime.execute_run`：捕获 Brain 异常 → 发 `failed` run status（带 `error=_error_text(exc)` 与 `raw={..., "error": repr(exc)}`），不掩盖。
   - `api._run_background`：未捕获异常 → `_ensure_failed_run` 把 run 标记 `failed` 并写 `repr(exc)`。
 - `_error_text(exc)` = `str(exc)` 去空白，为空则回退到异常类名。
-- fail-fast 模式：`parse_document` 在缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError("Missing required environment variable: ...")`；`MINERU_EFFORT` 可留空（测试脚本显式断言此行为）。
+- fail-fast 模式：`parse_documents` 在存在可提交文件且缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError("Missing required environment variable: ...")`；`MINERU_EFFORT` 可留空（测试脚本显式断言此行为）。
 - run 状态非法值：`SqliteRunLedger.emit_run_status` 对非 `RUN_STATUSES` 抛 `ValueError`。
 
 ## 6. run-first 架构（已确认）

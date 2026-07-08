@@ -25,7 +25,7 @@
 
 - `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。
 - `HarnessRuntime.execute_run(...)` 会把 `artifact` block 转成文本提示：`Uploaded artifact: /artifacts/uploads/...`，再把归一化后的 `messages[]` 发给 Brain。
-- 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
+- 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 
 ### lifespan
 
@@ -38,7 +38,7 @@
 |---|---|---|
 | 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", api_key=<KEY>, base_url=<URL>, thinking={"type":"adaptive"})` → `ChatAnthropic`；`create_deep_agent(model=..., tools=..., system_prompt=..., middleware=..., backend=..., checkpointer=..., store=...)` | `harness.py` |
 | 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `backend/tests/test_support.py` |
-| 系统 prompt | `DEFAULT_SYSTEM_PROMPT`（本地 `/artifacts/` 路径优先引导 `read_file` 看图片/媒体，`parse_document` 做文档抽取） | `harness.py` |
+| 系统 prompt | `DEFAULT_SYSTEM_PROMPT`（本地 `/artifacts/` 路径优先引导 `read_file` 看图片/媒体，`parse_documents` 做文档抽取） | `harness.py` |
 
 环境变量（**仅键名 / 用途，不含值**）：
 
@@ -125,8 +125,8 @@ brain.stream(
 | 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 30 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
 | 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
 
-工具 `parse_document`：AI 侧仍只看到一个 `parse_document(file_path, output_path=None)` 工具；工具内部完成提交任务、轮询状态、拉取结果并写 markdown 到 `data/document_outputs/<stem>.md`（或指定 `output_path`）。成功返回 JSON（`task_id/source/output_path/markdown_bytes/status_url/result_url`）。
+工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果，并把成功项写到 `data/artifacts/downloads/<artifact-stem>_<YYYYMMDDHHMMSS>.md`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
 
-`parse_document` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附 `task_id/file_path/output_path/status_url/result_url/queued_ahead`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
+`parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `output_paths` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 
-`default_tool_catalog()` 当前只注册一个工具：`parse_document`。
+`default_tool_catalog()` 当前只注册一个工具：`parse_documents`。

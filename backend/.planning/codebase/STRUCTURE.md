@@ -14,7 +14,7 @@
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
 | `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
-| `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_document`（调 MinerU 解析文档为 markdown） |
+| `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_documents`（一次调 MinerU 批量解析文档为 markdown） |
 
 `backend/dsagents.egg-info/` 当前仍被 git 跟踪，但它是 setuptools 生成元数据，不是运行入口；修改依赖或 `py-modules` 时容易出现机械 churn。
 
@@ -62,6 +62,7 @@ backend/
 │   ├── test_harness.py
 │   ├── test_run_ledger.py
 │   ├── test_real_image_run.py
+│   ├── test_real_multi_pdf_run.py
 │   ├── test_support.py
 │   └── test_tools.py
 ├── pyproject.toml          # package-dir=""  py-modules=[...]
@@ -71,9 +72,9 @@ backend/
     ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成）
     ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
+    │   ├── downloads/              # parse_documents 输出目录（<artifact-stem>_<timestamp>.md，按需创建）
     │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建）
     │   └── uploads/                # POST /upload 上传落地点；首次写入时创建
-    └── document_outputs/           # parse_document 默认输出目录（<stem>.md，按需创建）
 ```
 
 > 数据目录路径由 `ResourceConfig`（`resources.py`）决定，固定指向 `backend/data/`，不受进程 CWD 影响。
@@ -93,7 +94,7 @@ backend/
 
 `backend/tests/` 是当前测试源码目录，断言分布在：
 
-- `test_tools.py`：`parse_document` env guard、`/artifacts/...` 路径解析、工具基础函数
+- `test_tools.py`：`parse_documents` env guard、`/artifacts/...` 路径解析、批量提交/部分失败/链路失败
 - `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复
 - `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化、`assistant_message` 的最终 `thinking` 载荷
 - `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复

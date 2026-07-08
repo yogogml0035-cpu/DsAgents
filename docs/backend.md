@@ -26,12 +26,12 @@
 - `hands.py`：最小 `ToolStatusMiddleware`
 - `resources.py`：run ledger + checkpointer + store + backend
 - `api.py`：薄 HTTP 适配
-- `tools.py`：`parse_document`
+- `tools.py`：`parse_documents`
 
 ## 数据与边界
 
 - `backend/data/` 是固定数据根；`dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db` 都由运行时按需创建。
-- 上传只负责保存文件并返回 artifact 路径；常见办公文件和任意图片都可以上传。是否能被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
+- 上传只负责保存文件并返回 artifact 路径；常见办公文件和任意图片都可以上传。是否能被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 - 长期文档只记录配置键和边界，不抄录本地 `.env` 的真实值。
 
 ## 已删除

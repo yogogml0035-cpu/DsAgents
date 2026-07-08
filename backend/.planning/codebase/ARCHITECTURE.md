@@ -9,7 +9,7 @@
 
 - **Brain 可插拔**：`Brain` 是 `Protocol`（`harness.py`），任何实现了 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic）模型。
 - **执行器（Hands）可插拔**：`Hands` 是 `Protocol`，`Hands.middleware()` 返回一组 `AgentMiddleware`；默认 `ToolStatusHands` 只挂 `ToolStatusMiddleware`（发 `tool_status` custom event）。
-- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前只含 `parse_document`。
+- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前只含 `parse_documents`。
 - 模型 / 后端存储 / 持久化通道都被收口在 `AgentResources` 中，由调用方注入。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。

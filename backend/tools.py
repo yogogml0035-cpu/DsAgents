@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import mimetypes
 import os
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from urllib.parse import urljoin
 
 import requests
@@ -29,83 +29,123 @@ class ToolCatalog:
         return list(self.handlers)
 
 
-def parse_document(
-    file_path: str,
-    output_path: str | None = None,
-) -> str:
-    """Parse a local document and write the returned markdown to a local file."""
-    source = _resolve_document_path(file_path)
-    if not source.is_file():
-        raise FileNotFoundError(f"File not found: {source}")
+def parse_documents(file_paths: list[str]) -> dict[str, Any]:
+    """Parse one or more local documents and write markdown under /artifacts/downloads/."""
+    if not file_paths:
+        raise ValueError("file_paths must not be empty")
 
-    target = _resolve_document_path(output_path) if output_path else _default_output_path(source)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    batch_timestamp = time.strftime("%Y%m%d%H%M%S")
+    writer = _stream_writer()
+    valid_sources: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+
+    for raw_path in file_paths:
+        try:
+            source = _resolve_document_path(raw_path)
+            if not source.is_file():
+                raise FileNotFoundError(f"File not found: {source}")
+            output_path = _default_output_path(source, batch_timestamp)
+            valid_sources.append(
+                {
+                    "file_path": raw_path,
+                    "source": source,
+                    "output_path": output_path,
+                    "target": _resolve_document_path(output_path),
+                }
+            )
+        except Exception as exc:
+            failed.append({"file_path": raw_path, "error": _error_text(exc)})
+
+    output_paths = [item["output_path"] for item in valid_sources]
+    if not valid_sources:
+        _emit_parse_documents_status(
+            writer,
+            status="completed",
+            task_id=None,
+            file_paths=file_paths,
+            output_paths=[],
+            succeeded_count=0,
+            failed_count=len(failed),
+        )
+        return {
+            "task_id": None,
+            "status_url": None,
+            "result_url": None,
+            "succeeded": [],
+            "failed": failed,
+        }
+
+    for item in valid_sources:
+        item["target"].parent.mkdir(parents=True, exist_ok=True)
 
     base_url = _required_env("MINERU_BASE_URL")
     backend = _required_env("MINERU_BACKEND")
     effort = os.getenv("MINERU_EFFORT") or ""
     timeout_seconds = int(_required_env("MINERU_TIMEOUT_SECONDS"))
-    writer = _stream_writer()
 
     task = _submit_mineru_task(
-        source,
+        [item["source"] for item in valid_sources],
         base_url=base_url,
         backend=backend,
         effort=effort,
         timeout_seconds=timeout_seconds,
     )
-    _emit_parse_document_status(
+    _emit_parse_documents_status(
         writer,
         status="submitted",
-        task=task,
-        file_path=str(source),
-        output_path=str(target),
+        task_id=task["task_id"],
+        file_paths=file_paths,
+        output_paths=output_paths,
+        succeeded_count=0,
+        failed_count=len(failed),
     )
-    status_payload = _wait_for_mineru_completion(
+    _wait_for_mineru_completion(
         task,
         timeout_seconds=timeout_seconds,
-        file_path=str(source),
-        output_path=str(target),
+        file_paths=file_paths,
+        output_paths=output_paths,
         writer=writer,
+        pre_failed_count=len(failed),
+        valid_count=len(valid_sources),
     )
+
     try:
-        markdown = _fetch_mineru_markdown(task["result_url"], timeout_seconds=timeout_seconds)
-        target.write_text(markdown, encoding="utf-8")
+        result_payload = _fetch_mineru_result(task["result_url"], timeout_seconds=timeout_seconds)
+        succeeded, item_failures = _collect_batch_results(result_payload, valid_sources)
     except Exception as exc:
-        _emit_parse_document_status(
+        _emit_parse_documents_status(
             writer,
             status="failed",
-            task=task,
-            file_path=str(source),
-            output_path=str(target),
-            queued_ahead=_queued_ahead(status_payload),
-            error=str(exc).strip() or exc.__class__.__name__,
+            task_id=task["task_id"],
+            file_paths=file_paths,
+            output_paths=output_paths,
+            succeeded_count=0,
+            failed_count=len(failed) + len(valid_sources),
+            error=_error_text(exc),
         )
         raise
-    _emit_parse_document_status(
+
+    failed.extend(item_failures)
+    _emit_parse_documents_status(
         writer,
         status="completed",
-        task=task,
-        file_path=str(source),
-        output_path=str(target),
-        queued_ahead=_queued_ahead(status_payload),
+        task_id=task["task_id"],
+        file_paths=file_paths,
+        output_paths=[item["output_path"] for item in succeeded],
+        succeeded_count=len(succeeded),
+        failed_count=len(failed),
     )
-
-    return json.dumps(
-        {
-            "task_id": task["task_id"],
-            "source": str(source),
-            "output_path": str(target),
-            "markdown_bytes": len(markdown.encode("utf-8")),
-            "status_url": task["status_url"],
-            "result_url": task["result_url"],
-        },
-        ensure_ascii=False,
-    )
+    return {
+        "task_id": task["task_id"],
+        "status_url": task["status_url"],
+        "result_url": task["result_url"],
+        "succeeded": succeeded,
+        "failed": failed,
+    }
 
 
-def _default_output_path(source: Path) -> Path:
-    return Path(__file__).resolve().parent / "data" / "document_outputs" / f"{source.stem}.md"
+def _default_output_path(source: Path, batch_timestamp: str) -> str:
+    return f"/artifacts/downloads/{source.stem}_{batch_timestamp}.md"
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:
@@ -132,18 +172,22 @@ def _required_env(name: str) -> str:
 
 
 def _submit_mineru_task(
-    source: Path,
+    sources: Sequence[Path],
     *,
     base_url: str,
     backend: str,
     effort: str,
     timeout_seconds: int,
 ) -> dict[str, str]:
-    mime = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
-    with source.open("rb") as handle:
+    with ExitStack() as stack:
+        files = []
+        for source in sources:
+            mime = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+            handle = stack.enter_context(source.open("rb"))
+            files.append(("files", (source.name, handle, mime)))
         response = requests.post(
             f"{base_url}/tasks",
-            files=[("files", (source.name, handle, mime))],
+            files=files,
             data={
                 "backend": backend,
                 "effort": effort,
@@ -175,11 +219,13 @@ def _wait_for_mineru_completion(
     task: dict[str, str],
     *,
     timeout_seconds: int,
-    file_path: str,
-    output_path: str,
+    file_paths: list[str],
+    output_paths: list[str],
     writer: Callable[[Any], None] | None,
+    pre_failed_count: int,
+    valid_count: int,
     poll_interval_seconds: float = MINERU_POLL_INTERVAL_SECONDS,
-) -> dict[str, Any]:
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     last_status: dict[str, Any] | None = None
     while time.monotonic() < deadline:
@@ -194,15 +240,16 @@ def _wait_for_mineru_completion(
             raise RuntimeError(f"MinerU task status response did not include status: {payload!r}")
         normalized_status = status.lower()
         if normalized_status == "completed":
-            return payload
+            return
         if normalized_status in {"pending", "processing"}:
-            _emit_parse_document_status(
+            _emit_parse_documents_status(
                 writer,
                 status=normalized_status,
-                task=task,
-                file_path=file_path,
-                output_path=output_path,
-                queued_ahead=_queued_ahead(payload),
+                task_id=task["task_id"],
+                file_paths=file_paths,
+                output_paths=output_paths,
+                succeeded_count=0,
+                failed_count=pre_failed_count,
             )
             time_left = deadline - time.monotonic()
             if time_left > 0:
@@ -212,33 +259,35 @@ def _wait_for_mineru_completion(
             error_text = _mineru_error_text(payload)
         else:
             error_text = f"Unexpected MinerU task status: {status}. Payload: {payload!r}"
-        _emit_parse_document_status(
+        _emit_parse_documents_status(
             writer,
             status="failed",
-            task=task,
-            file_path=file_path,
-            output_path=output_path,
-            queued_ahead=_queued_ahead(payload),
+            task_id=task["task_id"],
+            file_paths=file_paths,
+            output_paths=output_paths,
+            succeeded_count=0,
+            failed_count=pre_failed_count + valid_count,
             error=error_text,
         )
         raise RuntimeError(error_text)
     error_text = f"MinerU task {task['task_id']} timed out. Last status: {last_status!r}"
-    _emit_parse_document_status(
+    _emit_parse_documents_status(
         writer,
         status="failed",
-        task=task,
-        file_path=file_path,
-        output_path=output_path,
-        queued_ahead=_queued_ahead(last_status),
+        task_id=task["task_id"],
+        file_paths=file_paths,
+        output_paths=output_paths,
+        succeeded_count=0,
+        failed_count=pre_failed_count + valid_count,
         error=error_text,
     )
     raise TimeoutError(error_text)
 
 
-def _fetch_mineru_markdown(result_url: str, *, timeout_seconds: int) -> str:
+def _fetch_mineru_result(result_url: str, *, timeout_seconds: int) -> Any:
     result_response = requests.get(result_url, timeout=timeout_seconds)
     result_response.raise_for_status()
-    return _extract_markdown(_json_or_text(result_response))
+    return _json_or_text(result_response)
 
 
 def _json_or_text(response: requests.Response) -> Any:
@@ -248,30 +297,113 @@ def _json_or_text(response: requests.Response) -> Any:
         return response.text
 
 
+def _collect_batch_results(
+    result_payload: Any,
+    valid_sources: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    entries = _result_entries(result_payload)
+    matched_entries = _match_result_entries(entries, valid_sources)
+    succeeded: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+
+    for item, entry in zip(valid_sources, matched_entries):
+        if entry is None:
+            failed.append(
+                {
+                    "file_path": item["file_path"],
+                    "error": "MinerU result did not contain a matching file entry",
+                }
+            )
+            continue
+        try:
+            markdown = _extract_markdown(entry)
+            item["target"].write_text(markdown, encoding="utf-8")
+        except Exception as exc:
+            failed.append({"file_path": item["file_path"], "error": _error_text(exc)})
+            continue
+        succeeded.append(
+            {
+                "file_path": item["file_path"],
+                "output_path": item["output_path"],
+                "bytes": len(markdown.encode("utf-8")),
+            }
+        )
+    return succeeded, failed
+
+
+def _result_entries(value: Any) -> list[tuple[str | None, Any]]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"MinerU result response was not a JSON object: {value!r}")
+    results = value.get("results")
+    if isinstance(results, dict):
+        return [(str(name), entry) for name, entry in results.items()]
+    if isinstance(results, list):
+        return [(None, entry) for entry in results]
+    raise RuntimeError(f"MinerU result did not include usable results: {value!r}")
+
+
+def _match_result_entries(
+    entries: list[tuple[str | None, Any]],
+    valid_sources: Sequence[dict[str, Any]],
+) -> list[Any | None]:
+    matched_entries: list[Any | None] = [None] * len(valid_sources)
+    available_indices = list(range(len(entries)))
+
+    for item_index, item in enumerate(valid_sources):
+        for entry_index in list(available_indices):
+            if _result_name(entries[entry_index][0]) == item["source"].name:
+                matched_entries[item_index] = entries[entry_index][1]
+                available_indices.remove(entry_index)
+                break
+
+    for item_index, item in enumerate(valid_sources):
+        if matched_entries[item_index] is not None:
+            continue
+        for entry_index in list(available_indices):
+            if _result_stem(entries[entry_index][0]) == item["source"].stem:
+                matched_entries[item_index] = entries[entry_index][1]
+                available_indices.remove(entry_index)
+                break
+
+    remaining_items = [index for index, entry in enumerate(matched_entries) if entry is None]
+    if len(remaining_items) == len(available_indices):
+        for item_index, entry_index in zip(remaining_items, available_indices):
+            matched_entries[item_index] = entries[entry_index][1]
+    return matched_entries
+
+
+def _result_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    return value.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _result_stem(value: str | None) -> str | None:
+    name = _result_name(value)
+    if not name:
+        return None
+    return Path(name).stem
+
+
 def _extract_markdown(value: Any) -> str:
     if isinstance(value, dict):
-        results = value.get("results")
-        if isinstance(results, dict):
-            for first_result in results.values():
-                if not isinstance(first_result, dict):
-                    continue
-                markdown = first_result.get("md_content")
-                if isinstance(markdown, str):
-                    return markdown
-    raise RuntimeError(f"MinerU result did not include markdown content: {value!r}")
+        markdown = value.get("md_content")
+        if isinstance(markdown, str):
+            return markdown
+    raise RuntimeError(_result_error_text(value))
+
+
+def _result_error_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("error", "message", "detail"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text
+    return f"MinerU result did not include markdown content: {value!r}"
 
 
 def _mineru_url(base_url: str, raw_url: str) -> str:
     return urljoin(f"{base_url.rstrip('/')}/", raw_url)
-
-
-def _queued_ahead(value: Any) -> int | None:
-    if not isinstance(value, dict):
-        return None
-    queued_ahead = value.get("queued_ahead")
-    if isinstance(queued_ahead, int) and not isinstance(queued_ahead, bool):
-        return queued_ahead
-    return None
 
 
 def _mineru_error_text(payload: dict[str, Any]) -> str:
@@ -289,32 +421,38 @@ def _stream_writer() -> Callable[[Any], None] | None:
         return None
 
 
-def _emit_parse_document_status(
+def _emit_parse_documents_status(
     writer: Callable[[Any], None] | None,
     *,
     status: str,
-    task: dict[str, str],
-    file_path: str,
-    output_path: str,
-    queued_ahead: int | None = None,
+    task_id: str | None,
+    file_paths: list[str],
+    output_paths: list[str],
+    succeeded_count: int,
+    failed_count: int,
     error: str | None = None,
 ) -> None:
     if writer is None:
         return
     payload: dict[str, Any] = {
-        "name": "parse_document",
+        "name": "parse_documents",
         "status": status,
-        "task_id": task["task_id"],
-        "file_path": file_path,
-        "output_path": output_path,
-        "status_url": task["status_url"],
-        "result_url": task["result_url"],
-        "queued_ahead": queued_ahead,
+        "file_paths": file_paths,
+        "output_paths": output_paths,
+        "succeeded_count": succeeded_count,
+        "failed_count": failed_count,
     }
+    if task_id is not None:
+        payload["task_id"] = task_id
     if error is not None:
         payload["error"] = error
     writer(payload)
 
 
+def _error_text(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
+
+
 def default_tool_catalog() -> ToolCatalog:
-    return ToolCatalog((parse_document,))
+    return ToolCatalog((parse_documents,))

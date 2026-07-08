@@ -81,7 +81,7 @@ class FakeBrain:
             },
             "interrupts": (),
         }
-        yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
+        yield {"type": "custom", "ns": (), "data": {"name": "parse_documents", "status": "started"}}
         yield {
             "type": "values",
             "ns": (),

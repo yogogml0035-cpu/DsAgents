@@ -31,7 +31,7 @@
 ## 4. 测试覆盖不足
 
 - **已确认**｜当前测试源码位于 `backend/tests/`：`test_tools.py`、`test_run_ledger.py`、`test_harness.py`、`test_api.py`、`test_real_image_run.py`，共享替身在 `test_support.py`。
-- **已确认**｜没有总控自检脚本；实际验证按影响范围直接运行 `cd backend && python -m tests.test_xxx`。普通本地脚本仍用 `FakeBrain` 替代真实模型，并 patch MinerU；覆盖：env 加载、parse_document env 守卫、resources/ledger、tool status middleware、harness、API（TestClient）、startup recovery、virtual artifacts。`test_real_image_run.py` 是手动真实 HTTP / 模型集成脚本。
+- **已确认**｜没有总控自检脚本；实际验证按影响范围直接运行 `cd backend && python -m tests.test_xxx`。普通本地脚本仍用 `FakeBrain` 替代真实模型，并 patch MinerU；覆盖：env 加载、`parse_documents` env 守卫与批量提交流程、resources/ledger、tool status middleware、harness、API（TestClient）、startup recovery、virtual artifacts。`test_real_image_run.py` 与 `test_real_multi_pdf_run.py` 是手动真实 HTTP / 模型集成脚本。
 - **风险**：无 CI 可运行的自动化测试断言；回归靠人工选择并运行对应测试脚本。
 
 ## 5. 错误透传约定
