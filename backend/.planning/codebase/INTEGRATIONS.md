@@ -73,7 +73,7 @@ brain.stream(
 - payload 只含当前请求里的 `messages[]`，不重放本地 session 历史
 - `thread_id = session_id`
 - `text` block 原样保留；`artifact` block 转成文本路径提示
-- `messages` / `custom` / `values` 三 channel 全部消费，其中 `values` 只保留 raw snapshot，并派生 `tool_call` / `tool_result` / `assistant_message`
+- `messages` / `custom` / `values` 三 channel 全部消费，其中 `values` 只保留 raw snapshot，并派生 `tool_call` / `tool_result` / `assistant_message`；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`
 - `values` 不是公开 run event type；外部调用方应消费七类规范化事件，完整 snapshot 仅保留在事件 `raw`
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`），不只是 `chunk["data"]`
 - run event 查询维度始终是 `run_id`；`thread_id=session_id` 只用于 checkpointer 上下文，不参与 `run_events` 查询

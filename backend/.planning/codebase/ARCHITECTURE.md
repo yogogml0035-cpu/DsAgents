@@ -62,7 +62,7 @@ Harness 层 (harness.py execute_run)
      )
   -> chunk[type=messages] => thinking / text_delta
   -> chunk[type=custom]   => tool_status
-  -> chunk[type=values]   => 从 snapshot 派生 tool_call / tool_result / assistant_message（末位 assistant 文本仍作 reply 候选）
+  -> chunk[type=values]   => 从 snapshot 派生 tool_call / tool_result / assistant_message（assistant_message 会保留同条 AIMessage 最后一个 thinking 文本；末位 assistant 文本仍作 reply 候选）
   -> 结束 => status=succeeded(reply=assistant_text 或拼接 text_parts)
                                               /  异常 => status=failed(error=...)
 
@@ -94,7 +94,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 
 `status` 事件同时驱动 `runs` 表的 `status`/`reply`/`error`/`updated_at` 列更新（即 run 状态是事件投影）。`emit_run_status` 校验 status 必须在 `RUN_STATUSES = {queued, running, succeeded, failed}` 内。`latest_content_event` 继续用 `type != 'status'` 取末位内容事件，成功 run 的最终结果通常会落在 `assistant_message`。
 
-`values` 不再作为公开业务事件写入 `run_events.type`；它只保留在 `raw` snapshot 中，业务层从 snapshot 中派生 `tool_call`、`tool_result` 和 `assistant_message`。
+`values` 不再作为公开业务事件写入 `run_events.type`；它只保留在 `raw` snapshot 中，业务层从 snapshot 中派生 `tool_call`、`tool_result` 和 `assistant_message`。当最终 AIMessage content 同时包含 `thinking` 与 `text` block 时，`assistant_message.payload` 保留最后一个 `thinking` 文本并继续保留最终 `text`。
 
 ## 5. 核心运行时原则
 

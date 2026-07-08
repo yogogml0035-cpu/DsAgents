@@ -15,7 +15,7 @@
 2. `POST /runs` 创建 `run_id`，把 `messages[]` 序列化写入 `resources.runs.create_run(...)`。
 3. 后台线程调用 `HarnessRuntime.execute_run(messages, ...)`。
 4. `brain.stream(..., stream_mode=["messages","custom","values"], version="v2")` 产出 raw chunk。
-5. `harness.py` 把 chunk 规范化成 `status/thinking/text_delta/tool_status/tool_call/tool_result/assistant_message`；`raw.type=="values"` 只保留在 raw snapshot，不作为公开业务事件。
+5. `harness.py` 把 chunk 规范化成 `status/thinking/text_delta/tool_status/tool_call/tool_result/assistant_message`；`raw.type=="values"` 只保留在 raw snapshot，不作为公开业务事件，`assistant_message` 可带最终 AIMessage 的最后一个 `thinking` 文本。
 6. `run_ledger.py` 记录快照、规范化事件和完整 raw。
 7. `GET /runs/{run_id}` 按需返回 run 快照、增量 `events[]` 和当前最新的 `latest_content_event`。
 

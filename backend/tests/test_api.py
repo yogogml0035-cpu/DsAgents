@@ -158,6 +158,7 @@ def _check_api(tmp: str) -> None:
         assert latest_content_event["type"] == "assistant_message"
         assert latest_content_event["payload"] == {
             "message_id": "assistant-final-" + session_id + "-2",
+            "thinking": "plan: ",
             "text": "echo[2]: again",
         }
         cursor = latest_content_event["event_id"]

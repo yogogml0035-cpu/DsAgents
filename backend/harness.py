@@ -358,10 +358,35 @@ def _assistant_message_payload(message: Any, *, tool_calls: list[dict[str, Any]]
     if tool_calls:
         return None
     message_id = _message_id(message)
-    text = _content_text(_message_content(message))
+    content = _message_content(message)
+    text = _content_text(content)
     if not isinstance(message_id, str) or not text:
         return None
-    return {"message_id": message_id, "text": text}
+    payload: dict[str, Any] = {"message_id": message_id}
+    thinking_block = _last_thinking_block(content)
+    if thinking_block:
+        thinking = _content_text(thinking_block.get("thinking")) or _content_text(
+            thinking_block.get("text")
+        )
+        if thinking:
+            payload["thinking"] = thinking
+    payload["text"] = text
+    return payload
+
+
+def _last_thinking_block(content: Any) -> dict[str, Any] | None:
+    if isinstance(content, dict):
+        if content.get("type") == "thinking":
+            return content
+        return _last_thinking_block(content.get("delta")) or _last_thinking_block(
+            content.get("content")
+        )
+    if isinstance(content, list):
+        for item in reversed(content):
+            block = _last_thinking_block(item)
+            if block is not None:
+                return block
+    return None
 
 
 def _tool_result_payload(message: Any, *, tool_call_names: dict[str, str]) -> dict[str, Any] | None:

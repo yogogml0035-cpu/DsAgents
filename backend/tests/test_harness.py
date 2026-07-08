@@ -7,10 +7,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from hands import ToolStatusHands, ToolStatusMiddleware
-from harness import ARTIFACT_REFERENCE_HINT, DeepAgentsBrainFactory, HarnessRuntime, _thinking_delta
+from harness import (
+    ARTIFACT_REFERENCE_HINT,
+    DeepAgentsBrainFactory,
+    HarnessRuntime,
+    _assistant_message_payload,
+    _thinking_delta,
+)
 from resources import AgentResources, ResourceConfig
 from tests.test_support import FakeBrainFactory, artifact_block, messages_json, text_block, user_message
 from tools import ToolCatalog
@@ -18,6 +24,21 @@ from tools import ToolCatalog
 
 def run() -> None:
     assert _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
+    assert _assistant_message_payload(
+        AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "old", "index": 0},
+                {"type": "text", "text": "answer"},
+                {"type": "thinking", "thinking": "new", "index": 1, "signature": "sig"},
+            ],
+            id="assistant-final",
+        ),
+        tool_calls=[],
+    ) == {
+        "message_id": "assistant-final",
+        "thinking": "new",
+        "text": "answer",
+    }
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
@@ -123,6 +144,7 @@ def _check_harness(tmp: str) -> None:
         assistant_event = [event for event in raw_events if event.event_type == "assistant_message"][0]
         assert assistant_event.payload == {
             "message_id": "assistant-final-thread-a-1",
+            "thinking": "plan: ",
             "text": "echo[1]: hello",
         }
         assert factory.received_payloads[0] == hello_messages
