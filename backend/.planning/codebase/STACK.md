@@ -1,7 +1,7 @@
 # STACK
 
 > 技术栈快照。所有事实均基于当前代码（`pyproject.toml` + backend 顶层模块）核对。
-> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 > 本文件优先记录代码与仓库配置可直接证实的事实；运行命令优先以仓库内 `scripts/start-backend.bat` 与测试默认值为准。
 
 ## 1. 运行时 / 语言
@@ -21,7 +21,7 @@
 ```toml
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
+py-modules = ["api", "artifact_names", "hands", "harness", "resources", "run_ledger", "tools"]
 ```
 
 - `backend/` 内的 `.py` 直接作为顶层模块安装。
@@ -53,7 +53,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 | `SqliteStore` | LangGraph store | `data/dsagents_store.db` | `resources.py` |
 | `SqliteSaver` | LangGraph checkpointer | `data/dsagents_checkpoints.db` | `resources.py` |
 | `CompositeBackend` | `deepagents.backends` | 路由 `/memories/` → `StoreBackend`；`/artifacts/` `/large_tool_results/` → `FilesystemBackend`；默认 `StateBackend`（含 `/conversation_history/`、`/logs/`） | `resources.py` |
-| 大 run event 外溢 | 文件系统 | `data/artifacts/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`） |
+| 大 run event 外溢 | 文件系统 | `data/internal/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`，lazy mkdir） |
 | 上传文件 | 文件系统 | `data/artifacts/uploads/` | `api.py` |
 
 数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关；其中 `dsagents_runs.db`、`artifacts/uploads/` 这类路径会在首次运行对应流程时按需创建。

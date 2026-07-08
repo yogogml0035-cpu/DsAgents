@@ -1,7 +1,7 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
@@ -13,7 +13,7 @@
 |---|---|---|---|
 | `POST /runs` | `{"session_id": str\|null, "messages": [{"role": str, "content": [{"type":"text","text":str} \| {"type":"artifact","path":str}]}...]}`（`RunRequest`） | `session_id` 为空生成 `uuid4().hex`；`run_id = uuid4().hex`；获取单飞锁 → 写 ledger → 起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；校验失败 `422`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
 | `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
-| `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `<artifacts_dir>/uploads/<uuid>_<cleaned_name>`；只保存文件，不解析 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
+| `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `<artifacts_dir>/uploads/<cleaned-stem>_<upload-ts>(_n).ext`；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`；`name` 继续返回清洗后的原始文件名 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
 
 > 注：当前**无 SSE / `StreamingResponse` / `text/event-stream`**，事件获取靠轮询 `GET /runs/{run_id}?after_event_id=...`。
 > 注：`after_event_id` **只影响 `events[]`**；`latest_content_event` 始终返回该 run 当前最新的非 `status` 事件，没有则为 `null`。
@@ -83,10 +83,10 @@ brain.stream(
 | 边界 | 实现 | 证据 |
 |---|---|---|
 | multipart 解析 | `python-multipart`（依赖）+ FastAPI `UploadFile = File(...)` | `api.py` |
-| 物理落点 | `<artifacts_dir>/uploads/<uuid>_<cleaned_name>`，`mkdir(parents=True, exist_ok=True)` | `api.py` |
+| 物理落点 | `<artifacts_dir>/uploads/<cleaned-stem>_<upload-ts>(_n).ext`，`mkdir(parents=True, exist_ok=True)` | `api.py` |
 | 虚拟路径 | `/artifacts/uploads/<name>`（`_virtual_upload_path`） | `api.py` |
 | 返回元数据 | `name` / `mime_type` / `size` / `file_path` | `api.py` |
-| 文件名清洗 | `_clean_filename`：去路径、strip，空则 `"upload"` | `api.py` |
+| 文件名清洗 | `artifact_names.clean_filename`：只取 basename、把所有空白归一成普通空格、strip，空则 `"upload"` | `artifact_names.py`、`api.py` |
 | artifacts 根 | `ResourceConfig.artifacts_dir = data_dir / "artifacts"` | `resources.py` |
 
 `/artifacts/` 虚拟路径在工具层也支持：`tools._resolve_document_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权（`Invalid /artifacts path`）。
@@ -125,7 +125,7 @@ brain.stream(
 | 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 30 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
 | 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
 
-工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果，并把成功项写到 `data/artifacts/downloads/<artifact-stem>_<YYYYMMDDHHMMSS>.md`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
+工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果，并把成功项写到 `data/artifacts/downloads/<base>_<parse-ts>(_n).md`。若输入来自 `/artifacts/uploads/...`，会先从上传物理文件名里剥离上传阶段追加的 `_14位时间戳(_序号)?`，再生成下载名，避免把上传时间戳带进下载名；非上传来源仍直接使用 `source.stem`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
 
 `parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `output_paths` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 

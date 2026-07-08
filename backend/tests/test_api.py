@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -51,10 +52,11 @@ def _check_api(tmp: str) -> None:
         old_request = client.post("/runs", json={"message": "hello", "session_id": None})
         assert old_request.status_code == 422
 
-        single_upload = client.post(
-            "/upload",
-            files=[("files", ("../photo.png", b"img", "image/png"))],
-        )
+        with patch("api.time.strftime", return_value="20260708010203"):
+            single_upload = client.post(
+                "/upload",
+                files=[("files", ("../photo.png", b"img", "image/png"))],
+            )
         assert single_upload.status_code == 200
         single_upload_payload = single_upload.json()["files"]
         assert len(single_upload_payload) == 1
@@ -64,40 +66,73 @@ def _check_api(tmp: str) -> None:
         assert first_file["size"] == 3
         assert first_file["file_path"].startswith("/artifacts/uploads/")
         first_upload_name = Path(first_file["file_path"]).name
+        assert first_upload_name == "photo_20260708010203.png"
         assert (api_data_dir / "artifacts" / "uploads" / first_upload_name).read_bytes() == b"img"
 
-        normalized_upload = client.post(
-            "/upload",
-            files=[("files", ("Shipping\u00a0documents\u00a0T_CHINA\u00a015.06.2026.pdf", b"pdf", "application/pdf"))],
-        )
+        with patch("api.time.strftime", return_value="20260708010204"):
+            normalized_upload = client.post(
+                "/upload",
+                files=[("files", ("Shipping\u00a0documents\u00a0T_CHINA\u00a015.06.2026.pdf", b"pdf", "application/pdf"))],
+            )
         assert normalized_upload.status_code == 200
         normalized_file = normalized_upload.json()["files"][0]
         assert normalized_file["name"] == "Shipping documents T_CHINA 15.06.2026.pdf"
         normalized_upload_name = Path(normalized_file["file_path"]).name
-        assert normalized_upload_name.endswith("_Shipping documents T_CHINA 15.06.2026.pdf")
+        assert normalized_upload_name == "Shipping documents T_CHINA 15.06.2026_20260708010204.pdf"
         assert (api_data_dir / "artifacts" / "uploads" / normalized_upload_name).read_bytes() == b"pdf"
 
-        multi_upload = client.post(
-            "/upload",
-            files=[
-                ("files", ("first.png", b"one", "image/png")),
-                ("files", ("notes.txt", b"hello", "text/plain")),
-            ],
-        )
+        with patch("api.time.strftime", return_value="20260708010205"):
+            multi_upload = client.post(
+                "/upload",
+                files=[
+                    ("files", ("first.png", b"one", "image/png")),
+                    ("files", ("notes.txt", b"hello", "text/plain")),
+                ],
+            )
         assert multi_upload.status_code == 200
         multi_upload_payload = multi_upload.json()["files"]
         assert len(multi_upload_payload) == 2
         assert [item["name"] for item in multi_upload_payload] == ["first.png", "notes.txt"]
         assert [item["mime_type"] for item in multi_upload_payload] == ["image/png", "text/plain"]
         assert [item["size"] for item in multi_upload_payload] == [3, 5]
+        assert [Path(item["file_path"]).name for item in multi_upload_payload] == [
+            "first_20260708010205.png",
+            "notes_20260708010205.txt",
+        ]
 
-        mixed_upload = client.post(
-            "/upload",
-            files=[
-                ("files", ("report.pdf", b"pdf", "application/pdf")),
-                ("files", ("diagram.jpg", b"jpeg", "image/jpeg")),
-            ],
-        )
+        with patch("api.time.strftime", return_value="20260708010206"):
+            duplicate_upload = client.post(
+                "/upload",
+                files=[
+                    ("files", ("report.pdf", b"a", "application/pdf")),
+                    ("files", ("report.pdf", b"b", "application/pdf")),
+                ],
+            )
+        assert duplicate_upload.status_code == 200
+        duplicate_upload_names = [
+            Path(item["file_path"]).name for item in duplicate_upload.json()["files"]
+        ]
+        assert duplicate_upload_names == [
+            "report_20260708010206.pdf",
+            "report_20260708010206_2.pdf",
+        ]
+
+        with patch("api.time.strftime", return_value="20260708010206"):
+            conflict_upload = client.post(
+                "/upload",
+                files=[("files", ("report.pdf", b"c", "application/pdf"))],
+            )
+        assert conflict_upload.status_code == 200
+        assert Path(conflict_upload.json()["files"][0]["file_path"]).name == "report_20260708010206_3.pdf"
+
+        with patch("api.time.strftime", return_value="20260708010207"):
+            mixed_upload = client.post(
+                "/upload",
+                files=[
+                    ("files", ("report.pdf", b"pdf", "application/pdf")),
+                    ("files", ("diagram.jpg", b"jpeg", "image/jpeg")),
+                ],
+            )
         assert mixed_upload.status_code == 200
         mixed_upload_payload = mixed_upload.json()["files"]
         assert len(mixed_upload_payload) == 2
@@ -234,7 +269,10 @@ def _check_api(tmp: str) -> None:
 
 def _check_startup_recovery(tmp: str) -> None:
     cleanup_data_dir = Path(tmp) / "cleanup-api"
-    cleanup_store = SqliteRunLedger(cleanup_data_dir / "dsagents_runs.db", cleanup_data_dir / "artifacts")
+    cleanup_store = SqliteRunLedger(
+        cleanup_data_dir / "dsagents_runs.db",
+        cleanup_data_dir / "internal" / "run-events",
+    )
     cleanup_store.create_run("cleanup-queued", "cleanup-session", json.dumps([user_message(text_block("queued"))], ensure_ascii=False))
     cleanup_store.create_run("cleanup-running", "cleanup-session", json.dumps([user_message(text_block("running"))], ensure_ascii=False))
     cleanup_store.emit_run_status("cleanup-running", "running")

@@ -1,7 +1,7 @@
 # STRUCTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 
 ## 1. 顶层模块组织
 
@@ -10,6 +10,7 @@
 | 模块 | 职责（一两句话） |
 |------|------------------|
 | `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`；run 后台线程调度、同 session 并发保护、启动恢复、多文件上传落盘 |
+| `artifact_names.py` | 共享 artifact 命名 helper：文件名清洗、`<stem>_<timestamp>(_n).ext` 生成、上传后缀剥离 |
 | `harness.py` | run 执行核心：`HarnessRuntime.execute_run` 装配 Brain/Hands/Tools 并把 `brain.stream(...)` 的 chunk 规范化为 `RunEvent`；含 `create_harness` 默认工厂与 `DeepAgentsBrainFactory`；从最终 AIMessage 提取 `assistant_message.payload.thinking` |
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
@@ -33,7 +34,7 @@
 ```toml
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
+py-modules = ["api", "artifact_names", "hands", "harness", "resources", "run_ledger", "tools"]
 ```
 
 含义：`backend/` 目录本身作为安装根，内部 `.py` 直接安装为顶层模块。因此模块内一律使用**绝对导入**：
@@ -51,6 +52,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 ```text
 backend/
 ├── api.py
+├── artifact_names.py
 ├── harness.py
 ├── hands.py
 ├── resources.py
@@ -72,9 +74,10 @@ backend/
     ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成）
     ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
-    │   ├── downloads/              # parse_documents 输出目录（<artifact-stem>_<timestamp>.md，按需创建）
-    │   ├── run-events/             # run 事件大 payload 外溢（*.json，按需创建）
-    │   └── uploads/                # POST /upload 上传落地点；首次写入时创建
+    │   ├── downloads/              # parse_documents 输出目录（<base>_<parse-ts>(_n).md，按需创建）
+    │   └── uploads/                # POST /upload 上传落地点（<原名>_<upload-ts>(_n).ext）；首次写入时创建
+    └── internal/
+        └── run-events/             # run 事件大 payload 外溢（*.json，仅真正 spill 时创建）
 ```
 
 > 数据目录路径由 `ResourceConfig`（`resources.py`）决定，固定指向 `backend/data/`，不受进程 CWD 影响。

@@ -13,6 +13,7 @@ import requests
 from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
 
+from artifact_names import make_timestamped_name, strip_upload_suffix
 from resources import ResourceConfig
 
 load_dotenv(Path(__file__).with_name(".env"))
@@ -30,11 +31,12 @@ class ToolCatalog:
 
 
 def parse_documents(file_paths: list[str]) -> dict[str, Any]:
-    """Parse one or more local documents and write markdown under /artifacts/downloads/."""
+    """Parse one or more local PDF documents and write markdown under /artifacts/downloads/."""
     if not file_paths:
         raise ValueError("file_paths must not be empty")
 
     batch_timestamp = time.strftime("%Y%m%d%H%M%S")
+    reserved_output_names: set[str] = set()
     writer = _stream_writer()
     valid_sources: list[dict[str, Any]] = []
     failed: list[dict[str, str]] = []
@@ -44,7 +46,7 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
             source = _resolve_document_path(raw_path)
             if not source.is_file():
                 raise FileNotFoundError(f"File not found: {source}")
-            output_path = _default_output_path(source, batch_timestamp)
+            output_path = _default_output_path(raw_path, source, batch_timestamp, reserved_output_names)
             valid_sources.append(
                 {
                     "file_path": raw_path,
@@ -144,8 +146,27 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
     }
 
 
-def _default_output_path(source: Path, batch_timestamp: str) -> str:
-    return f"/artifacts/downloads/{source.stem}_{batch_timestamp}.md"
+def _default_output_path(
+    raw_path: str,
+    source: Path,
+    batch_timestamp: str,
+    reserved_names: set[str],
+) -> str:
+    downloads_dir = _artifacts_root() / "downloads"
+    output_stem = _output_stem(raw_path, source)
+    filename = make_timestamped_name(
+        downloads_dir,
+        f"{output_stem}.md",
+        batch_timestamp,
+        reserved_names,
+    )
+    return f"/artifacts/downloads/{filename}"
+
+
+def _output_stem(raw_path: str, source: Path) -> str:
+    if raw_path.startswith("/artifacts/uploads/"):
+        return strip_upload_suffix(source.stem)
+    return source.stem
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:

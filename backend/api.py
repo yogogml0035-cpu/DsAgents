@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import re
 import shutil
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
@@ -16,6 +16,7 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from artifact_names import clean_filename, make_timestamped_name
 from harness import HarnessRuntime, create_harness
 from resources import AgentResources, ResourceConfig
 
@@ -122,12 +123,25 @@ def create_app(
 
     @app.post("/upload")
     def post_upload(files: list[UploadFile] = File(...)) -> dict[str, list[dict[str, Any]]]:
-        return {"files": [_store_upload(file, config) for file in files]}
+        batch_timestamp = time.strftime("%Y%m%d%H%M%S")
+        reserved_names: set[str] = set()
+        upload_dir = config.artifacts_dir / "uploads"
+        return {
+            "files": [
+                _store_upload(file, upload_dir, batch_timestamp, reserved_names)
+                for file in files
+            ]
+        }
 
-    def _store_upload(file: UploadFile, resource_config: ResourceConfig) -> dict[str, Any]:
-        filename = _clean_filename(file.filename)
-        stored_name = f"{uuid.uuid4().hex}_{filename}"
-        target = resource_config.artifacts_dir / "uploads" / stored_name
+    def _store_upload(
+        file: UploadFile,
+        upload_dir: Path,
+        batch_timestamp: str,
+        reserved_names: set[str],
+    ) -> dict[str, Any]:
+        filename = clean_filename(file.filename)
+        stored_name = make_timestamped_name(upload_dir, filename, batch_timestamp, reserved_names)
+        target = upload_dir / stored_name
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with target.open("wb") as handle:
@@ -216,14 +230,6 @@ def _conflict_response(active_run_id: str | None) -> JSONResponse:
         status_code=409,
         content={"error": "该会话正在运行", "active_run_id": active_run_id},
     )
-
-
-def _clean_filename(filename: str | None) -> str:
-    if not filename:
-        return "upload"
-    cleaned = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    cleaned = "".join(" " if ch.isspace() else ch for ch in cleaned).strip()
-    return cleaned or "upload"
 
 
 def _virtual_upload_path(filename: str) -> str:

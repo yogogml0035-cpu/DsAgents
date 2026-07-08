@@ -34,6 +34,10 @@ class ResourceConfig:
     def artifacts_dir(self) -> Path:
         return self.data_dir / "artifacts"
 
+    @property
+    def run_events_dir(self) -> Path:
+        return self.data_dir / "internal" / "run-events"
+
 
 class AgentResources:
     def __init__(self, config: ResourceConfig | None = None) -> None:
@@ -43,7 +47,7 @@ class AgentResources:
     def __enter__(self) -> "AgentResources":
         self.config.data_dir.mkdir(parents=True, exist_ok=True)
         self.config.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        self.runs = SqliteRunLedger(self.config.run_db, self.config.artifacts_dir)
+        self.runs = SqliteRunLedger(self.config.run_db, self.config.run_events_dir)
 
         self.store = self._stack.enter_context(SqliteStore.from_conn_string(str(self.config.store_db)))
         self.store.setup()

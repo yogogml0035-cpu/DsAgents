@@ -1,6 +1,6 @@
 # CONVENTIONS
 
-> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-08）已核对当前 HEAD `349357b`。
+> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 > 区分「已确认」（直接对应代码）与「需确认」（证据不足）。
 
 ## 1. 包管理器（已确认）
@@ -19,7 +19,7 @@
 ## 2. 模块组织（已确认）
 
 - 扁平顶层模块：`backend/` 下的 `.py` 直接作为顶层模块，绝对导入写作 `from hands import ...`、`from resources import AgentResources`，**不**带 `backend.` 前缀。
-- `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `hands` / `harness` / `resources` / `run_ledger` / `tools`。新增顶层 `.py` 必须同步追加到此处。
+- `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `artifact_names` / `hands` / `harness` / `resources` / `run_ledger` / `tools`。新增顶层 `.py` 必须同步追加到此处。
 - **没有** `backend/__init__.py` / `backend/__main__.py`（已确认不存在）。
 - **没有** `python -m backend.*` 这种调用方式（包不是这么组织的）。
 - backend 测试源码目录是 `backend/tests/`；测试脚本统一命名为 `test_*.py`，可执行脚本保留 `run()` 并支持 `python -m tests.test_xxx` 直接运行（见 TESTING.md）。
@@ -64,7 +64,7 @@
 ## 7. HTTP 表面（已确认）
 
 - 当前只保留：`POST /runs`、`GET /runs/{run_id}`（可选 `?after_event_id=` 取增量）、`POST /upload`。
-- `POST /upload` 会保留 basename，但把文件名中的 Unicode 空白（如 `NBSP`、`\t`）归一成普通空格后再落盘并回传 `file_path`，避免模型/tool call 把不可见空白改写后找不到磁盘文件。
+- `POST /upload` 会保留 basename，但把文件名中的 Unicode 空白（如 `NBSP`、`\t`）归一成普通空格后再落盘并回传 `file_path`；实际落盘名为 `原名_上传时间戳(_n).ext`，返回里的 `name` 继续是清洗后的原始文件名，避免模型/tool call 因不可见空白或物理名污染而找不到文件。
 - 未知 run：`404 {"error":"Unknown run: <run_id>"}`。
 - 已删除的旧语义：`session.py`、`context_window`、`RemoveMessage(REMOVE_ALL_MESSAGES)`、`run_turn`/`stream_turn`、`TraceHands`、旧 session 端点（完整清单见根级 `INTERFACES.md` §1）。
 
@@ -89,7 +89,7 @@
 
 - `runs` 行 = 当前 run 快照（状态机：`queued→running→succeeded|failed`）。
 - `run_events` = append-only 事件流。
-- 大 payload/raw（默认 `max_inline_bytes=262_144`，256 KiB）外溢到 `data/artifacts/run-events/*.json`，行内只留指针 `{"artifact_path":..., "bytes":...}`。
+- 大 payload/raw（默认 `max_inline_bytes=262_144`，256 KiB）外溢到 `data/internal/run-events/*.json`，行内只留指针 `{"artifact_path":..., "bytes":...}`；`data/artifacts/` 继续只保留用户可见的 `uploads/` 与 `downloads/`。
 - 数据目录固定锚定在 `backend/data/`（`_BACKEND_DIR = Path(__file__).resolve().parent`，与 CWD 无关）。
 - 不做清理策略、不做历史迁移。
 

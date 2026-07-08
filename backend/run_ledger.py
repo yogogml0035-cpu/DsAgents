@@ -38,11 +38,10 @@ class RunSnapshot:
 
 
 class SqliteRunLedger:
-    def __init__(self, db_path: Path, artifacts_dir: Path, max_inline_bytes: int = 262_144) -> None:
+    def __init__(self, db_path: Path, run_events_dir: Path, max_inline_bytes: int = 262_144) -> None:
         self.db_path = db_path
-        self.run_artifacts_dir = artifacts_dir / "run-events"
+        self.run_events_dir = run_events_dir
         self.max_inline_bytes = max_inline_bytes
-        self.run_artifacts_dir.mkdir(parents=True, exist_ok=True)
         self._setup()
 
     def create_run(self, run_id: str, session_id: str, input_messages_json: str) -> RunSnapshot:
@@ -316,7 +315,8 @@ class SqliteRunLedger:
         raw_payload = json.dumps(_safe(payload), ensure_ascii=False)
         if len(raw_payload.encode("utf-8")) <= self.max_inline_bytes:
             return raw_payload, None
-        artifact = self.run_artifacts_dir / f"{uuid.uuid4().hex}.json"
+        self.run_events_dir.mkdir(parents=True, exist_ok=True)
+        artifact = self.run_events_dir / f"{uuid.uuid4().hex}.json"
         artifact.write_text(raw_payload, encoding="utf-8")
         return (
             json.dumps(

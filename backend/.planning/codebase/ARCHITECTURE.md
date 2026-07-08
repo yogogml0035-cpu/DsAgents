@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（`assistant_message` 附带最终 AIMessage 的最后一个 `thinking` 文本）、`2206b1a`（values snapshot 派生 `tool_call` / `tool_result` / `assistant_message`）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 
 ## 1. 架构定位
 
@@ -43,7 +43,7 @@ run 是唯一的执行单位与查询单位。本次重构（`8890292`）已完�
 ```text
 HTTP 层 (api.py)
   POST /upload(files[])
-    -> 保存到 /artifacts/uploads/<uuid>_<filename>
+    -> 保存到 /artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext
   POST /runs(messages, session_id?)
     -> create_run(run_id, session_id, input_messages_json)  # run_ledger
     -> threading.Thread -> _run_background
@@ -128,7 +128,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 | `dsagents_checkpoints.db` | LangGraph checkpointer | `SqliteSaver`（`thread_id=session_id`） |
 | `dsagents_store.db` | LangGraph store | `SqliteStore`（`namespace=("dsagents",)`） |
 
-其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。
+其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。用户可见文件仍只落在 `data/artifacts/uploads/` 与 `data/artifacts/downloads/`，内部大 payload spill 独立落在 `data/internal/run-events/`。
 
 `dsagents_runs.db` 表结构：
 
@@ -145,7 +145,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - `_normalize_timestamp_text`：先用 `datetime.fromisoformat(value.replace("Z","+00:00"))` 解析；解析失败原样返回；无时区信息时按 `assume_naive_utc=True` 视作 UTC（`replace(tzinfo=timezone.utc)`），再 `astimezone()` 转本机时区并 `strftime(TIMESTAMP_FORMAT)`。
 - 迁移幂等：对本机时区文本再次解析会带上本地 tz，再 `astimezone()` 回到同一字符串（`test_run_ledger.py` 的 `normalized_again` 断言验证）。
 
-大 JSON 外溢到 `backend/data/artifacts/run-events/*.json`（阈值 `max_inline_bytes=262_144`，可配置）。
+大 JSON 外溢到 `backend/data/internal/run-events/*.json`（阈值 `max_inline_bytes=262_144`，仅真正发生 spill 时创建目录）。
 
 ## 8. 运行约束（已确认）
 
@@ -153,7 +153,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
 - `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
-- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<uuid>_<原名>` 路径、原名、mime、size。
+- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。
 
 ## 9. 配置加载
 

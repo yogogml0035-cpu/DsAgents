@@ -27,6 +27,8 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert resources.config.run_db.exists()
         assert resources.config.store_db.exists()
         assert resources.config.checkpoint_db.exists()
+        assert not resources.config.run_events_dir.exists()
+        assert not (data_dir / "artifacts" / "run-events").exists()
         assert resources.backend is not None
         assert set(resources.backend.routes) == {"/memories/", "/artifacts/", "/large_tool_results/"}
 
@@ -83,7 +85,9 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert resources.runs.get_run("recover-run").status == "failed"
         assert resources.runs.get_run("queued-run").status == "failed"
 
-    oversized = SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "artifacts", max_inline_bytes=10)
+    oversized_run_events_dir = data_dir / "internal" / "run-events"
+    oversized = SqliteRunLedger(data_dir / "dsagents_runs.db", oversized_run_events_dir, max_inline_bytes=10)
+    assert not oversized_run_events_dir.exists()
     oversized.create_run("big-run", "s-big", messages_json([user_message(text_block("blob"))]))
     oversized.emit_run_event(
         "big-run",
@@ -98,10 +102,11 @@ def _check_resources_and_ledger(tmp: str) -> None:
     assert latest_large_event is not None
     assert latest_large_event.payload["text"] == "x" * 100
     assert latest_large_event.raw["data"]["messages"][0]["content"] == "x" * 100
-    assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
+    assert any(oversized_run_events_dir.glob("*.json"))
+    assert not (data_dir / "artifacts" / "run-events").exists()
 
     legacy_db = data_dir / "legacy.db"
-    legacy = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    legacy = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
     legacy.create_run("legacy-run", "legacy-session", messages_json([user_message(text_block("legacy"))]))
     with sqlite3.connect(legacy_db) as conn:
         conn.execute(
@@ -122,12 +127,12 @@ def _check_resources_and_ledger(tmp: str) -> None:
         )
         conn.execute("pragma user_version = 0")
         conn.commit()
-    normalized = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    normalized = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
     normalized_run = normalized.get_run("legacy-run")
     assert normalized_run.created_at == _local_expected_from_utc_iso("2026-07-07T08:18:59.740303+00:00")
     assert normalized_run.updated_at == _local_expected_from_utc_naive("2026-07-07 09:42:01")
     assert normalized.get_run_events("legacy-run")[0].created_at == _local_expected_from_utc_naive("2026-07-07 09:40:16")
-    normalized_again = SqliteRunLedger(legacy_db, data_dir / "artifacts")
+    normalized_again = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
     assert normalized_again.get_run("legacy-run").updated_at == normalized_run.updated_at
     assert normalized_again.get_run_events("legacy-run")[0].created_at == normalized.get_run_events("legacy-run")[0].created_at
 

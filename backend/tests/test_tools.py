@@ -29,6 +29,7 @@ def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_parse_documents_env_guard(tmp)
         _check_single_file_list(tmp)
+        _check_uploaded_sources_drop_upload_suffix(tmp)
         _check_multi_file_partial_failures(tmp)
         _check_all_invalid_inputs(tmp)
         _check_failed_status_progress(tmp)
@@ -156,6 +157,79 @@ def _check_single_file_list(tmp: str) -> None:
             "failed_count": 0,
         },
     ]
+
+
+def _check_uploaded_sources_drop_upload_suffix(tmp: str) -> None:
+    api_data_dir = Path(tmp) / "uploaded-source-data"
+    artifacts_dir = api_data_dir / "artifacts"
+    first = artifacts_dir / "uploads" / "report_20260708000000.pdf"
+    second = artifacts_dir / "uploads" / "report_20260708000000_2.pdf"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+    status_payloads = iter(
+        [
+            {"status": "completed"},
+            {
+                "results": {
+                    first.name: {"md_content": "# first"},
+                    second.name: {"md_content": "# second"},
+                }
+            },
+        ]
+    )
+
+    def fake_post(_url: str, **_kwargs: object) -> _FakeResponse:
+        return _FakeResponse(
+            {
+                "task_id": "task-upload",
+                "status_url": "/tasks/task-upload",
+                "result_url": "/tasks/task-upload/result",
+            }
+        )
+
+    def fake_get(_url: str, **_kwargs: object) -> _FakeResponse:
+        return _FakeResponse(next(status_payloads))
+
+    file_paths = [
+        f"/artifacts/uploads/{first.name}",
+        f"/artifacts/uploads/{second.name}",
+    ]
+    with (
+        patch("tools._artifacts_root", return_value=artifacts_dir.resolve()),
+        patch.dict(
+            os.environ,
+            {
+                "MINERU_BASE_URL": "https://mineru.example",
+                "MINERU_BACKEND": "vlm-engine",
+                "MINERU_EFFORT": "",
+                "MINERU_TIMEOUT_SECONDS": "45",
+            },
+            clear=True,
+        ),
+        patch("tools.requests.post", side_effect=fake_post),
+        patch("tools.requests.get", side_effect=fake_get),
+        patch("tools.time.strftime", return_value="20260708040506"),
+    ):
+        parsed_payload = parse_documents(file_paths)
+
+    assert parsed_payload["succeeded"] == [
+        {
+            "file_path": file_paths[0],
+            "output_path": "/artifacts/downloads/report_20260708040506.md",
+            "bytes": len("# first".encode("utf-8")),
+        },
+        {
+            "file_path": file_paths[1],
+            "output_path": "/artifacts/downloads/report_20260708040506_2.md",
+            "bytes": len("# second".encode("utf-8")),
+        },
+    ]
+    assert parsed_payload["failed"] == []
+    assert (artifacts_dir / "downloads" / "report_20260708040506.md").read_text(encoding="utf-8") == "# first"
+    assert (
+        artifacts_dir / "downloads" / "report_20260708040506_2.md"
+    ).read_text(encoding="utf-8") == "# second"
 
 
 def _check_multi_file_partial_failures(tmp: str) -> None:
