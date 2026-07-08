@@ -4,6 +4,7 @@
 .review-push/
 .venv/
 .DS_Store
+.cursor/
 .env
 data/
 backend/data/
