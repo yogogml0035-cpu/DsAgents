@@ -59,11 +59,11 @@
 ## 8. 文档同步风险
 
 - **已确认**｜文档分四层需手工保持一致：根 `AGENTS.md`/`ARCHITECTURE.md`/`INTERFACES.md` → `coding_maps/SYSTEM_MAP.md` → `docs/*.md` → `backend/.planning/codebase/*`。`AGENTS.md` 明确要求"改代码后先更新 `.planning/codebase/` 再回看上层"。
-- **风险**｜`MINERU_*` 这类必需配置缺失只能在运行时 fail-fast 暴露，目前无自动化配置完整性校验。
+- **风险**｜`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 这类必需配置缺失只能在运行时 fail-fast 暴露，目前无自动化配置完整性校验。
 
 ## 9. 配置完整性风险（已确认）
 
-- **已确认**｜`tools.py` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` 都走 `_required_env(...)`；任一缺失都会在真实调用 `parse_document` 时 fail-fast。
+- **已确认**｜`tools.py` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 走 `_required_env(...)`；`MINERU_EFFORT` 走 `os.getenv(... ) or ""`，可缺省或留空，并会原样以空字符串提交到 MinerU。
 - **建议**：维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。
 
 ## 10. 并发 / 运行时边界

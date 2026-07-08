@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import shutil
 import threading
 import uuid
@@ -220,7 +221,8 @@ def _conflict_response(active_run_id: str | None) -> JSONResponse:
 def _clean_filename(filename: str | None) -> str:
     if not filename:
         return "upload"
-    cleaned = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    cleaned = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    cleaned = "".join(" " if ch.isspace() else ch for ch in cleaned).strip()
     return cleaned or "upload"
 
 

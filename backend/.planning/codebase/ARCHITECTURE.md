@@ -160,7 +160,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 `.env` 由两个模块在**导入时**加载（`load_dotenv(Path(__file__).with_name(".env"))`）：
 
 - `harness.py`（MiniMax 模型相关：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`）
-- `tools.py`（MinerU 相关：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS`）
+- `tools.py`（MinerU 相关：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT`〔可留空〕/ `MINERU_TIMEOUT_SECONDS`）
 
 这两个加载点覆盖了全部需要环境变量的调用路径。
 

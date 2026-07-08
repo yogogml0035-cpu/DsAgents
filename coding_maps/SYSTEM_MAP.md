@@ -83,7 +83,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 完整契约（请求/响应 JSON 形状、错误码）见 [`INTERFACES.md`](../INTERFACES.md) §1 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
 `after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
 
-`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。
+`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload`（端口与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。
 `assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `raw.type=="values"` 的最终 AIMessage snapshot；调用方不应直接依赖 `values` 事件类型。
 
 ### 4.2 LLM provider 边界
@@ -137,7 +137,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md)（每条证据见该文档）。改动涉及以下面时按提示核对：
 
-- **配置完整性**：`parse_document` 对 `MINERU_*` 必需键 fail-fast；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
+- **配置完整性**：`parse_document` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 必需键 fail-fast；`MINERU_EFFORT` 可留空；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
 - **配置文档边界**：长期文档只保留配置键、消费者与归属规则，不抄录本地 `.env` 的真实值、连接串或服务地址。
 - **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。
 - **私有配置**：`backend/.env` 被 `.gitignore` 排除且不应进入长期文档；provider key 经 `os.getenv` 直读，无统一脱敏或 secret manager 封装。

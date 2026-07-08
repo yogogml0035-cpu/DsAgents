@@ -31,7 +31,7 @@
 | HTTP 上传文件 | `POST /upload`（multipart 字段名 `files`，支持 1 个或多个文件） |
 | HTTP 提交 run | `POST /runs`（body `{session_id?, messages[]}`），轮询 `GET /runs/{run_id}` |
 | 测试脚本 / 主要验证 | 按影响范围运行 `cd backend && python -m tests.test_xxx` |
-| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `scripts/start-backend.bat`、`tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致） |
+| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload`（端口与 `scripts/start-backend.bat`、`tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致） |
 | 程序内调用 | `AgentResources(config)` + `create_harness(resources).execute_run(messages, session_id, run_id)` |
 
 - **没有** `from session import run_session`（已确认 grep 无此导入，且无 `session.py`）。Session 概念已移除，改由 `thread_id=session_id` + run ledger 承载。
@@ -51,7 +51,7 @@
   - `HarnessRuntime.execute_run`：捕获 Brain 异常 → 发 `failed` run status（带 `error=_error_text(exc)` 与 `raw={..., "error": repr(exc)}`），不掩盖。
   - `api._run_background`：未捕获异常 → `_ensure_failed_run` 把 run 标记 `failed` 并写 `repr(exc)`。
 - `_error_text(exc)` = `str(exc)` 去空白，为空则回退到异常类名。
-- fail-fast 模式：`parse_document` 在缺 `MINERU_*` 环境变量时 `raise RuntimeError("Missing required environment variable: ...")`（测试脚本显式断言此行为）。
+- fail-fast 模式：`parse_document` 在缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError("Missing required environment variable: ...")`；`MINERU_EFFORT` 可留空（测试脚本显式断言此行为）。
 - run 状态非法值：`SqliteRunLedger.emit_run_status` 对非 `RUN_STATUSES` 抛 `ValueError`。
 
 ## 6. run-first 架构（已确认）
@@ -64,6 +64,7 @@
 ## 7. HTTP 表面（已确认）
 
 - 当前只保留：`POST /runs`、`GET /runs/{run_id}`（可选 `?after_event_id=` 取增量）、`POST /upload`。
+- `POST /upload` 会保留 basename，但把文件名中的 Unicode 空白（如 `NBSP`、`\t`）归一成普通空格后再落盘并回传 `file_path`，避免模型/tool call 把不可见空白改写后找不到磁盘文件。
 - 未知 run：`404 {"error":"Unknown run: <run_id>"}`。
 - 已删除的旧语义：`session.py`、`context_window`、`RemoveMessage(REMOVE_ALL_MESSAGES)`、`run_turn`/`stream_turn`、`TraceHands`、旧 session 端点（完整清单见根级 `INTERFACES.md` §1）。
 

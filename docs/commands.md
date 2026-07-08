@@ -22,7 +22,7 @@ backend 测试统一放在 `backend/tests/test_*.py`。按改动影响范围直�
 
 ```powershell
 cd backend
-uv run uvicorn api:app --host 0.0.0.0 --port 8500
+uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload
 ```
 
 ## 调用 HTTP

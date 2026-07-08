@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from tools import _extract_markdown, default_tool_catalog, parse_document
+from tools import MINERU_POLL_INTERVAL_SECONDS, _extract_markdown, default_tool_catalog, parse_document
 
 
 class _FakeResponse:
@@ -65,8 +65,8 @@ def _check_virtual_artifacts_and_polling(tmp: str) -> None:
     def fake_post(url: str, **kwargs: object) -> _FakeResponse:
         post_calls.append({"url": url, "timeout": kwargs["timeout"]})
         assert kwargs["data"] == {
-            "backend": "pipeline",
-            "effort": "standard",
+            "backend": "vlm-engine",
+            "effort": "",
             "return_md": "true",
             "response_format_zip": "false",
         }
@@ -87,8 +87,8 @@ def _check_virtual_artifacts_and_polling(tmp: str) -> None:
             os.environ,
             {
                 "MINERU_BASE_URL": "https://mineru.example",
-                "MINERU_BACKEND": "pipeline",
-                "MINERU_EFFORT": "standard",
+                "MINERU_BACKEND": "vlm-engine",
+                "MINERU_EFFORT": "",
                 "MINERU_TIMEOUT_SECONDS": "321",
             },
             clear=True,
@@ -129,7 +129,10 @@ def _check_virtual_artifacts_and_polling(tmp: str) -> None:
     assert emitted[1]["queued_ahead"] == 2
     assert emitted[2]["queued_ahead"] == 1
     assert emitted[3]["queued_ahead"] == 0
-    assert [call.args[0] for call in sleep_mock.call_args_list] == [120.0, 120.0]
+    assert [call.args[0] for call in sleep_mock.call_args_list] == [
+        MINERU_POLL_INTERVAL_SECONDS,
+        MINERU_POLL_INTERVAL_SECONDS,
+    ]
 
     try:
         parse_document("/artifacts/../x")
@@ -163,8 +166,8 @@ def _check_failed_status_progress(tmp: str) -> None:
         os.environ,
         {
             "MINERU_BASE_URL": "https://mineru.example",
-            "MINERU_BACKEND": "pipeline",
-            "MINERU_EFFORT": "standard",
+            "MINERU_BACKEND": "vlm-engine",
+            "MINERU_EFFORT": "",
             "MINERU_TIMEOUT_SECONDS": "45",
         },
         clear=True,

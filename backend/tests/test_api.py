@@ -66,6 +66,17 @@ def _check_api(tmp: str) -> None:
         first_upload_name = Path(first_file["file_path"]).name
         assert (api_data_dir / "artifacts" / "uploads" / first_upload_name).read_bytes() == b"img"
 
+        normalized_upload = client.post(
+            "/upload",
+            files=[("files", ("Shipping\u00a0documents\u00a0T_CHINA\u00a015.06.2026.pdf", b"pdf", "application/pdf"))],
+        )
+        assert normalized_upload.status_code == 200
+        normalized_file = normalized_upload.json()["files"][0]
+        assert normalized_file["name"] == "Shipping documents T_CHINA 15.06.2026.pdf"
+        normalized_upload_name = Path(normalized_file["file_path"]).name
+        assert normalized_upload_name.endswith("_Shipping documents T_CHINA 15.06.2026.pdf")
+        assert (api_data_dir / "artifacts" / "uploads" / normalized_upload_name).read_bytes() == b"pdf"
+
         multi_upload = client.post(
             "/upload",
             files=[

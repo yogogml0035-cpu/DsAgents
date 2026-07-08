@@ -17,7 +17,7 @@ from resources import ResourceConfig
 
 load_dotenv(Path(__file__).with_name(".env"))
 
-MINERU_POLL_INTERVAL_SECONDS = 120.0
+MINERU_POLL_INTERVAL_SECONDS = 30.0
 ToolHandler = Callable[..., Any]
 
 
@@ -43,7 +43,7 @@ def parse_document(
 
     base_url = _required_env("MINERU_BASE_URL")
     backend = _required_env("MINERU_BACKEND")
-    effort = _required_env("MINERU_EFFORT")
+    effort = os.getenv("MINERU_EFFORT") or ""
     timeout_seconds = int(_required_env("MINERU_TIMEOUT_SECONDS"))
     writer = _stream_writer()
 

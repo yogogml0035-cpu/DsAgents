@@ -18,7 +18,7 @@ DEFAULT_DOWNLOAD_DIR = Path(__file__).resolve().parent / "tests_file" / "测试�
 DEFAULT_REQUEST = "将这些pdf调用工具解析并下载下来"
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 600.0
-DEFAULT_POLL_SECONDS = 5.0
+DEFAULT_POLL_SECONDS = 0.5
 
 
 def run() -> None:

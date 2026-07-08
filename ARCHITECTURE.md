@@ -62,7 +62,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 提炼自 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md)（每条证据见该文档），改动涉及以下面时按提示核对：
 
-- **配置完整性**：`parse_document` 对 `MINERU_*` 必需键 fail-fast；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
+- **配置完整性**：`parse_document` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 必需键 fail-fast；`MINERU_EFFORT` 可留空；本地/部署环境需按示例键名补齐，长期文档不记录私有值。
 - **配置文档边界**：长期文档只记录配置键与消费者，不抄录本地 `.env` 中的真实值、连接串或服务地址。
 - **run 锁单进程语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。
 - **文档同步**：四层文档手工保持一致。

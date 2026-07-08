@@ -113,7 +113,7 @@ brain.stream(
 | 键 | backend 代码消费者 | 状态 |
 |---|---|---|
 | `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `harness.py` | 已确认 |
-| `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` | `tools.py` | 已确认 |
+| `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` | `tools.py` | 已确认（其中 `MINERU_EFFORT` 可省略或留空） |
 
 ## 6. 外部 HTTP 调用（requests）
 
@@ -121,8 +121,8 @@ brain.stream(
 
 | 调用 | 方法 / URL | 入参 | 说明 |
 |---|---|---|---|
-| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/response_format_zip`，timeout=`MINERU_TIMEOUT_SECONDS`） | 源文件 + 配置 | 只接受当前官方响应字段 `task_id/status_url/result_url` |
-| 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 120 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
+| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/response_format_zip`，timeout=`MINERU_TIMEOUT_SECONDS`） | 源文件 + 配置 | 只接受当前官方响应字段 `task_id/status_url/result_url`；`effort` 允许空字符串 |
+| 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 30 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
 | 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
 
 工具 `parse_document`：AI 侧仍只看到一个 `parse_document(file_path, output_path=None)` 工具；工具内部完成提交任务、轮询状态、拉取结果并写 markdown 到 `data/document_outputs/<stem>.md`（或指定 `output_path`）。成功返回 JSON（`task_id/source/output_path/markdown_bytes/status_url/result_url`）。

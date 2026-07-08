@@ -85,7 +85,7 @@ backend/
   - `POST /upload` —— multipart `files[]`，支持一个或多个文件，返回 `{files:[{file_path,name,mime_type,size}]}`
   - `POST /runs` —— body `{messages, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
   - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event}`，未知 run 返回 `404`
-  - 默认由 `scripts/start-backend.bat` 拉起：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）
+  - 默认由 `scripts/start-backend.bat` 拉起：`uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload`（端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）
 - **测试脚本**：按影响范围从 `backend/` 目录运行对应脚本，例如 `python -m tests.test_api`、`python -m tests.test_harness`。
 - **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`。
 
