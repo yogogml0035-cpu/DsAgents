@@ -14,3 +14,4 @@ __pycache__/
 Study/
 backend/.env
 backend/dsagents.egg-info/
+backend/tests/tests_file/
