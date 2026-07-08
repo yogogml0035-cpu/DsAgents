@@ -117,14 +117,16 @@ brain.stream(
 
 ## 6. 外部 HTTP 调用（requests）
 
-仅 `tools.py`，对接 MinerU 文档解析服务（`_submit_mineru_task` / `_wait_for_mineru_result`）：
+仅 `tools.py`，对接 MinerU 3.4.0 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_fetch_mineru_markdown`）：
 
 | 调用 | 方法 / URL | 入参 | 说明 |
 |---|---|---|---|
-| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/response_format_zip`，timeout=60） | 源文件 + 配置 | 从响应递归找 `task_id/taskId/id` |
-| 轮询状态 | `GET {MINERU_BASE_URL}/tasks/{task_id}`（timeout=30，默认 2s 轮询） | task_id | 命中 `FAILURE_STATES` 抛错；命中 `SUCCESS_STATES` 取结果 |
-| 取结果 | `GET {MINERU_BASE_URL}/tasks/{task_id}/result`（timeout=120） | task_id | 从响应找 `md/markdown/md_content/markdown_content` |
+| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/response_format_zip`，timeout=`MINERU_TIMEOUT_SECONDS`） | 源文件 + 配置 | 只接受当前官方响应字段 `task_id/status_url/result_url` |
+| 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 120 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
+| 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
 
-工具 `parse_document`：解析本地文件 → 写 markdown 到 `data/document_outputs/<stem>.md`（或指定 `output_path`）→ 返回 JSON（`task_id/source/output_path/markdown_bytes`）。
+工具 `parse_document`：AI 侧仍只看到一个 `parse_document(file_path, output_path=None)` 工具；工具内部完成提交任务、轮询状态、拉取结果并写 markdown 到 `data/document_outputs/<stem>.md`（或指定 `output_path`）。成功返回 JSON（`task_id/source/output_path/markdown_bytes/status_url/result_url`）。
+
+`parse_document` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附 `task_id/file_path/output_path/status_url/result_url/queued_ahead`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 
 `default_tool_catalog()` 当前只注册一个工具：`parse_document`。
