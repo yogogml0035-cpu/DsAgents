@@ -35,7 +35,12 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert queued.input_messages_json == messages_json(hello_messages)
         assert resources.runs.get_latest_content_event("run-1") is None
         resources.runs.emit_run_status("run-1", "running")
-        resources.runs.emit_run_event("run-1", "values", {"text": "draft"}, raw={"type": "values", "data": {"text": "draft"}})
+        resources.runs.emit_run_event(
+            "run-1",
+            "assistant_message",
+            {"message_id": "msg-1", "text": "draft"},
+            raw={"type": "values", "data": {"messages": [{"id": "msg-1", "type": "ai", "content": "draft"}]}},
+        )
         resources.runs.emit_run_status("run-1", "succeeded", reply="ok")
         snapshot = resources.runs.get_run("run-1")
         assert snapshot.status == "succeeded"
@@ -43,7 +48,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
         _assert_second_precision_timestamp(snapshot.created_at)
         _assert_second_precision_timestamp(snapshot.updated_at)
         run_events = resources.runs.get_run_events("run-1")
-        assert [event.event_type for event in run_events] == ["status", "status", "values", "status"]
+        assert [event.event_type for event in run_events] == ["status", "status", "assistant_message", "status"]
         assert all(_is_second_precision_timestamp(event.created_at) for event in run_events)
         assert run_events[2].raw["type"] == "values"
         latest_content = resources.runs.get_latest_content_event("run-1")
@@ -82,17 +87,17 @@ def _check_resources_and_ledger(tmp: str) -> None:
     oversized.create_run("big-run", "s-big", messages_json([user_message(text_block("blob"))]))
     oversized.emit_run_event(
         "big-run",
-        "values",
-        {"content": "x" * 100},
-        raw={"type": "values", "data": {"content": "x" * 100}},
+        "assistant_message",
+        {"message_id": "big-msg", "text": "x" * 100},
+        raw={"type": "values", "data": {"messages": [{"id": "big-msg", "type": "ai", "content": "x" * 100}]}},
     )
     large_event = oversized.get_run_events("big-run")[-1]
-    assert large_event.payload["content"] == "x" * 100
-    assert large_event.raw["data"]["content"] == "x" * 100
+    assert large_event.payload["text"] == "x" * 100
+    assert large_event.raw["data"]["messages"][0]["content"] == "x" * 100
     latest_large_event = oversized.get_latest_content_event("big-run")
     assert latest_large_event is not None
-    assert latest_large_event.payload["content"] == "x" * 100
-    assert latest_large_event.raw["data"]["content"] == "x" * 100
+    assert latest_large_event.payload["text"] == "x" * 100
+    assert latest_large_event.raw["data"]["messages"][0]["content"] == "x" * 100
     assert any((data_dir / "artifacts" / "run-events").glob("*.json"))
 
     legacy_db = data_dir / "legacy.db"

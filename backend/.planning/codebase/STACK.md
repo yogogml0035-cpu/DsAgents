@@ -63,7 +63,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 | Provider | 集成方式 | 证据 |
 |---|---|---|
 | Anthropic 兼容（生产） | `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`；由 `DeepAgentsBrainFactory` 注入 `create_deep_agent(model=...)` | `harness.py` |
-| `FakeBrain`（本地测试） | `FakeBrain` / `FakeBrainFactory`，模拟 `stream(...)` 产出 `values/messages/custom` chunk | `backend/tests/test_support.py` |
+| `FakeBrain`（本地测试） | `FakeBrain` / `FakeBrainFactory`，模拟 `stream(...)` 产出 `values/messages/custom` chunk，并覆盖 snapshot → `tool_call` / `tool_result` / `assistant_message` 派生 | `backend/tests/test_support.py` |
 
 ## 6. 配置加载
 

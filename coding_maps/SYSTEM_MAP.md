@@ -49,7 +49,7 @@ HarnessRuntime.execute_run(...)
   │                stream_mode=["messages","custom","values"], version="v2")
   │    ├─ messages chunk → thinking / text_delta
   │    ├─ custom   chunk → tool_status（来自 ToolStatusMiddleware）
-  │    └─ values   chunk → values（末位 assistant 文本作 reply）
+  │    └─ values   snapshot → tool_call / tool_result / assistant_message（同时更新 reply 候选）
   ├─ 成功 → emit status=succeeded(reply=...)
   └─ 异常 → emit status=failed(error=...)（真实错误透传，不吞）
 

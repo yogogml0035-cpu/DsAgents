@@ -16,7 +16,8 @@
 - `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。进入 Brain 前会被转成文本提示：`Uploaded artifact: /artifacts/uploads/...`，再由 agent 决定何时用 `read_file` 或 `parse_document`。
 - `after_event_id` 游标：为空返回全部事件；有值只返回 `event_id > after_event_id` 的增量事件。
 - `latest_content_event`：始终返回当前 run 全局最新的非 `status` 事件；没有非 `status` 事件时为 `null`；**不受** `after_event_id` 影响。
-- 事件类型固定五类：`status` / `thinking` / `text_delta` / `tool_status` / `values`。
+- 事件类型固定七类：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
+- 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生。
 - 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
 
 明确**已删除**的旧接口（不要引用）：`POST /files`、`POST /sessions/messages`、`POST /sessions/messages/stream`、`POST /sessions/messages/runs`、`GET /sessions/{session_id}/runs`、`from session import run_session`。
@@ -72,7 +73,7 @@ brain.stream(
 - payload 只含当前请求里的 `messages[]`，不重放本地 session 历史。
 - `thread_id = session_id`（短期上下文键）。
 - `text` block 原样保留；`artifact` block 转成文本路径提示后再传给 Brain。
-- 三 channel 全部消费：`messages` → `thinking`/`text_delta`；`custom` → `tool_status`（来自 `ToolStatusMiddleware` 经 `get_stream_writer()`）；`values` → `values`（末位 assistant 文本作 reply）。
+- 三 channel 全部消费：`messages` → `thinking`/`text_delta`；`custom` → `tool_status`（来自 `ToolStatusMiddleware` 经 `get_stream_writer()`）；`values` snapshot → `tool_call` / `tool_result` / `assistant_message`，同时末位 assistant 文本仍作 `runs.reply` 候选。
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`）。
 - LangGraph classic `stream(..., stream_mode=["messages","custom","values"], version="v2")` 仍是当前契约；`thread_id=session_id` 只作为 checkpointer 上下文键，不参与 run event 查询。
 

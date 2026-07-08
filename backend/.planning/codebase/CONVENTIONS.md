@@ -79,7 +79,8 @@
 
 - Brain 调用统一走 `brain.stream({"messages": normalized_messages}, config={"configurable":{"thread_id":session_id}}, stream_mode=["messages","custom","values"], version="v2")`。
 - payload **只**传当前请求的 `messages[]`；`text` block 原样保留，`artifact` block 会在进入 Brain 前转成文本路径提示（测试脚本的 `FakeBrain` 断言 Brain 侧只收到 text blocks，证明不再直接透传 artifact block，也不再注入 `RemoveMessage`）。
-- run ledger 事件类型固定 5 种：`status` / `thinking` / `text_delta` / `tool_status` / `values`。
+- run ledger 事件类型固定 7 种：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
+- `raw.type=="values"` 只保留在原始 snapshot；业务层从 snapshot 中派生 `tool_call` / `tool_result` / `assistant_message`，不再把 `values` 当作业务事件写库。
 - 工具状态中间件只发 `started` / `completed` / `error` 三态（测试脚本断言）。
 
 ## 10. 持久化约定（已确认）

@@ -122,11 +122,44 @@ def _check_api(tmp: str) -> None:
         assert run_detail.status_code == 200
         run_payload = run_detail.json()
         event_types = [event["type"] for event in run_payload["events"]]
-        assert event_types == ["status", "status", "values", "thinking", "text_delta", "tool_status", "text_delta", "values", "status"]
+        assert event_types == [
+            "status",
+            "status",
+            "thinking",
+            "text_delta",
+            "tool_call",
+            "tool_status",
+            "tool_result",
+            "text_delta",
+            "assistant_message",
+            "status",
+        ]
+        tool_call_event = [event for event in run_payload["events"] if event["type"] == "tool_call"][0]
+        assert tool_call_event["payload"] == {
+            "message_id": "assistant-tool-" + session_id + "-2",
+            "tool_call_id": "call-" + session_id + "-2",
+            "name": "read_file",
+            "args": {"file_path": "/artifacts/uploads/demo.jpg"},
+        }
+        tool_result_event = [event for event in run_payload["events"] if event["type"] == "tool_result"][0]
+        assert tool_result_event["payload"] == {
+            "message_id": "tool-result-" + session_id + "-2",
+            "tool_call_id": "call-" + session_id + "-2",
+            "name": "read_file",
+            "status": "success",
+            "content_type": "image",
+            "mime_type": "image/jpeg",
+            "text": None,
+            "preview": None,
+        }
+        assert "base64" not in json.dumps(tool_result_event["payload"], ensure_ascii=False)
         latest_content_event = run_payload["latest_content_event"]
         assert latest_content_event is not None
-        assert latest_content_event["type"] == "values"
-        assert latest_content_event["payload"] == {"text": "echo[2]: again"}
+        assert latest_content_event["type"] == "assistant_message"
+        assert latest_content_event["payload"] == {
+            "message_id": "assistant-final-" + session_id + "-2",
+            "text": "echo[2]: again",
+        }
         cursor = latest_content_event["event_id"]
         cursor_payload = client.get(f"/runs/{follow_up_payload['run_id']}", params={"after_event_id": cursor}).json()
         assert len(cursor_payload["events"]) < len(run_payload["events"])
@@ -146,6 +179,7 @@ def _check_api(tmp: str) -> None:
         multimodal_snapshot = wait_for_run(client, multimodal_run_payload["run_id"], "succeeded")
         assert multimodal_snapshot["reply"].startswith("echo[1]: 这张图里有什么？")
         multimodal_detail = client.get(f"/runs/{multimodal_run_payload['run_id']}").json()
+        assert multimodal_detail["latest_content_event"]["type"] == "assistant_message"
         assert multimodal_detail["latest_content_event"]["payload"]["text"] == multimodal_snapshot["reply"]
         normalized_messages = factory.received_payloads[2]
         assert normalized_messages[0]["content"][1] == {

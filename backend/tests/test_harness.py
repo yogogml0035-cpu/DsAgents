@@ -87,11 +87,44 @@ def _check_harness(tmp: str) -> None:
         hello_messages = [user_message(text_block("hello"))]
         resources.runs.create_run("run-h1", "thread-a", messages_json(hello_messages))
         events = list(harness.execute_run(hello_messages, "thread-a", "run-h1"))
-        assert [event.event_type for event in events] == ["status", "values", "thinking", "text_delta", "tool_status", "text_delta", "values", "status"]
+        assert [event.event_type for event in events] == [
+            "status",
+            "thinking",
+            "text_delta",
+            "tool_call",
+            "tool_status",
+            "tool_result",
+            "text_delta",
+            "assistant_message",
+            "status",
+        ]
         assert resources.runs.get_run("run-h1").reply == "echo[1]: hello"
         raw_events = resources.runs.get_run_events("run-h1")
         thinking_event = [event for event in raw_events if event.event_type == "thinking"][0]
         assert thinking_event.raw["type"] == "messages"
+        tool_call_event = [event for event in raw_events if event.event_type == "tool_call"][0]
+        assert tool_call_event.payload == {
+            "message_id": "assistant-tool-thread-a-1",
+            "tool_call_id": "call-thread-a-1",
+            "name": "read_file",
+            "args": {"file_path": "/artifacts/uploads/demo.jpg"},
+        }
+        tool_result_event = [event for event in raw_events if event.event_type == "tool_result"][0]
+        assert tool_result_event.payload == {
+            "message_id": "tool-result-thread-a-1",
+            "tool_call_id": "call-thread-a-1",
+            "name": "read_file",
+            "status": "success",
+            "content_type": "image",
+            "mime_type": "image/jpeg",
+            "text": None,
+            "preview": None,
+        }
+        assistant_event = [event for event in raw_events if event.event_type == "assistant_message"][0]
+        assert assistant_event.payload == {
+            "message_id": "assistant-final-thread-a-1",
+            "text": "echo[1]: hello",
+        }
         assert factory.received_payloads[0] == hello_messages
 
         again_messages = [user_message(text_block("again"))]

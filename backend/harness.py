@@ -100,6 +100,10 @@ class HarnessRuntime:
     def execute_run(self, messages: Sequence[dict[str, Any]], session_id: str, run_id: str) -> Iterator[RunEvent]:
         assistant_text = ""
         text_parts: list[str] = []
+        seen_tool_call_ids: set[str] = set()
+        seen_tool_result_ids: set[str] = set()
+        seen_assistant_message_ids: set[str] = set()
+        tool_call_names: dict[str, str] = {}
         normalized_messages = _normalize_messages(messages)
         yield self.resources.runs.emit_run_status(run_id, "running")
         try:
@@ -142,15 +146,24 @@ class HarnessRuntime:
                         raw=chunk,
                     )
                 elif chunk["type"] == "values":
-                    text = _assistant_text(chunk["data"])
-                    if text:
-                        assistant_text = text
-                    yield self.resources.runs.emit_run_event(
-                        run_id,
-                        "values",
-                        {"text": text} if text else {},
-                        raw=chunk,
-                    )
+                    snapshot_text = _assistant_text(chunk["data"])
+                    if snapshot_text:
+                        assistant_text = snapshot_text
+                    for event_type, payload in _snapshot_events(
+                        chunk["data"],
+                        seen_tool_call_ids=seen_tool_call_ids,
+                        seen_tool_result_ids=seen_tool_result_ids,
+                        seen_assistant_message_ids=seen_assistant_message_ids,
+                        tool_call_names=tool_call_names,
+                    ):
+                        if event_type == "assistant_message" and payload.get("text"):
+                            assistant_text = payload["text"]
+                        yield self.resources.runs.emit_run_event(
+                            run_id,
+                            event_type,
+                            payload,
+                            raw=chunk,
+                        )
         except Exception as exc:
             yield self.resources.runs.emit_run_status(
                 run_id,
@@ -218,6 +231,50 @@ def _assistant_text(result: dict[str, Any]) -> str:
     return _content_text(_assistant_content(result))
 
 
+def _snapshot_events(
+    result: dict[str, Any],
+    *,
+    seen_tool_call_ids: set[str],
+    seen_tool_result_ids: set[str],
+    seen_assistant_message_ids: set[str],
+    tool_call_names: dict[str, str],
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    messages = result.get("messages") or []
+    for message in messages:
+        role = _message_role(message)
+        if role in {"assistant", "ai"}:
+            tool_calls = _message_tool_calls(message)
+            for tool_call in tool_calls:
+                payload = _tool_call_payload(message, tool_call)
+                if payload is None:
+                    continue
+                tool_call_id = payload["tool_call_id"]
+                if tool_call_id in seen_tool_call_ids:
+                    continue
+                seen_tool_call_ids.add(tool_call_id)
+                tool_call_names[tool_call_id] = payload["name"]
+                yield "tool_call", payload
+            payload = _assistant_message_payload(message, tool_calls=tool_calls)
+            if payload is None:
+                continue
+            message_id = payload["message_id"]
+            if message_id in seen_assistant_message_ids:
+                continue
+            seen_assistant_message_ids.add(message_id)
+            yield "assistant_message", payload
+            continue
+        if role != "tool":
+            continue
+        payload = _tool_result_payload(message, tool_call_names=tool_call_names)
+        if payload is None:
+            continue
+        result_id = payload["tool_call_id"]
+        if result_id in seen_tool_result_ids:
+            continue
+        seen_tool_result_ids.add(result_id)
+        yield "tool_result", payload
+
+
 def _message_delta(data: Any) -> str:
     message = data[0] if isinstance(data, tuple) and data else data
     if isinstance(message, dict):
@@ -262,6 +319,170 @@ def _message_content(message: Any) -> Any:
     if isinstance(message, dict):
         return message.get("content")
     return getattr(message, "content", message)
+
+
+def _message_id(message: Any) -> str | None:
+    if isinstance(message, dict):
+        value = message.get("id")
+    else:
+        value = getattr(message, "id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _message_tool_calls(message: Any) -> list[dict[str, Any]]:
+    if isinstance(message, dict):
+        tool_calls = message.get("tool_calls")
+    else:
+        tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(tool_calls, list):
+        return []
+    return [tool_call for tool_call in tool_calls if isinstance(tool_call, dict)]
+
+
+def _tool_call_payload(message: Any, tool_call: dict[str, Any]) -> dict[str, Any] | None:
+    message_id = _message_id(message)
+    tool_call_id = tool_call.get("id")
+    name = tool_call.get("name")
+    if not isinstance(message_id, str) or not isinstance(tool_call_id, str) or not isinstance(name, str):
+        return None
+    args = tool_call.get("args")
+    return {
+        "message_id": message_id,
+        "tool_call_id": tool_call_id,
+        "name": name,
+        "args": args if isinstance(args, dict) else {},
+    }
+
+
+def _assistant_message_payload(message: Any, *, tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if tool_calls:
+        return None
+    message_id = _message_id(message)
+    text = _content_text(_message_content(message))
+    if not isinstance(message_id, str) or not text:
+        return None
+    return {"message_id": message_id, "text": text}
+
+
+def _tool_result_payload(message: Any, *, tool_call_names: dict[str, str]) -> dict[str, Any] | None:
+    tool_call_id = _tool_call_id(message)
+    if not tool_call_id:
+        return None
+    message_id = _message_id(message) or tool_call_id
+    name = _tool_message_name(message) or tool_call_names.get(tool_call_id)
+    return {
+        "message_id": message_id,
+        "tool_call_id": tool_call_id,
+        "name": name,
+        "status": _tool_message_status(message),
+        **_tool_result_summary(message),
+    }
+
+
+def _tool_call_id(message: Any) -> str | None:
+    if isinstance(message, dict):
+        value = message.get("tool_call_id")
+    else:
+        value = getattr(message, "tool_call_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _tool_message_name(message: Any) -> str | None:
+    if isinstance(message, dict):
+        value = message.get("name")
+    else:
+        value = getattr(message, "name", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _tool_message_status(message: Any) -> str:
+    if isinstance(message, dict):
+        value = message.get("status")
+    else:
+        value = getattr(message, "status", None)
+    return value if isinstance(value, str) and value else "success"
+
+
+def _tool_message_artifact(message: Any) -> Any:
+    if isinstance(message, dict):
+        return message.get("artifact")
+    return getattr(message, "artifact", None)
+
+
+def _tool_result_summary(message: Any) -> dict[str, Any]:
+    content = _message_content(message)
+    media = _tool_result_media(content) or _tool_result_media(_tool_message_artifact(message))
+    if media is not None:
+        return {
+            "content_type": media[0],
+            "mime_type": media[1],
+            "text": None,
+            "preview": None,
+        }
+    text = _content_text(content).strip()
+    if text:
+        if len(text) <= 500:
+            return {
+                "content_type": "text",
+                "mime_type": None,
+                "text": text,
+                "preview": None,
+            }
+        return {
+            "content_type": "text",
+            "mime_type": None,
+            "text": None,
+            "preview": f"{text[:197]}...",
+        }
+    return {
+        "content_type": "unknown",
+        "mime_type": None,
+        "text": None,
+        "preview": None,
+    }
+
+
+def _tool_result_media(value: Any) -> tuple[str, str | None] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _media_from_string(value)
+    if isinstance(value, dict):
+        mime_type = value.get("mime_type")
+        if isinstance(mime_type, str) and mime_type:
+            return _media_kind(mime_type), mime_type
+        block_type = value.get("type")
+        if block_type == "image_url":
+            url = value.get("image_url")
+            if isinstance(url, dict):
+                return _tool_result_media(url.get("url"))
+        for item in value.values():
+            media = _tool_result_media(item)
+            if media is not None:
+                return media
+        return None
+    if isinstance(value, list):
+        for item in value:
+            media = _tool_result_media(item)
+            if media is not None:
+                return media
+    return None
+
+
+def _media_from_string(value: str) -> tuple[str, str | None] | None:
+    if not value.startswith("data:"):
+        return None
+    mime_type = value[5:].split(";", 1)[0]
+    if not mime_type:
+        return "file", None
+    return _media_kind(mime_type), mime_type
+
+
+def _media_kind(mime_type: str) -> str:
+    family = mime_type.split("/", 1)[0]
+    if family in {"image", "audio", "video"}:
+        return family
+    return "file"
 
 
 def _content_text(content: Any) -> str:

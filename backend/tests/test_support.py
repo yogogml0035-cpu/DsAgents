@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 
 class StreamControl:
@@ -65,8 +65,39 @@ class FakeBrain:
             self.control.started.set()
             assert self.control.release.wait(timeout=5), "hold run was never released"
         reply = f"echo[{len(history)}]: {text}"
+        tool_call = {
+            "id": f"call-{thread_id}-{len(history)}",
+            "name": "read_file",
+            "args": {"file_path": "/artifacts/uploads/demo.jpg"},
+        }
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo["), {"langgraph_node": "model"})}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [
+                    AIMessage(content="", id=f"assistant-tool-{thread_id}-{len(history)}", tool_calls=[tool_call])
+                ]
+            },
+            "interrupts": (),
+        }
         yield {"type": "custom", "ns": (), "data": {"name": "parse_document", "status": "started"}}
+        yield {
+            "type": "values",
+            "ns": (),
+            "data": {
+                "messages": [
+                    AIMessage(content="", id=f"assistant-tool-{thread_id}-{len(history)}", tool_calls=[tool_call]),
+                    ToolMessage(
+                        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}],
+                        id=f"tool-result-{thread_id}-{len(history)}",
+                        tool_call_id=tool_call["id"],
+                        name="read_file",
+                    ),
+                ]
+            },
+            "interrupts": (),
+        }
         yield {
             "type": "messages",
             "ns": (),
@@ -82,6 +113,7 @@ class FakeBrain:
                             {"type": "thinking", "thinking": "plan: "},
                             {"type": "text", "text": reply},
                         ],
+                        id=f"assistant-final-{thread_id}-{len(history)}",
                         response_metadata={"model_provider": "anthropic"},
                     )
                 ]

@@ -53,7 +53,7 @@
 
 - **已确认**｜`harness.py:59-63` 把 MiniMax（OpenAI/Anthropic 兼容）密钥/模型硬编码塞进 `init_chat_model(f"anthropic:{model}", api_key=..., base_url=..., thinking={"type":"adaptive"})` —— 强耦合 Anthropic 客户端协议与 `thinking` 参数。
 - **已确认**｜依赖下限在 `pyproject.toml`：`deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7` —— 均为 `>=` 无上限，`uv.lock`（311KB）锁具体版本，但任一主版本升级可能破坏 stream chunk 解析（`harness.py` 的 `_message_delta`/`_thinking_delta` 大量依赖 chunk 字段形状）。
-- **风险**｜stream chunk 形状（`chunk["type"]` ∈ `messages`/`custom`/`values`、`event` 后缀 `delta`、`thinking`/`reasoning`/`non_standard` block 类型）是 langchain/deepagents 内部约定，无版本契约保护。
+- **风险**｜stream chunk 形状（`chunk["type"]` ∈ `messages`/`custom`/`values`、`event` 后缀 `delta`、`thinking`/`reasoning`/`non_standard` block 类型、snapshot 中 `message.id` / `tool_call_id` / `tool_calls[]` 形状）是 langchain/deepagents 内部约定，无版本契约保护。
 
 ## 8. 文档同步风险
 
