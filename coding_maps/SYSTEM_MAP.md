@@ -99,7 +99,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 - 上传：`POST /upload` → `data/artifacts/uploads/<uuid>_<cleaned_name>`，返回虚拟路径 `/artifacts/uploads/...` 与元数据数组。
 - 工具层 `tools._resolve_document_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权。
-- `parse_documents` 默认把成功结果写到 `data/artifacts/downloads/<artifact-stem>_<YYYYMMDDHHMMSS>.md`。
+- `parse_documents` 默认把 task 级结果 ZIP 写到 `data/artifacts/downloads/<stem>.zip`（单文件复用源 stem；多文件为 `<first-stem>_etc_<batch-ts>.zip`）；`extract_archives` 把 ZIP 解压到 `data/artifacts/downloads/<zip-stem>/`。
 - `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
 
 ### 4.5 鉴权 / 跨域边界（已确认缺失）

@@ -39,7 +39,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 | `hands.py` | 执行器/中间件抽象（`Hands` Protocol + `ToolStatusMiddleware`） |
 | `resources.py` | 资源装配器（`AgentResources`：run ledger + checkpointer + store + `CompositeBackend`） |
 | `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
-| `tools.py` | 工具抽象 + 默认业务工具 `parse_documents`（批量调 MinerU） |
+| `tools.py` | 工具抽象 + 默认业务工具 `parse_documents`（批量调 MinerU，保存 task 级 ZIP）与 `extract_archives`（解压 ZIP） |
 
 固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`downloads/` 文档解析产物、`run-events/` 大 payload 外溢）。
 

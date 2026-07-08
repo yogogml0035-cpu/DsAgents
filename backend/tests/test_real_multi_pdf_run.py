@@ -35,7 +35,7 @@ def run() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Upload PDFs once, ask the agent to call parse_documents once, and verify the generated markdown paths."
+        description="Upload PDFs once, ask the agent to call parse_documents once, and confirm it returns a ZIP archive_path (optionally followed by extract_archives)."
     )
     parser.add_argument("--base-url", default=os.getenv("DSAGENTS_API_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--pdf-dir", type=Path, default=Path(os.getenv("DSAGENTS_PDF_DIR", str(DEFAULT_PDF_DIR))))
@@ -126,7 +126,7 @@ def _build_request(request: str, uploaded_files: list[dict[str, Any]]) -> str:
         request,
         "",
         "必须只调用一次 parse_documents；args.file_paths 必须严格使用下面清单里的路径并保持顺序。",
-        "全部完成后，只列出生成的文件路径，不要只总结 PDF 内容。",
+        "解析完成后列出返回的 archive_path（ZIP 归档）；如需查看解析内容可继续调用 extract_archives 解压。",
         "",
         "PDF 清单：",
     ]

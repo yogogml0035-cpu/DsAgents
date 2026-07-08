@@ -15,7 +15,7 @@
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
 | `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
-| `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_documents`（一次调 MinerU 批量解析文档为 markdown） |
+| `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_documents`（一次调 MinerU 批量解析文档并保存 task 级 ZIP）与 `extract_archives`（解压 ZIP 列出文件清单） |
 
 `backend/dsagents.egg-info/` 当前仍被 git 跟踪，但它是 setuptools 生成元数据，不是运行入口；修改依赖或 `py-modules` 时容易出现机械 churn。
 
@@ -74,7 +74,7 @@ backend/
     ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成）
     ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
-    │   ├── downloads/              # parse_documents 输出目录（上传来源复用 <uploaded-stem>.md，其它来源为 <source-stem>_<parse-ts>(_n).md，按需创建）
+    │   ├── downloads/              # parse_documents 输出 task 级 ZIP，extract_archives 解压到 <zip-stem>/ 子目录（按需创建）
     │   └── uploads/                # POST /upload 上传落地点（<原名>_<upload-ts>(_n).ext）；首次写入时创建
     └── internal/
         └── run-events/             # run 事件大 payload 外溢（*.json，仅真正 spill 时创建）
@@ -97,10 +97,11 @@ backend/
 
 `backend/tests/` 是当前测试源码目录，断言分布在：
 
-- `test_tools.py`：`parse_documents` env guard、`/artifacts/...` 路径解析、批量提交/部分失败/链路失败
+- `test_tools.py`：`parse_documents` env guard、`/artifacts/...` 路径解析、`/tasks` form 含 zip 参数、单/多文件保存 task 级 ZIP、`extract_archives` 解压并返回文件清单、部分失败/链路失败
 - `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复
 - `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化、`assistant_message` 的最终 `thinking` 载荷
 - `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复
 - `test_real_image_run.py`：手动真实图片 HTTP 集成测试
+- `test_real_multi_pdf_run.py`：手动真实 HTTP / 模型 / MinerU 集成脚本（确认 `parse_documents` 返回 `archive_path`，可选后续 `extract_archives`）
 
 当前仍**不是 pytest 套件**；没有总控 runner，回归按影响范围直接运行对应 `test_*.py` 脚本。

@@ -117,16 +117,18 @@ brain.stream(
 
 ## 6. 外部 HTTP 调用（requests）
 
-仅 `tools.py`，对接 MinerU 3.4.0 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_fetch_mineru_markdown`）：
+仅 `tools.py`，对接 MinerU 3.4.0 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_download_mineru_zip`）：
 
 | 调用 | 方法 / URL | 入参 | 说明 |
 |---|---|---|---|
-| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/response_format_zip`，timeout=`MINERU_TIMEOUT_SECONDS`） | 源文件 + 配置 | 只接受当前官方响应字段 `task_id/status_url/result_url`；`effort` 允许空字符串 |
+| 提交任务 | `POST {MINERU_BASE_URL}/tasks`（multipart `files=[...]`，form `backend/effort/return_md/return_content_list/return_images/return_original_file/response_format_zip=true`，timeout=`MINERU_TIMEOUT_SECONDS`） | 源文件 + 配置 | 只接受当前官方响应字段 `task_id/status_url/result_url`；`effort` 允许空字符串 |
 | 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 30 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
-| 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
+| 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，`stream=True` 流式落盘） | 已完成任务 | 直接保存 task 级二进制 ZIP（含 markdown + content_list + images + 原始文件），不再解析 JSON `md_content` |
 
-工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果。若输入来自符合当前上传命名规则的 `/artifacts/uploads/...`，成功项会复用上传文件的 stem 生成 `data/artifacts/downloads/<uploaded-stem>(_n).md`，让上传与下载路径里的时间戳后缀保持一致；其它来源仍写到 `data/artifacts/downloads/<source-stem>_<parse-ts>(_n).md`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
+工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、把 task 级结果 ZIP 保存到 `/artifacts/downloads/<stem>.zip`。单文件 ZIP 命名复用源文件 stem（如 `report_20260708000000.pdf` → `report_20260708000000.zip`），多文件命名为 `<first-stem>_etc_<batch-ts>.zip`，重名继续用 `make_unique_name`。成功返回结构化 JSON（`task_id/status_url/result_url/archive_path/succeeded[]/failed[]`）；`succeeded[]` 只记录成功提交的源文件 `file_path`，不再伪造每文件输出路径；无有效输入时 `archive_path=None`。
 
-`parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `output_paths` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
+工具 `extract_archives(zip_paths: list[str])`：最小本地解压工具，用标准库 `zipfile` 把每个 ZIP 解压到 `/artifacts/downloads/<zip-stem>/`，返回 `succeeded[]`（含 `archive_path`/`output_dir`/`files[]`）与 `failed[]`（逐 ZIP 错误）；不新增通用命令/代码执行工具、不引入依赖、不做历史兼容。
 
-`default_tool_catalog()` 当前只注册一个工具：`parse_documents`。
+`parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `archive_path` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
+
+`default_tool_catalog()` 当前注册两个工具：`parse_documents`、`extract_archives`。
