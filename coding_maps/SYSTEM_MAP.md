@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新已核对最近相关提交：`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 系统目的和仓库形态
 
@@ -49,7 +49,7 @@ HarnessRuntime.execute_run(...)
   │                stream_mode=["messages","custom","values"], version="v2")
   │    ├─ messages chunk → thinking / text_delta
   │    ├─ custom   chunk → tool_status（来自 ToolStatusMiddleware）
-  │    └─ values   snapshot → tool_call / tool_result / assistant_message（assistant_message 保留最终 thinking 文本；同时更新 reply 候选；values 只保留在 raw）
+  │    └─ values   snapshot → tool_call / tool_result / assistant_message（assistant_message 保留最终 AIMessage 的最后一个 thinking 文本；同时更新 reply 候选；values 只保留在 raw）
   ├─ 成功 → emit status=succeeded(reply=...)
   └─ 异常 → emit status=failed(error=...)（真实错误透传，不吞）
 
@@ -84,6 +84,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 `after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
 
 `api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。
+`assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `raw.type=="values"` 的最终 AIMessage snapshot；调用方不应直接依赖 `values` 事件类型。
 
 ### 4.2 LLM provider 边界
 
@@ -127,7 +128,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 | 改工具 / MinerU 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §6 → `backend/tools.py` |
 | 改 HTTP 契约 | [`INTERFACES.md`](../INTERFACES.md) §1 → [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1 → `backend/api.py` |
 | 跨系统接口修改 | [`INTERFACES.md`](../INTERFACES.md)（provider/存储/artifacts 边界）→ 本文件 §4 |
-| 文档维护 | [`AGENTS.md`](../AGENTS.md) §关键约定 + §5 文档同步规则 → [`backend/.planning/codebase/CONVENTIONS.md`](../backend/.planning/codebase/CONVENTIONS.md) §12 |
+| 文档维护 | [`AGENTS.md`](../AGENTS.md) 关键约定与末尾维护规则 → [`backend/.planning/codebase/CONVENTIONS.md`](../backend/.planning/codebase/CONVENTIONS.md) §12 |
 | 验证 / 测试策略 | [`backend/.planning/codebase/TESTING.md`](../backend/.planning/codebase/TESTING.md) |
 
 完整任务→阅读顺序映射见根级 [`docs/reading-order.md`](../docs/reading-order.md)。

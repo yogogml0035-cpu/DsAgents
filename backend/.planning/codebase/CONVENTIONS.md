@@ -1,6 +1,6 @@
 # CONVENTIONS
 
-> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`。
+> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-08）已核对当前 HEAD `349357b`。
 > 区分「已确认」（直接对应代码）与「需确认」（证据不足）。
 
 ## 1. 包管理器（已确认）
@@ -81,6 +81,7 @@
 - payload **只**传当前请求的 `messages[]`；`text` block 原样保留，`artifact` block 会在进入 Brain 前转成文本路径提示（测试脚本的 `FakeBrain` 断言 Brain 侧只收到 text blocks，证明不再直接透传 artifact block，也不再注入 `RemoveMessage`）。
 - run ledger 事件类型固定 7 种：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
 - `raw.type=="values"` 只保留在原始 snapshot；业务层从 snapshot 中派生 `tool_call` / `tool_result` / `assistant_message`，不再把 `values` 当作业务事件写库，外部调用方也不应依赖 `values` 事件。
+- 最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 保留最后一个 `thinking` 文本和最终 `text`；改动该结构必须同步 `INTERFACES.md`、`SYSTEM_MAP.md` 和 API / harness 测试断言。
 - 工具状态中间件只发 `started` / `completed` / `error` 三态（测试脚本断言）。
 
 ## 10. 持久化约定（已确认）

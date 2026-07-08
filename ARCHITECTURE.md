@@ -2,6 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
+> 本轮刷新（2026-07-08）已核对当前 HEAD `349357b`：最终 `assistant_message.payload` 可携带同条 AIMessage 的最后一个 `thinking` 文本。
 
 ## 1. 系统定位
 
@@ -51,7 +52,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 ## 6. 关键约束
 
 - **run-first**：无 `session.py`、无 session 表、无 `context_window`、无 `RemoveMessage(REMOVE_ALL_MESSAGES)`、无 `run_turn`/`stream_turn`；旧 `from session import run_session` 已删除。
-- **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`；LangGraph `values` snapshot 只保留在 `raw` 中。
+- **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`；LangGraph `values` snapshot 只保留在 `raw` 中，最终 `assistant_message.payload` 可带 `thinking` 与 `text`。
 - **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。
 - **`uv` 包管理**：安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
 - **`.env` 加载**：由 `harness.py` 与 `tools.py` 在导入时 `load_dotenv(Path(__file__).with_name(".env"))`（删除 `session.py` 后保留配置加载点）。

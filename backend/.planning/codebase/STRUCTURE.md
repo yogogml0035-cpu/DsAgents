@@ -1,7 +1,7 @@
 # STRUCTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新已核对最近相关提交：`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 顶层模块组织
 
@@ -10,7 +10,7 @@
 | 模块 | 职责（一两句话） |
 |------|------------------|
 | `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`；run 后台线程调度、同 session 并发保护、启动恢复、多文件上传落盘 |
-| `harness.py` | run 执行核心：`HarnessRuntime.execute_run` 装配 Brain/Hands/Tools 并把 `brain.stream(...)` 的 chunk 规范化为 `RunEvent`；含 `create_harness` 默认工厂与 `DeepAgentsBrainFactory` |
+| `harness.py` | run 执行核心：`HarnessRuntime.execute_run` 装配 Brain/Hands/Tools 并把 `brain.stream(...)` 的 chunk 规范化为 `RunEvent`；含 `create_harness` 默认工厂与 `DeepAgentsBrainFactory`；从最终 AIMessage 提取 `assistant_message.payload.thinking` |
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
 | `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
@@ -95,8 +95,8 @@ backend/
 
 - `test_tools.py`：`parse_document` env guard、`/artifacts/...` 路径解析、工具基础函数
 - `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复
-- `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化
-- `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、并发冲突、失败后续跑、启动恢复
+- `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化、`assistant_message` 的最终 `thinking` 载荷
+- `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复
 - `test_real_image_run.py`：手动真实图片 HTTP 集成测试
 
 当前仍**不是 pytest 套件**；没有总控 runner，回归按影响范围直接运行对应 `test_*.py` 脚本。

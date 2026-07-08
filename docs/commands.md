@@ -43,6 +43,8 @@ curl -X POST http://127.0.0.1:8500/runs ^
 curl "http://127.0.0.1:8500/runs/<run_id>"
 ```
 
+轮询增量事件时可加 `?after_event_id=<event_id>`；该游标只影响返回的 `events[]`，不影响 `latest_content_event`。
+
 常见办公文件和任意图片都可以先用 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型的多模态能力。
 
 ## 程序内调用

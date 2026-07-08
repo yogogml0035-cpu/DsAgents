@@ -1,7 +1,7 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新已核对最近相关提交：`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 

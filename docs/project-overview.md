@@ -1,6 +1,6 @@
 # 项目总览
 
-> 本文件只放 AGENTS.md 未覆盖的增量信息（当前重点、技术栈指针、源码阅读入口）。项目定位、关键约定（`uv` 包管理、扁平模块、无 `from session import run_session`）见 [`AGENTS.md`](../AGENTS.md)。
+> 本文件承接 AGENTS.md 的详细说明（当前重点、技术栈指针、源码阅读入口）。项目定位、关键约定（`uv` 包管理、扁平模块、无 `from session import run_session`）见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 当前重点
 

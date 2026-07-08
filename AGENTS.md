@@ -5,11 +5,12 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 ## 关键约定
 
 - **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
-- **run-first 架构**：run 是唯一的执行单位与查询单位（`run_events` append-only，`runs` 是事件投影快照）；session 模块与 session 持久化层已移除，`session_id` 仅作为 LangGraph checkpointer 的 `thread_id` 和进程内单飞锁键，**不再**是一等持久化对象。短期上下文全交给 checkpointer + `thread_id=session_id`；`values` 只保留在 raw snapshot，不是公开业务事件。
-- **运行入口**：HTTP 用 `POST /runs` 与 `POST /upload`；程序内调用用 `AgentResources` + `create_harness(resources).execute_run(messages, session_id, run_id)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（扁平顶层模块，无 `__init__.py` / `__main__.py`）。
-- **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界（当前 `Brain` / `BrainFactory` / `Hands`）；默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory`、`ToolStatusHands`、`default_tool_catalog()`。普通工具保持 callable + `ToolCatalog`，资源 / ledger 保持具体类；不要为单实现小功能新增 Protocol/ABC。外部框架要求继承时才继承框架基类（如 `AgentMiddleware`）。
-- **验证入口**：仅文档变更至少跑 `git diff --check`；backend 代码变更按影响范围直接跑对应测试脚本，例如 `cd backend && python -m tests.test_api`。没有总控自检脚本，不要新增 `self_check.py` / 聚合 runner。
-- **测试目录**：backend 测试放 `backend/tests/`，脚本以 `test_*.py` 命名；每个可执行测试脚本保留 `run()`，并用 `if __name__ == "__main__": run()` 支持 `python -m tests.test_xxx` 直接执行。共享替身/工具可放 `test_support.py`，不承载独立断言入口。
+- **技术栈定位**：Python / FastAPI / DeepAgents / LangGraph / SQLite；完整依赖、配置键和 provider 边界不要塞进本文件，先看 `backend/.planning/codebase/STACK.md` 与 `INTEGRATIONS.md`。
+- **run-first 架构**：run 是唯一执行/查询单位；`run_events` append-only，`runs` 是投影快照；`session_id` 只作 LangGraph `thread_id` 和进程内单飞锁键，不再是一等持久化对象；`values` 只保留在 raw snapshot。
+- **运行入口**：HTTP 用 `POST /runs`、`GET /runs/{run_id}` 与 `POST /upload`；程序内用 `AgentResources` + `create_harness(resources).execute_run(messages, session_id, run_id)`；没有 `from session import run_session` 或 `python -m backend.*`。
+- **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界（`Brain` / `BrainFactory` / `Hands`）；工具保持 callable + `ToolCatalog`，资源 / ledger 保持具体类；不要为单实现小功能新增 Protocol/ABC。
+- **验证入口**：仅文档变更至少跑 `git diff --check`；backend 代码变更按影响范围直接跑对应测试脚本，例如 `cd backend && python -m tests.test_api`。没有总控自检脚本。
+- **测试目录**：backend 测试放 `backend/tests/`，脚本以 `test_*.py` 命名；可执行测试脚本保留 `run()` + `if __name__ == "__main__": run()`；共享替身/工具放 `test_support.py`。
 - **真实集成测试**：会触达真实 HTTP 服务、模型、MinerU 或外部网络的脚本必须显式命名/标注，并默认与普通本地脚本分开运行；不要把真实调用混进普通回归脚本。
 - **文档语言**：简体中文（保留代码标识符 / 路径 / 命令 / 配置键 / IP/端口原文）；不外泄密钥；只记录配置键与用途，不把本地 `.env` 值写进长期文档；证据不足标注"需确认"。
 

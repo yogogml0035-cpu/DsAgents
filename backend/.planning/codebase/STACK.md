@@ -1,7 +1,7 @@
 # STACK
 
 > 技术栈快照。所有事实均基于当前代码（`pyproject.toml` + backend 顶层模块）核对。
-> 本轮刷新已核对最近相关提交：`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 > 本文件优先记录代码与仓库配置可直接证实的事实；运行命令优先以仓库内 `scripts/start-backend.bat` 与测试默认值为准。
 
 ## 1. 运行时 / 语言
@@ -37,7 +37,7 @@ py-modules = ["api", "hands", "harness", "resources", "run_ledger", "tools"]
 | `httpx2` | `>=2.5.0` | `fastapi.testclient.TestClient` 的 HTTP 客户端传输层，用于本地 HTTP 断言且避免 `starlette.testclient` 对 `httpx` 的弃用警告 | `backend/tests/test_api.py`、`backend/tests/test_support.py` |
 | `langchain` | `>=1.3.11` | `init_chat_model`、`AgentMiddleware`、`ToolCallRequest` | `harness.py`、`hands.py` |
 | `langchain-anthropic` | `>=1.4.8` | LLM provider（Anthropic 兼容客户端，实际可指向 MiniMax 端点） | 经 `init_chat_model("anthropic:...")` 间接使用；测试脚本断言 `ChatAnthropic` |
-| `langchain-core` | `>=1.4.8` | `BaseChatModel`、`AIMessage` / `AIMessageChunk` | `harness.py`、`backend/tests/test_support.py`、`backend/tests/test_harness.py` |
+| `langchain-core` | `>=1.4.8` | `BaseChatModel`、`AIMessage` / `AIMessageChunk`；测试最终 AIMessage 的 `thinking`/`text` block 载荷 | `harness.py`、`backend/tests/test_support.py`、`backend/tests/test_harness.py` |
 | `langgraph` | `>=1.2.7` | Agent 编排 / 流式 API；`get_stream_writer` | `hands.py`；harness 调用 `brain.stream(..., version="v2")` |
 | `langgraph-checkpoint-sqlite` | `>=3.1.0` | LangGraph checkpointer（`SqliteSaver`） | `resources.py` |
 | `python-multipart` | `>=0.0.20` | `POST /upload` 多文件上传解析（`UploadFile`） | `api.py` |

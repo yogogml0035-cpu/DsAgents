@@ -1,6 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
+> 本轮刷新（2026-07-08）已核对当前 HEAD `349357b`：最终 `assistant_message.payload` 可包含最后一个 `thinking` 文本和最终 `text`。
 
 ## 1. HTTP API 边界
 
