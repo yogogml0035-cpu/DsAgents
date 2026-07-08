@@ -1,7 +1,7 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新已核对最近相关提交：`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
@@ -74,6 +74,7 @@ brain.stream(
 - `thread_id = session_id`
 - `text` block 原样保留；`artifact` block 转成文本路径提示
 - `messages` / `custom` / `values` 三 channel 全部消费，其中 `values` 只保留 raw snapshot，并派生 `tool_call` / `tool_result` / `assistant_message`
+- `values` 不是公开 run event type；外部调用方应消费七类规范化事件，完整 snapshot 仅保留在事件 `raw`
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`），不只是 `chunk["data"]`
 - run event 查询维度始终是 `run_id`；`thread_id=session_id` 只用于 checkpointer 上下文，不参与 `run_events` 查询
 

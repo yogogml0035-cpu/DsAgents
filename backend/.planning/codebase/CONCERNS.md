@@ -1,7 +1,7 @@
 # CONCERNS
 
 > backend 风险、技术债、关注点。每条均带证据（文件/commit/配置）。状态分 **已确认**（代码或配置可证）与 **需确认**（推断，需人工核实）。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。行号以当前源码为准。
+> 本轮刷新已核对最近相关提交：`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。行号以当前源码为准。
 
 ## 1. 架构迁移残留（run-first 重构，commit 8890292）
 
@@ -25,6 +25,7 @@
 ## 3. 仓库体积 / 入库风险
 
 - **已清理**｜`backend/instantclient/`（Oracle instant client 19.31，约 109MB，37 个 git 跟踪文件）已删除；`.gitignore` 已加入 `backend/instantclient/` 防止重新入库。
+- **已确认**｜`backend/dsagents.egg-info/` 当前仍被 git 跟踪（`git ls-files backend/dsagents.egg-info` 有结果），但它是 setuptools 生成元数据；改依赖或 `py-modules` 时可能产生机械 churn，是否移出索引需确认。
 - **已确认**｜`__pycache__/` 与 `*.pyc` 已在 `.gitignore`，未入库（`git ls-files | grep __pycache__` 为空）。
 
 ## 4. 测试覆盖不足
@@ -35,10 +36,10 @@
 
 ## 5. 错误透传约定
 
-- **已确认**｜`harness.py:154-161` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
-- **已确认**｜`api.py:160-172` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
+- **已确认**｜`harness.py:167-174` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
+- **已确认**｜`api.py:151-162` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
 - **风险**｜真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是"调用方自行处理"，但无护栏。
-- **已确认**｜`_error_text` 同时定义在 `api.py:231` 与 `harness.py:310`（重复实现）。
+- **已确认**｜`_error_text` 同时定义在 `api.py:231` 与 `harness.py:531`（重复实现）。
 
 ## 6. 持久化边界（SQLite 多 db）
 

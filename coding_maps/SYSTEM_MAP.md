@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新已核对最近相关提交：`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 系统目的和仓库形态
 
@@ -49,7 +49,7 @@ HarnessRuntime.execute_run(...)
   │                stream_mode=["messages","custom","values"], version="v2")
   │    ├─ messages chunk → thinking / text_delta
   │    ├─ custom   chunk → tool_status（来自 ToolStatusMiddleware）
-  │    └─ values   snapshot → tool_call / tool_result / assistant_message（同时更新 reply 候选）
+  │    └─ values   snapshot → tool_call / tool_result / assistant_message（同时更新 reply 候选；values 只保留在 raw）
   ├─ 成功 → emit status=succeeded(reply=...)
   └─ 异常 → emit status=failed(error=...)（真实错误透传，不吞）
 

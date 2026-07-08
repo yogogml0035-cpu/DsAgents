@@ -1,7 +1,7 @@
 # STRUCTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）、`5329588`、`b6bc3f3`。
+> 本轮刷新已核对最近相关提交：`2206b1a`（harness 事件规范化）、`c8cc563`（run-ledger 时区统一与迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 顶层模块组织
 
@@ -15,6 +15,8 @@
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
 | `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
 | `tools.py` | 工具定义：`ToolCatalog`/`ToolHandler` 抽象 + 默认业务工具 `parse_document`（调 MinerU 解析文档为 markdown） |
+
+`backend/dsagents.egg-info/` 当前仍被 git 跟踪，但它是 setuptools 生成元数据，不是运行入口；修改依赖或 `py-modules` 时容易出现机械 churn。
 
 已删除（本次重构）：
 

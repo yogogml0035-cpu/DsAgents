@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）、`5329588`（`CompositeBackend` 路由收窄）、`b6bc3f3`（`latest_content_event`）。
+> 本轮刷新已核对最近相关提交：`2206b1a`（values snapshot 派生 `tool_call` / `tool_result` / `assistant_message`）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
 
 ## 1. 架构定位
 
@@ -93,6 +93,8 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 ```
 
 `status` 事件同时驱动 `runs` 表的 `status`/`reply`/`error`/`updated_at` 列更新（即 run 状态是事件投影）。`emit_run_status` 校验 status 必须在 `RUN_STATUSES = {queued, running, succeeded, failed}` 内。`latest_content_event` 继续用 `type != 'status'` 取末位内容事件，成功 run 的最终结果通常会落在 `assistant_message`。
+
+`values` 不再作为公开业务事件写入 `run_events.type`；它只保留在 `raw` snapshot 中，业务层从 snapshot 中派生 `tool_call`、`tool_result` 和 `assistant_message`。
 
 ## 5. 核心运行时原则
 

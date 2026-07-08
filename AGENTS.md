@@ -5,7 +5,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 ## 关键约定
 
 - **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
-- **run-first 架构**：run 是唯一的执行单位与查询单位（`run_events` append-only，`runs` 是事件投影快照）；session 模块与 session 持久化层已移除，`session_id` 仅作为 LangGraph checkpointer 的 `thread_id` 和进程内单飞锁键，**不再**是一等持久化对象。短期上下文全交给 checkpointer + `thread_id=session_id`。
+- **run-first 架构**：run 是唯一的执行单位与查询单位（`run_events` append-only，`runs` 是事件投影快照）；session 模块与 session 持久化层已移除，`session_id` 仅作为 LangGraph checkpointer 的 `thread_id` 和进程内单飞锁键，**不再**是一等持久化对象。短期上下文全交给 checkpointer + `thread_id=session_id`；`values` 只保留在 raw snapshot，不是公开业务事件。
 - **运行入口**：HTTP 用 `POST /runs` 与 `POST /upload`；程序内调用用 `AgentResources` + `create_harness(resources).execute_run(messages, session_id, run_id)` 组合；**没有** `from session import run_session`，也没有 `python -m backend.*`（扁平顶层模块，无 `__init__.py` / `__main__.py`）。
 - **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界（当前 `Brain` / `BrainFactory` / `Hands`）；默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory`、`ToolStatusHands`、`default_tool_catalog()`。普通工具保持 callable + `ToolCatalog`，资源 / ledger 保持具体类；不要为单实现小功能新增 Protocol/ABC。外部框架要求继承时才继承框架基类（如 `AgentMiddleware`）。
 - **验证入口**：仅文档变更至少跑 `git diff --check`；backend 代码变更按影响范围直接跑对应测试脚本，例如 `cd backend && python -m tests.test_api`。没有总控自检脚本，不要新增 `self_check.py` / 聚合 runner。

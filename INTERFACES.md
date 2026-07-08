@@ -17,7 +17,7 @@
 - `after_event_id` 游标：为空返回全部事件；有值只返回 `event_id > after_event_id` 的增量事件。
 - `latest_content_event`：始终返回当前 run 全局最新的非 `status` 事件；没有非 `status` 事件时为 `null`；**不受** `after_event_id` 影响。
 - 事件类型固定七类：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
-- 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生。
+- 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生，`values` 本身不是公开事件类型。
 - 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_document`、MinerU 和模型多模态能力。
 
 明确**已删除**的旧接口（不要引用）：`POST /files`、`POST /sessions/messages`、`POST /sessions/messages/stream`、`POST /sessions/messages/runs`、`GET /sessions/{session_id}/runs`、`from session import run_session`。

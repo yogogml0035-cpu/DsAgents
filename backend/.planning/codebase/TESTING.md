@@ -1,7 +1,7 @@
 # TESTING
 
 > backend 子项目的测试与验证策略。事实来源 = `backend/tests/test_*.py` + `backend/pyproject.toml`。
-> 本轮刷新已核对最近相关提交：`c8cc563`（run-ledger 时区迁移测试）、`bc383ac`（测试端口配置）。
+> 本轮刷新已核对最近相关提交：`2206b1a`（harness 事件规范化测试）、`c8cc563`（run-ledger 时区迁移测试）、`bc383ac`（测试端口配置）。
 
 ## 1. 主要验证手段：直接运行测试脚本（已确认）
 
