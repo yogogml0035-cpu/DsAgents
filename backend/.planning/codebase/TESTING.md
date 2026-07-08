@@ -23,7 +23,7 @@ python -m tests.test_api
 
 | 文件 | 作用 |
 | --- | --- |
-| `test_tools.py` | `parse_documents` env guard、`/artifacts/...` 路径解析、上传来源去掉上传后缀后的下载命名、单文件列表/多文件一次提交、共享时间戳输出、部分失败不抛异常、链路失败透传、`_extract_markdown` / `default_tool_catalog()` |
+| `test_tools.py` | `parse_documents` env guard、`/artifacts/...` 路径解析、上传来源复用上传 stem 的下载命名、单文件列表/多文件一次提交、共享时间戳输出、部分失败不抛异常、链路失败透传、`_extract_markdown` / `default_tool_catalog()` |
 | `test_run_ledger.py` | `AgentResources` / `SqliteRunLedger`、`input_messages_json`、`latest_content_event`、大 payload 外溢目录、启动恢复 |
 | `test_harness.py` | `DeepAgentsBrainFactory` env 加载、`ToolStatusMiddleware`、`HarnessRuntime.execute_run(messages, ...)`、artifact block 归一化、最终 `assistant_message.payload.thinking` |
 | `test_api.py` | `POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.payload.thinking`、`after_event_id`、同 session 冲突、失败后续跑、启动恢复 |
@@ -42,7 +42,7 @@ python -m tests.test_api
 
 | 模块 | 覆盖事实 |
 | --- | --- |
-| `test_tools.py` | `parse_documents` 缺 `MINERU_BASE_URL` 时 fail-fast；`MINERU_EFFORT=""` 仍会提交空字符串；单文件也走 `file_paths=[...]`；多文件只发一次 `/tasks`；结果共享一次 `strftime("%Y%m%d%H%M%S")` 输出到 `/artifacts/downloads/`；上传来源会先剥离上传阶段追加的 `_时间戳(_n)?` 再命名输出；无效输入和逐文件解析失败只进 `failed[]`；task 级失败仍抛异常；custom `tool_status` 进度含批量计数与输出路径 |
+| `test_tools.py` | `parse_documents` 缺 `MINERU_BASE_URL` 时 fail-fast；`MINERU_EFFORT=""` 仍会提交空字符串；单文件也走 `file_paths=[...]`；多文件只发一次 `/tasks`；结果共享一次 `strftime("%Y%m%d%H%M%S")` 输出到 `/artifacts/downloads/`；符合当前上传命名规则的上传来源会复用上传文件的 stem 生成 markdown 路径；无效输入和逐文件解析失败只进 `failed[]`；task 级失败仍抛异常；custom `tool_status` 进度含批量计数与输出路径 |
 | `test_run_ledger.py` | `AgentResources` 创建 3 个 sqlite db；`SqliteRunLedger` 快照/事件/状态机；run 输入字段为 `input_messages_json`；`get_latest_content_event()` 在仅 `status`、`assistant_message→status`、多非 `status`、大 payload artifact 场景下的返回；普通启动和普通 run 不会创建旧的用户可见 spill 子目录；大 payload（`max_inline_bytes=10`）只在真正 spill 时写到 `data/internal/run-events/*.json`；时间戳迁移：旧 UTC ISO / naive UTC 文本经 `_normalize_existing_timestamps(assume_naive_utc=True)` 平移到本机时区，且对已是本机时区的文本再次迁移保持不变（幂等，对应 `normalized_again` 断言） |
 | `test_harness.py` | `DeepAgentsBrainFactory` 从 `MINIMAX_*` 构造 `ChatAnthropic`；`ToolStatusMiddleware` 成功发 `started→completed`，异常发 `started→error` 并透传；`execute_run(messages, ...)` 事件序列 = `status/thinking/text_delta/tool_call/tool_status/tool_result/text_delta/assistant_message/status`；`tool_call` payload 含 `tool_call_id/name/args`；图片类 `tool_result` 只保留摘要不带 base64；`assistant_message.payload` 保留最终 `thinking` 与 `text`；同 `thread_id` 续跑 reply 计数递增；artifact block 进入 Brain 前会被归一化为文本路径提示 |
 | `test_api.py` | `POST /upload` 支持单文件、多文件、混合文件；`POST /files` 返回 `404`；`POST /runs` 只接受 `messages[] + content blocks`，旧 `message` 请求失败；上传后引用 artifact 路径的 run 可轮询到 `succeeded`；`after_event_id` 只裁剪 `events[]`，不影响 `latest_content_event`；成功 run 的最终 `latest_content_event.type == "assistant_message"` 且 payload 含最终 `thinking`；同 `session_id` 并发返回 `409`；失败 run 后同 session 可续跑；未知 run 返回 `404`；app 启动时会清理遗留 `queued/running` run |

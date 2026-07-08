@@ -74,7 +74,7 @@ backend/
     ├── dsagents_checkpoints.db     # LangGraph checkpointer（按需生成）
     ├── dsagents_store.db           # LangGraph store（按需生成）
     ├── artifacts/
-    │   ├── downloads/              # parse_documents 输出目录（<base>_<parse-ts>(_n).md，按需创建）
+    │   ├── downloads/              # parse_documents 输出目录（上传来源复用 <uploaded-stem>.md，其它来源为 <source-stem>_<parse-ts>(_n).md，按需创建）
     │   └── uploads/                # POST /upload 上传落地点（<原名>_<upload-ts>(_n).ext）；首次写入时创建
     └── internal/
         └── run-events/             # run 事件大 payload 外溢（*.json，仅真正 spill 时创建）

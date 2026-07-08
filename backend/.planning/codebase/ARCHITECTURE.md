@@ -153,7 +153,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
 - `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
-- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。
+- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。`parse_documents` 对这类当前上传命名会复用同一个 stem 生成下载 markdown 路径，便于上传/下载一一对应。
 
 ## 9. 配置加载
 

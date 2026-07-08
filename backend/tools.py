@@ -13,7 +13,7 @@ import requests
 from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
 
-from artifact_names import make_timestamped_name, strip_upload_suffix
+from artifact_names import has_upload_suffix, make_timestamped_name, make_unique_name
 from resources import ResourceConfig
 
 load_dotenv(Path(__file__).with_name(".env"))
@@ -153,20 +153,25 @@ def _default_output_path(
     reserved_names: set[str],
 ) -> str:
     downloads_dir = _artifacts_root() / "downloads"
-    output_stem = _output_stem(raw_path, source)
-    filename = make_timestamped_name(
-        downloads_dir,
-        f"{output_stem}.md",
-        batch_timestamp,
-        reserved_names,
-    )
+    filename = _output_filename(raw_path, source, downloads_dir, batch_timestamp, reserved_names)
     return f"/artifacts/downloads/{filename}"
 
 
-def _output_stem(raw_path: str, source: Path) -> str:
-    if raw_path.startswith("/artifacts/uploads/"):
-        return strip_upload_suffix(source.stem)
-    return source.stem
+def _output_filename(
+    raw_path: str,
+    source: Path,
+    downloads_dir: Path,
+    batch_timestamp: str,
+    reserved_names: set[str],
+) -> str:
+    if raw_path.startswith("/artifacts/uploads/") and has_upload_suffix(source.stem):
+        return make_unique_name(downloads_dir, f"{source.stem}.md", reserved_names)
+    return make_timestamped_name(
+        downloads_dir,
+        f"{source.stem}.md",
+        batch_timestamp,
+        reserved_names,
+    )
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:

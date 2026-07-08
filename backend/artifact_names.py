@@ -16,10 +16,9 @@ def clean_filename(filename: str | None) -> str:
     return cleaned or UPLOAD_FALLBACK_NAME
 
 
-def make_timestamped_name(
+def make_unique_name(
     directory: Path,
     filename: str | None,
-    timestamp: str,
     reserved_names: set[str] | None = None,
 ) -> str:
     cleaned = clean_filename(filename)
@@ -29,15 +28,24 @@ def make_timestamped_name(
     counter = 1
     while True:
         suffix_index = "" if counter == 1 else f"_{counter}"
-        candidate = f"{stem}_{timestamp}{suffix_index}{suffix}"
+        candidate = f"{stem}{suffix_index}{suffix}"
         if candidate not in reserved and not (directory / candidate).exists():
             reserved.add(candidate)
             return candidate
         counter += 1
 
 
-def strip_upload_suffix(stem: str) -> str:
-    match = _UPLOAD_SUFFIX_RE.fullmatch(stem)
-    if match is None:
-        return stem
-    return match.group("base")
+def make_timestamped_name(
+    directory: Path,
+    filename: str | None,
+    timestamp: str,
+    reserved_names: set[str] | None = None,
+) -> str:
+    cleaned = clean_filename(filename)
+    stem = Path(cleaned).stem
+    suffix = Path(cleaned).suffix
+    return make_unique_name(directory, f"{stem}_{timestamp}{suffix}", reserved_names)
+
+
+def has_upload_suffix(stem: str) -> bool:
+    return _UPLOAD_SUFFIX_RE.fullmatch(stem) is not None

@@ -125,7 +125,7 @@ brain.stream(
 | 轮询状态 | `GET {status_url}`（timeout=`MINERU_TIMEOUT_SECONDS`，默认每 30 秒轮询一次） | task 级状态 | 只认 `pending/processing/completed/failed`；没有页级进度；`pending/processing` 继续轮询，未知状态直接报错 |
 | 取结果 | `GET {result_url}`（timeout=`MINERU_TIMEOUT_SECONDS`） | 已完成任务 | 只按 `results -> 文件名 -> md_content` 取最终 markdown |
 
-工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果，并把成功项写到 `data/artifacts/downloads/<base>_<parse-ts>(_n).md`。若输入来自 `/artifacts/uploads/...`，会先从上传物理文件名里剥离上传阶段追加的 `_14位时间戳(_序号)?`，再生成下载名，避免把上传时间戳带进下载名；非上传来源仍直接使用 `source.stem`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
+工具 `parse_documents`：AI 侧只看到一个 `parse_documents(file_paths: list[str])` 工具；工具内部一次 `POST /tasks` 批量提交多个文件、轮询任务、按文件名/`stem`/顺序兜底匹配结果。若输入来自符合当前上传命名规则的 `/artifacts/uploads/...`，成功项会复用上传文件的 stem 生成 `data/artifacts/downloads/<uploaded-stem>(_n).md`，让上传与下载路径里的时间戳后缀保持一致；其它来源仍写到 `data/artifacts/downloads/<source-stem>_<parse-ts>(_n).md`。成功返回结构化 JSON（`task_id/status_url/result_url/succeeded[]/failed[]`），其中 `succeeded[]` 含原始 `file_path`、生成的 `/artifacts/downloads/...` 路径与字节数。
 
 `parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `output_paths` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 
