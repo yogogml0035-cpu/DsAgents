@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-09）已核对当前 HEAD：`1e8cf94`（extract_archives 工具 + parse_documents 保存 task ZIP）、`82152a0`/`5100f31`（artifact 存储与命名重构、run-event 目录拆分）、`709f805`（文档解析工具改为批量处理）、`c8cc563`（run-ledger 时区统一与 schema 迁移）。
+> 本轮刷新（2026-07-09）已核对当前 HEAD 后的工作树：`1e8cf94`（extract_archives 工具 + parse_documents 默认保存 task JSON、按需保存 ZIP）、`82152a0`/`5100f31`（artifact 存储与命名重构、run-event 目录拆分）、`709f805`（文档解析工具改为批量处理）、`c8cc563`（run-ledger 时区统一与 schema 迁移）。
 
 ## 1. 系统目的和仓库形态
 
@@ -99,7 +99,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 - 上传：`POST /upload` → `data/artifacts/uploads/<uuid>_<cleaned_name>`，返回虚拟路径 `/artifacts/uploads/...` 与元数据数组。
 - 工具层 `tools._resolve_document_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权。
-- `parse_documents` 默认把 task 级结果 ZIP 写到 `data/artifacts/downloads/<stem>.zip`（单文件复用源 stem；多文件为 `<first-stem>_etc_<batch-ts>.zip`）；`extract_archives` 把 ZIP 解压到 `data/artifacts/downloads/<zip-stem>/`。
+- `parse_documents` 默认把 task 级结果 JSON 写到 `data/artifacts/downloads/<stem>.json`（只开 `return_content_list=true`）；用户要 Markdown、图片、原始文件或完整下载包时写 ZIP 到 `<stem>.zip`（五个输出参数全 true）。单文件复用源 stem；多文件为 `<first-stem>_etc_<batch-ts>.json/.zip`；`extract_archives` 把 ZIP 解压到 `data/artifacts/downloads/<zip-stem>/`。
 - `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
 
 ### 4.5 鉴权 / 跨域边界（已确认缺失）

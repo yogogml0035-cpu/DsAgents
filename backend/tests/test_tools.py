@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import zipfile
@@ -10,6 +11,16 @@ from tools import MINERU_POLL_INTERVAL_SECONDS, default_tool_catalog, extract_ar
 
 
 _MINERU_FORM_DATA = {
+    "backend": "vlm-engine",
+    "effort": "",
+    "return_md": "false",
+    "return_content_list": "true",
+    "return_images": "false",
+    "return_original_file": "false",
+    "response_format_zip": "false",
+}
+
+_MINERU_FULL_ZIP_FORM_DATA = {
     "backend": "vlm-engine",
     "effort": "",
     "return_md": "true",
@@ -102,7 +113,11 @@ def _check_single_file_list(tmp: str) -> None:
     post_calls: list[dict[str, object]] = []
     get_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
-    zip_bytes = _build_zip({"single/auto/single.md": b"# parsed"})
+    result_payload = {
+        "backend": "vlm-engine",
+        "version": "demo",
+        "results": {"single": {"content_list": "[]"}},
+    }
 
     def fake_post(url: str, **kwargs: object) -> _FakeJsonResponse:
         files = kwargs["files"]
@@ -126,7 +141,7 @@ def _check_single_file_list(tmp: str) -> None:
     def fake_get(url: str, **kwargs: object):
         get_calls.append({"url": url, "timeout": kwargs.get("timeout")})
         if url.endswith("/result"):
-            return _FakeZipResponse(zip_bytes)
+            return _FakeJsonResponse(result_payload)
         return _FakeJsonResponse({"status": "completed"})
 
     with (
@@ -151,11 +166,20 @@ def _check_single_file_list(tmp: str) -> None:
     assert parsed_payload["task_id"] == "task-1"
     assert parsed_payload["status_url"] == "https://mineru.example/tasks/task-1"
     assert parsed_payload["result_url"] == "https://mineru.example/tasks/task-1/result"
-    assert parsed_payload["archive_path"] == "/artifacts/downloads/single.zip"
+    assert parsed_payload["archive_path"] is None
+    assert parsed_payload["result_path"] == "/artifacts/downloads/single.json"
+    assert parsed_payload["result_format"] == "json"
+    assert parsed_payload["output_options"] == {
+        "return_md": False,
+        "return_content_list": True,
+        "return_images": False,
+        "return_original_file": False,
+        "response_format_zip": False,
+    }
     assert parsed_payload["failed"] == []
     assert parsed_payload["succeeded"] == [{"file_path": str(source)}]
-    archive_file = api_data_dir / "artifacts" / "downloads" / "single.zip"
-    assert archive_file.read_bytes() == zip_bytes
+    result_file = api_data_dir / "artifacts" / "downloads" / "single.json"
+    assert json.loads(result_file.read_text(encoding="utf-8")) == result_payload
     assert post_calls == [
         {
             "url": "https://mineru.example/tasks",
@@ -181,7 +205,7 @@ def _check_single_file_list(tmp: str) -> None:
             "status": "completed",
             "task_id": "task-1",
             "file_paths": [str(source)],
-            "archive_path": "/artifacts/downloads/single.zip",
+            "result_path": "/artifacts/downloads/single.json",
             "succeeded_count": 1,
             "failed_count": 0,
         },
@@ -203,7 +227,8 @@ def _check_uploaded_sources_reuse_upload_stem(tmp: str) -> None:
         }
     )
 
-    def fake_post(_url: str, **_kwargs: object) -> _FakeJsonResponse:
+    def fake_post(_url: str, **kwargs: object) -> _FakeJsonResponse:
+        assert kwargs["data"] == _MINERU_FULL_ZIP_FORM_DATA
         return _FakeJsonResponse(
             {
                 "task_id": "task-upload",
@@ -237,9 +262,18 @@ def _check_uploaded_sources_reuse_upload_stem(tmp: str) -> None:
         patch("tools.requests.get", side_effect=fake_get),
         patch("tools.time.strftime", return_value="20260708040506"),
     ):
-        parsed_payload = parse_documents(file_paths)
+        parsed_payload = parse_documents(file_paths, return_md=True)
 
     assert parsed_payload["archive_path"] == "/artifacts/downloads/report_20260708000000_etc_20260708040506.zip"
+    assert parsed_payload["result_path"] is None
+    assert parsed_payload["result_format"] == "zip"
+    assert parsed_payload["output_options"] == {
+        "return_md": True,
+        "return_content_list": True,
+        "return_images": True,
+        "return_original_file": True,
+        "response_format_zip": True,
+    }
     assert parsed_payload["succeeded"] == [
         {"file_path": file_paths[0]},
         {"file_path": file_paths[1]},
@@ -280,6 +314,7 @@ def _check_multi_file_partial_failures(tmp: str) -> None:
                 "names": [item[1][0] for item in files],
             }
         )
+        assert kwargs["data"] == _MINERU_FULL_ZIP_FORM_DATA
         return _FakeJsonResponse(
             {
                 "task_id": "task-2",
@@ -317,7 +352,7 @@ def _check_multi_file_partial_failures(tmp: str) -> None:
         patch("tools.time.strftime", return_value="20260708020304"),
         patch("tools.time.sleep") as sleep_mock,
     ):
-        parsed_payload = parse_documents(file_paths)
+        parsed_payload = parse_documents(file_paths, return_images=True)
 
     assert parsed_payload["task_id"] == "task-2"
     assert parsed_payload["archive_path"] == "/artifacts/downloads/first_etc_20260708020304.zip"
@@ -382,6 +417,15 @@ def _check_all_invalid_inputs(tmp: str) -> None:
         "status_url": None,
         "result_url": None,
         "archive_path": None,
+        "result_path": None,
+        "result_format": "json",
+        "output_options": {
+            "return_md": False,
+            "return_content_list": True,
+            "return_images": False,
+            "return_original_file": False,
+            "response_format_zip": False,
+        },
         "succeeded": [],
         "failed": [
             {"file_path": "/artifacts/../x", "error": "Invalid /artifacts path: /artifacts/../x"},

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
 import time
@@ -7,7 +8,7 @@ import zipfile
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Sequence
+from typing import Annotated, Any, Callable, Sequence
 from urllib.parse import urljoin
 
 import requests
@@ -31,14 +32,37 @@ class ToolCatalog:
         return list(self.handlers)
 
 
-def parse_documents(file_paths: list[str]) -> dict[str, Any]:
-    """Parse local PDF/office documents via MinerU and save the task result ZIP under /artifacts/downloads/.
+def parse_documents(
+    file_paths: Annotated[list[str], "Local paths or /artifacts/... files to parse in one MinerU batch."],
+    return_md: Annotated[bool, "Include Markdown output; triggers full ZIP mode."] = False,
+    return_content_list: Annotated[
+        bool,
+        "Include MinerU content_list; default JSON mode saves it to result_path.",
+    ] = True,
+    return_images: Annotated[bool, "Include extracted images; triggers full ZIP mode."] = False,
+    return_original_file: Annotated[bool, "Include original files; triggers full ZIP mode."] = False,
+    response_format_zip: Annotated[bool, "Save a full ZIP to archive_path instead of JSON result_path."] = False,
+) -> dict[str, Any]:
+    """Parse local PDF/office documents via MinerU and save outputs under /artifacts/downloads/.
 
-    The returned ``archive_path`` points to the task-level ZIP bundle (markdown +
-    content_list + images + original file). Use ``extract_archives`` to unpack it.
+    Default mode saves JSON to result_path. Any Markdown, image, original-file,
+    or ZIP request is normalized to full ZIP mode; use extract_archives to inspect it.
     """
     if not file_paths:
         raise ValueError("file_paths must not be empty")
+    if return_md or return_images or return_original_file or response_format_zip:
+        return_md = True
+        return_content_list = True
+        return_images = True
+        return_original_file = True
+        response_format_zip = True
+    output_options = {
+        "return_md": return_md,
+        "return_content_list": return_content_list,
+        "return_images": return_images,
+        "return_original_file": return_original_file,
+        "response_format_zip": response_format_zip,
+    }
 
     batch_timestamp = time.strftime("%Y%m%d%H%M%S")
     writer = _stream_writer()
@@ -71,6 +95,9 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
             "status_url": None,
             "result_url": None,
             "archive_path": None,
+            "result_path": None,
+            "result_format": "zip" if response_format_zip else "json",
+            "output_options": output_options,
             "succeeded": [],
             "failed": failed,
         }
@@ -86,6 +113,7 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
         backend=backend,
         effort=effort,
         timeout_seconds=timeout_seconds,
+        output_options=output_options,
     )
     _emit_parse_documents_status(
         writer,
@@ -105,13 +133,21 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
         valid_count=len(valid_sources),
     )
 
-    archive_filename = _archive_filename(valid_sources, batch_timestamp)
     try:
-        archive_path = _download_mineru_zip(
-            task["result_url"],
-            archive_filename=archive_filename,
-            timeout_seconds=timeout_seconds,
-        )
+        if response_format_zip:
+            result_path = None
+            archive_path = _download_mineru_zip(
+                task["result_url"],
+                archive_filename=_archive_filename(valid_sources, batch_timestamp),
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            archive_path = None
+            result_path = _download_mineru_json(
+                task["result_url"],
+                result_filename=_result_filename(valid_sources, batch_timestamp),
+                timeout_seconds=timeout_seconds,
+            )
     except Exception as exc:
         _emit_parse_documents_status(
             writer,
@@ -131,6 +167,7 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
         task_id=task["task_id"],
         file_paths=file_paths,
         archive_path=archive_path,
+        result_path=result_path,
         succeeded_count=len(valid_sources),
         failed_count=len(failed),
     )
@@ -139,6 +176,9 @@ def parse_documents(file_paths: list[str]) -> dict[str, Any]:
         "status_url": task["status_url"],
         "result_url": task["result_url"],
         "archive_path": archive_path,
+        "result_path": result_path,
+        "result_format": "zip" if response_format_zip else "json",
+        "output_options": output_options,
         "succeeded": [{"file_path": path} for path in valid_file_paths],
         "failed": failed,
     }
@@ -213,6 +253,18 @@ def _archive_filename(
     return make_unique_name(downloads_dir, f"{stem}.zip")
 
 
+def _result_filename(
+    sources: Sequence[Path],
+    batch_timestamp: str,
+) -> str:
+    downloads_dir = _artifacts_root() / "downloads"
+    if len(sources) == 1:
+        stem = sources[0].stem
+    else:
+        stem = f"{sources[0].stem}_etc_{batch_timestamp}"
+    return make_unique_name(downloads_dir, f"{stem}.json")
+
+
 def _download_mineru_zip(result_url: str, *, archive_filename: str, timeout_seconds: int) -> str:
     downloads_dir = _artifacts_root() / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -224,6 +276,19 @@ def _download_mineru_zip(result_url: str, *, archive_filename: str, timeout_seco
                 if chunk:
                     handle.write(chunk)
     return f"/artifacts/downloads/{archive_filename}"
+
+
+def _download_mineru_json(result_url: str, *, result_filename: str, timeout_seconds: int) -> str:
+    downloads_dir = _artifacts_root() / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    target = downloads_dir / result_filename
+    response = requests.get(result_url, timeout=timeout_seconds)
+    response.raise_for_status()
+    payload = _json_or_text(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"MinerU result response was not a JSON object: {payload!r}")
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f"/artifacts/downloads/{result_filename}"
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:
@@ -265,6 +330,7 @@ def _submit_mineru_task(
     backend: str,
     effort: str,
     timeout_seconds: int,
+    output_options: dict[str, bool],
 ) -> dict[str, str]:
     with ExitStack() as stack:
         files = []
@@ -278,11 +344,7 @@ def _submit_mineru_task(
             data={
                 "backend": backend,
                 "effort": effort,
-                "return_md": "true",
-                "return_content_list": "true",
-                "return_images": "true",
-                "return_original_file": "true",
-                "response_format_zip": "true",
+                **{key: _bool_form(value) for key, value in output_options.items()},
             },
             timeout=timeout_seconds,
         )
@@ -380,6 +442,10 @@ def _json_or_text(response: requests.Response) -> Any:
         return response.text
 
 
+def _bool_form(value: bool) -> str:
+    return "true" if value else "false"
+
+
 def _mineru_url(base_url: str, raw_url: str) -> str:
     return urljoin(f"{base_url.rstrip('/')}/", raw_url)
 
@@ -408,6 +474,7 @@ def _emit_parse_documents_status(
     archive_path: str | None,
     succeeded_count: int,
     failed_count: int,
+    result_path: str | None = None,
     error: str | None = None,
 ) -> None:
     if writer is None:
@@ -423,6 +490,8 @@ def _emit_parse_documents_status(
         payload["task_id"] = task_id
     if archive_path is not None:
         payload["archive_path"] = archive_path
+    if result_path is not None:
+        payload["result_path"] = result_path
     if error is not None:
         payload["error"] = error
     writer(payload)

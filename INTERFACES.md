@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94`：`extract_archives` 工具 + `parse_documents` 保存 task 级 ZIP；artifact 存储命名重构；文档解析改为批量处理。
+> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94` 后的工作树：`extract_archives` 工具 + `parse_documents` 默认保存 task 级 JSON、按需保存 ZIP；artifact 存储命名重构；文档解析改为批量处理。
 
 ## 1. HTTP API 边界
 

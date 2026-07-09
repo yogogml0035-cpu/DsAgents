@@ -126,6 +126,7 @@ def _build_request(request: str, uploaded_files: list[dict[str, Any]]) -> str:
         request,
         "",
         "必须只调用一次 parse_documents；args.file_paths 必须严格使用下面清单里的路径并保持顺序。",
+        "必须传 return_md=true、return_content_list=true、return_images=true、return_original_file=true、response_format_zip=true。",
         "解析完成后列出返回的 archive_path（ZIP 归档）；如需查看解析内容可继续调用 extract_archives 解压。",
         "",
         "PDF 清单：",
@@ -205,6 +206,9 @@ def _assert_parse_documents_called(payload: dict[str, Any], uploaded_files: list
     expected_paths = [file_info["file_path"] for file_info in uploaded_files]
     if called_paths != expected_paths:
         raise AssertionError(f"parse_documents args.file_paths mismatch: {called_paths!r} != {expected_paths!r}")
+    for key in ("return_md", "return_content_list", "return_images", "return_original_file", "response_format_zip"):
+        if calls[0].get("args", {}).get(key) is not True:
+            raise AssertionError(f"parse_documents args.{key} must be true for ZIP parsing")
 
 
 def _latest_text(event: dict[str, Any] | None) -> str:

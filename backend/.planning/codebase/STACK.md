@@ -55,7 +55,7 @@ py-modules = ["api", "artifact_names", "hands", "harness", "resources", "run_led
 | `CompositeBackend` | `deepagents.backends` | 路由 `/memories/` → `StoreBackend`；`/artifacts/` `/large_tool_results/` → `FilesystemBackend`；默认 `StateBackend`（含 `/conversation_history/`、`/logs/`） | `resources.py` |
 | 大 run event 外溢 | 文件系统 | `data/internal/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`，lazy mkdir） |
 | 上传文件（上传源） | 文件系统 | `data/artifacts/uploads/` | `api.py` |
-| 工具解析产物 | 文件系统 | `data/artifacts/downloads/` | `tools.py`（`parse_documents` 存 task ZIP；`extract_archives` 解压到 `<zip-stem>/`） |
+| 工具解析产物 | 文件系统 | `data/artifacts/downloads/` | `tools.py`（`parse_documents` 默认存 task JSON，按需存 task ZIP；`extract_archives` 解压到 `<zip-stem>/`） |
 
 数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关；其中 `dsagents_runs.db`、`artifacts/uploads/`、`artifacts/downloads/` 这类路径会在首次运行对应流程时按需创建（`downloads/` 由 `tools.py` 在落盘时 lazy mkdir）。
 

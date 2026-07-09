@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新（2026-07-09）已核对当前工作树：能力可插拔边界、events→runs 投影、程序内/HTTP 双入口均与源码一致；`extract_archives` 工具、批量 `parse_documents`（task 级 ZIP）、artifact 时间戳命名均已就位。
+> 本轮刷新（2026-07-09）已核对当前工作树：能力可插拔边界、events→runs 投影、程序内/HTTP 双入口均与源码一致；`extract_archives` 工具、批量 `parse_documents`（默认 task 级 JSON，按需 ZIP）、artifact 时间戳命名均已就位。
 
 ## 1. 架构定位
 
@@ -9,7 +9,7 @@
 
 - **Brain 可插拔**：`Brain` 是 `Protocol`（`harness.py`），任何实现了 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic）模型。
 - **执行器（Hands）可插拔**：`Hands` 是 `Protocol`，`Hands.middleware()` 返回一组 `AgentMiddleware`；默认 `ToolStatusHands` 只挂 `ToolStatusMiddleware`（发 `tool_status` custom event）。
-- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前含 `parse_documents`（解析为 task 级 ZIP）与 `extract_archives`（解压 ZIP）。
+- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前含 `parse_documents`（默认解析为 task 级 JSON，用户要 Markdown/图片/完整包时解析为 ZIP）与 `extract_archives`（解压 ZIP）。
 - 模型 / 后端存储 / 持久化通道都被收口在 `AgentResources` 中，由调用方注入。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。
@@ -128,7 +128,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 | `dsagents_checkpoints.db` | LangGraph checkpointer | `SqliteSaver`（`thread_id=session_id`） |
 | `dsagents_store.db` | LangGraph store | `SqliteStore`（`namespace=("dsagents",)`） |
 
-其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。用户可见文件仍只落在 `data/artifacts/uploads/` 与 `data/artifacts/downloads/`（`parse_documents` 写 task 级 ZIP，`extract_archives` 解压到 `<zip-stem>/` 子目录），内部大 payload spill 独立落在 `data/internal/run-events/`。
+其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。用户可见文件仍只落在 `data/artifacts/uploads/` 与 `data/artifacts/downloads/`（`parse_documents` 默认写 task 级 JSON，按需写 ZIP；`extract_archives` 解压到 `<zip-stem>/` 子目录），内部大 payload spill 独立落在 `data/internal/run-events/`。
 
 `dsagents_runs.db` 表结构：
 
@@ -153,7 +153,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
 - `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
-- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。`parse_documents` 对单文件会复用源文件 stem 命名 ZIP（`<stem>.zip`），便于上传/下载路径一一对应。
+- `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。`parse_documents` 对单文件会复用源文件 stem 命名 JSON/ZIP（`<stem>.json` / `<stem>.zip`），便于上传/下载路径一一对应。
 
 ## 9. 配置加载
 
