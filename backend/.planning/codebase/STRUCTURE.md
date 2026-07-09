@@ -111,7 +111,7 @@ backend/
 - `test_harness.py`：FakeBrain、ToolStatusMiddleware、`execute_run(messages, ...)`、artifact block 归一化、`assistant_message` 的最终 `thinking` 载荷
 - `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复
 - `test_real_image_run.py`：手动真实图片 HTTP 集成测试
-- `test_real_multi_pdf_run.py`：手动真实 HTTP / 模型 / MinerU 集成脚本（确认 `parse_documents` 返回 `archive_path`，可选后续 `extract_archives`）
+- `test_real_multi_pdf_run.py`：手动真实 HTTP / 模型 / MinerU 集成脚本（确认 agent 会用 `parse_documents` 解析上传 PDF，调用次数与输出格式都由用户请求和 agent 策略决定）
 
 当前仍**不是 pytest 套件**；没有总控 runner，回归按影响范围直接运行对应 `test_*.py` 脚本。
 

@@ -12,8 +12,8 @@ import requests
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8500"
-DEFAULT_PDF_DIR = Path(__file__).resolve().parent / "tests_file" / "测试用例1"
-DEFAULT_REQUEST = "将这些pdf调用工具解析并下载下来"
+DEFAULT_PDF_DIR = Path(r"C:\Users\0325\Desktop\Agent测试用例\回标分析测试用例\回标分析测试用例2")
+DEFAULT_REQUEST = "将这些pdf调用工具解析并下载下来，要ZIP的格式"
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 600.0
 DEFAULT_POLL_SECONDS = 0.1
@@ -35,7 +35,7 @@ def run() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Upload PDFs once, ask the agent to call parse_documents once, and confirm it returns a ZIP archive_path (optionally followed by extract_archives)."
+        description="Upload PDFs once, ask the agent to parse them, and confirm the uploaded files were covered by parse_documents calls."
     )
     parser.add_argument("--base-url", default=os.getenv("DSAGENTS_API_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--pdf-dir", type=Path, default=Path(os.getenv("DSAGENTS_PDF_DIR", str(DEFAULT_PDF_DIR))))
@@ -125,10 +125,6 @@ def _build_request(request: str, uploaded_files: list[dict[str, Any]]) -> str:
     lines = [
         request,
         "",
-        "必须只调用一次 parse_documents；args.file_paths 必须严格使用下面清单里的路径并保持顺序。",
-        "必须传 return_md=true、return_content_list=true、return_images=true、return_original_file=true、response_format_zip=true。",
-        "解析完成后列出返回的 archive_path（ZIP 归档）；如需查看解析内容可继续调用 extract_archives 解压。",
-        "",
         "PDF 清单：",
     ]
     for index, file_info in enumerate(uploaded_files, 1):
@@ -200,15 +196,21 @@ def _assert_parse_documents_called(payload: dict[str, Any], uploaded_files: list
         for event in payload.get("events", [])
         if event.get("type") == "tool_call" and event.get("payload", {}).get("name") == "parse_documents"
     ]
-    if len(calls) != 1:
-        raise AssertionError(f"expected exactly one parse_documents call, got {len(calls)}")
-    called_paths = calls[0].get("args", {}).get("file_paths")
     expected_paths = [file_info["file_path"] for file_info in uploaded_files]
-    if called_paths != expected_paths:
-        raise AssertionError(f"parse_documents args.file_paths mismatch: {called_paths!r} != {expected_paths!r}")
-    for key in ("return_md", "return_content_list", "return_images", "return_original_file", "response_format_zip"):
-        if calls[0].get("args", {}).get(key) is not True:
-            raise AssertionError(f"parse_documents args.{key} must be true for ZIP parsing")
+    if not calls:
+        raise AssertionError("expected at least one parse_documents call, got 0")
+
+    called_paths: list[str] = []
+    for call in calls:
+        paths = call.get("args", {}).get("file_paths")
+        if isinstance(paths, list):
+            called_paths.extend(path for path in paths if isinstance(path, str))
+
+    missing_paths = [path for path in expected_paths if path not in called_paths]
+    if missing_paths:
+        raise AssertionError(
+            f"parse_documents did not cover uploaded file_paths: {missing_paths!r}; all called paths: {called_paths!r}"
+        )
 
 
 def _latest_text(event: dict[str, Any] | None) -> str:
