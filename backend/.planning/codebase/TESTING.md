@@ -1,7 +1,7 @@
 # TESTING
 
 > backend 子项目的测试与验证策略。事实来源 = `backend/tests/test_*.py` + `backend/pyproject.toml`。
-> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> 本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`；`python -m tests.test_api` 实跑通过（exit 0）。
 
 ## 1. 主要验证手段：直接运行测试脚本（已确认）
 
@@ -28,14 +28,15 @@ python -m tests.test_api
 | `test_harness.py` | `DeepAgentsBrainFactory` env 加载、`ToolStatusMiddleware`、`HarnessRuntime.execute_run(messages, ...)`、artifact block 归一化、最终 `assistant_message.payload.thinking` |
 | `test_api.py` | `POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.payload.thinking`、`after_event_id`、同 session 冲突、失败后续跑、启动恢复 |
 | `test_support.py` | `FakeBrain` / `FakeBrainFactory` / `StreamControl` / message helper / `wait_for_run` |
-| `test_real_image_run.py` | 手动真实 HTTP 集成脚本：上传图片 → `POST /runs` → 轮询 `GET /runs/{run_id}` 读取 `latest_content_event` / 最终 `reply`；直接运行时触达真实服务与模型，`run()` 默认跳过。默认服务地址 `DEFAULT_BASE_URL = "http://127.0.0.1:8500"`（可被 `DSAGENTS_API_BASE_URL` 覆盖），与 `scripts/start-backend.bat` 端口一致 |
-| `test_real_multi_pdf_run.py` | 手动真实 HTTP / 模型 / MinerU 集成脚本：一次上传 `backend/tests/tests_file/*.pdf` → 要求 agent 只调用一次 `parse_documents` 批量解析 → 轮询 run 完成 → 校验 `parse_documents` 被调用且 `file_paths` 匹配（不再要求生成 markdown 路径，改为确认可返回 `archive_path`，可选后续 `extract_archives`）；直接运行时触达真实服务、模型与 MinerU，`run()` 默认跳过。默认轮询间隔 `DEFAULT_POLL_SECONDS = 0.1`，也可用 `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`、`DSAGENTS_API_BASE_URL`、`DSAGENTS_PDF_DIR`、`DSAGENTS_REAL_MULTI_PDF_POLL_SECONDS` 等环境变量覆盖 |
+| `test_real_image_run.py` | 手动真实 HTTP 集成脚本：上传图片 → `POST /runs` → 轮询 `GET /runs/{run_id}` 读取 `latest_content_event` / 最终 `reply`。直接 `python -m tests.test_real_image_run` 会通过 `main()`（argparse）立即触达真实服务与模型；`run()` 另起路径默认跳过（需 `DSAGENTS_RUN_REAL_IMAGE_TEST=1` 才执行）。默认服务地址 `DEFAULT_BASE_URL = "http://127.0.0.1:8500"`（可被 `DSAGENTS_API_BASE_URL` 覆盖），与根级 `scripts/start-backend.bat` 端口一致；默认图片 `DEFAULT_IMAGE_PATH` 指向 `tests/tests_images/imags1.jpg`（实际镜像在 `tests/tests_file/imags1.jpg`，需用 `--image` 或 `DSAGENTS_IMAGE_PATH` 指向真实文件） |
+| `test_real_multi_pdf_run.py` | 手动真实 HTTP / 模型 / MinerU 集成脚本：一次上传 PDF 清单 → 要求 agent 只调用一次 `parse_documents` 批量解析 → 轮询 run 完成 → 校验 `parse_documents` 被调用且 `file_paths` 匹配（确认可返回 `archive_path`，可选后续 `extract_archives`）。直接 `python -m tests.test_real_multi_pdf_run` 会通过 `main()`（argparse）立即触达真实服务、模型与 MinerU；`run()` 另起路径默认跳过（需 `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1` 才执行）。默认 PDF 目录 `DEFAULT_PDF_DIR = tests/tests_file/测试用例1/`，默认轮询间隔 `DEFAULT_POLL_SECONDS = 0.1`，可用 `DSAGENTS_API_BASE_URL`、`DSAGENTS_PDF_DIR`、`DSAGENTS_REAL_MULTI_PDF_POLL_SECONDS` 等环境变量或 `--base-url`/`--pdf-dir`/`--poll` 等 CLI 参数覆盖 |
 
 命名约定：
 
 - backend 测试脚本统一放 `backend/tests/`
 - 文件名统一 `test_*.py`
-- 可执行测试脚本保留 `run()`，并用 `if __name__ == "__main__": run()` 支持 `python -m tests.test_xxx`
+- 普通本地回归脚本（`test_api`/`test_harness`/`test_run_ledger`/`test_tools`）保留 `run()`，并用 `if __name__ == "__main__": run()` 支持 `python -m tests.test_xxx` 直接跑
+- 真实集成脚本（`test_real_image_run`/`test_real_multi_pdf_run`）走 `main()`（argparse，带 `--base-url`/`--image`/`--pdf-dir`/`--poll` 等参数），`python -m tests.test_real_xxx` 直接执行真实调用；其 `run()` 入口另用环境变量门控默认跳过
 - `test_support.py` 只放共享替身/辅助函数，不作为独立验证入口
 
 ## 3. 当前覆盖点（已确认）

@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> 本轮刷新（2026-07-09）已核对当前工作树：能力可插拔边界、events→runs 投影、程序内/HTTP 双入口均与源码一致；`extract_archives` 工具、批量 `parse_documents`（task 级 ZIP）、artifact 时间戳命名均已就位。
 
 ## 1. 架构定位
 
@@ -28,7 +28,7 @@ run 是唯一的执行单位与查询单位。本次重构（`8890292`）已完�
 1. **HTTP 入口**（`api.py`）：`POST /runs` 创建 run 并立即返回 `queued`，run 在后台线程执行。
 2. **程序内入口**：`AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`，返回 `Iterator[RunEvent]`。本地测试脚本中的 harness 测试也走这条路。
 
-### `session_id` 的现状（需澄清，易误读）
+### `session_id` 的现状（已收窄，易误读）
 
 `session.py` 模块与 session 持久化层**已移除**，但 `session_id` 这个**标识符仍保留**，用途已收窄为：
 

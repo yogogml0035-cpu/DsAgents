@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-08）已核对当前 HEAD `349357b`：最终 `assistant_message.payload` 可携带同条 AIMessage 的最后一个 `thinking` 文本。
+> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94`：`extract_archives` 工具 + `parse_documents` 保存 task 级 ZIP；artifact 存储命名重构；文档解析改为批量处理。
 
 ## 1. 系统定位
 
@@ -41,7 +41,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 | `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
 | `tools.py` | 工具抽象 + 默认业务工具 `parse_documents`（批量调 MinerU，保存 task 级 ZIP）与 `extract_archives`（解压 ZIP） |
 
-固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`downloads/` 文档解析产物、`run-events/` 大 payload 外溢）。
+固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`downloads/` 文档解析与解压产物）+ `internal/run-events/`（大 payload 外溢，按需创建）。
 
 ## 5. 系统层面维护约定
 

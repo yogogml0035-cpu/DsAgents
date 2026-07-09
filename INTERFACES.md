@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-08）已核对当前 HEAD `349357b`：最终 `assistant_message.payload` 可包含最后一个 `thinking` 文本和最终 `text`。
+> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94`：`extract_archives` 工具 + `parse_documents` 保存 task 级 ZIP；artifact 存储命名重构；文档解析改为批量处理。
 
 ## 1. HTTP API 边界
 
@@ -86,7 +86,7 @@ brain.stream(
 - `resources.store`：LangGraph `SqliteStore`
 - `resources.checkpointer`：LangGraph `SqliteSaver`
 
-固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射与表结构详见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) §7。run 输入快照字段现为 `input_messages_json`（保存 `messages[]` JSON 字符串）。大 run event payload/raw（默认 `max_inline_bytes=262_144`）外溢到 `data/artifacts/run-events/*.json`；`CompositeBackend` 路由规则同样见该文档。
+固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射与表结构详见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) §7。run 输入快照字段现为 `input_messages_json`（保存 `messages[]` JSON 字符串）。大 run event payload/raw（默认 `max_inline_bytes=262_144`）外溢到 `data/internal/run-events/*.json`（按需创建）；`CompositeBackend` 路由规则同样见该文档。
 
 ## 5. LLM provider 边界
 

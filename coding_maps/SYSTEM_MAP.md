@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-08）已核对当前 HEAD：`349357b`（最终 `assistant_message.payload.thinking`）、`2206b1a`（values snapshot 派生业务事件）、`c8cc563`（run-ledger 时区统一与 schema 迁移）、`bc383ac`（测试端口配置）。
+> 本轮刷新（2026-07-09）已核对当前 HEAD：`1e8cf94`（extract_archives 工具 + parse_documents 保存 task ZIP）、`82152a0`/`5100f31`（artifact 存储与命名重构、run-event 目录拆分）、`709f805`（文档解析工具改为批量处理）、`c8cc563`（run-ledger 时区统一与 schema 迁移）。
 
 ## 1. 系统目的和仓库形态
 
@@ -83,7 +83,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 完整契约（请求/响应 JSON 形状、错误码）见 [`INTERFACES.md`](../INTERFACES.md) §1 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
 `after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
 
-`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload`（端口与 `backend/tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。
+`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（无 `--reload`；端口与真实集成测试脚本默认地址一致）。
 `assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `raw.type=="values"` 的最终 AIMessage snapshot；调用方不应直接依赖 `values` 事件类型。
 
 ### 4.2 LLM provider 边界
@@ -141,7 +141,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - **配置文档边界**：长期文档只保留配置键、消费者与归属规则，不抄录本地 `.env` 的真实值、连接串或服务地址。
 - **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。
 - **私有配置**：`backend/.env` 被 `.gitignore` 排除且不应进入长期文档；provider key 经 `os.getenv` 直读，无统一脱敏或 secret manager 封装。
-- **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。`_error_text` 在 `api.py` 与 `harness.py` 重复定义。
+- **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。`_error_text` 在 `api.py`、`harness.py`、`tools.py` 三处重复定义（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §5）。
 - **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **测试覆盖**：无 pytest 套件、无 CI、无 lint/type-check gate；回归按影响范围直接运行 `backend/tests/test_*.py` 脚本，普通本地脚本用 `FakeBrain`，不打真实 provider/MinerU。
@@ -171,3 +171,5 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md)
 
 刷新时参考的旧版：`coding_maps/SYSTEM_MAP.md`（保留仍正确的调用链与接口面，改写/补全系统层视图）。
+
+本轮（2026-07-09）在 `$gsd-map-codebase` 刷新 7 个 fact docs 后同步：更新 HEAD 核对说明（至 `1e8cf94`，含 extract_archives / artifact 重构 / 批量解析）、修正启动命令为无 `--reload`、修正 `_error_text` 重复定义为三处并链接到 CONCERNS §5。

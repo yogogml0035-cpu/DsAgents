@@ -1,7 +1,7 @@
 # STACK
 
 > 技术栈快照。所有事实均基于当前代码（`pyproject.toml` + backend 顶层模块）核对。
-> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> 本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`；artifact 目录拆分为上传源（`uploads/`）与工具解析产物（`downloads/`）两路。
 > 本文件优先记录代码与仓库配置可直接证实的事实；运行命令优先以仓库内 `scripts/start-backend.bat` 与测试默认值为准。
 
 ## 1. 运行时 / 语言
@@ -54,9 +54,10 @@ py-modules = ["api", "artifact_names", "hands", "harness", "resources", "run_led
 | `SqliteSaver` | LangGraph checkpointer | `data/dsagents_checkpoints.db` | `resources.py` |
 | `CompositeBackend` | `deepagents.backends` | 路由 `/memories/` → `StoreBackend`；`/artifacts/` `/large_tool_results/` → `FilesystemBackend`；默认 `StateBackend`（含 `/conversation_history/`、`/logs/`） | `resources.py` |
 | 大 run event 外溢 | 文件系统 | `data/internal/run-events/*.json` | `run_ledger.py`（`max_inline_bytes=262_144`，lazy mkdir） |
-| 上传文件 | 文件系统 | `data/artifacts/uploads/` | `api.py` |
+| 上传文件（上传源） | 文件系统 | `data/artifacts/uploads/` | `api.py` |
+| 工具解析产物 | 文件系统 | `data/artifacts/downloads/` | `tools.py`（`parse_documents` 存 task ZIP；`extract_archives` 解压到 `<zip-stem>/`） |
 
-数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关；其中 `dsagents_runs.db`、`artifacts/uploads/` 这类路径会在首次运行对应流程时按需创建。
+数据目录固定为 `backend/data/`（`resources.py` 中 `_BACKEND_DIR = Path(__file__).resolve().parent`），与 CWD 无关；其中 `dsagents_runs.db`、`artifacts/uploads/`、`artifacts/downloads/` 这类路径会在首次运行对应流程时按需创建（`downloads/` 由 `tools.py` 在落盘时 lazy mkdir）。
 
 ## 5. LLM Provider
 

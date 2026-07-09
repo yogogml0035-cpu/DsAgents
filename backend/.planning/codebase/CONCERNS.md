@@ -1,7 +1,7 @@
 # CONCERNS
 
 > backend 风险、技术债、关注点。每条均带证据（文件/commit/配置）。状态分 **已确认**（代码或配置可证）与 **需确认**（推断，需人工核实）。
-> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。行号以当前源码为准。
+> 本轮刷新（2026-07-09）已核对当前工作树：egg-info 已清理并 ignore；时区迁移（commit `c8cc563`）已落地；WAL/journal_mode 各库差异已实测；`_error_text` 三处重复已更新；新增 session_locks 内存泄漏与时区迁移风险。行号以当前源码为准。
 
 ## 1. 架构迁移残留（run-first 重构，commit 8890292）
 
@@ -25,7 +25,7 @@
 ## 3. 仓库体积 / 入库风险
 
 - **已清理**｜`backend/instantclient/`（Oracle instant client 19.31，约 109MB，37 个 git 跟踪文件）已删除；`.gitignore` 已加入 `backend/instantclient/` 防止重新入库。
-- **已确认**｜`backend/dsagents.egg-info/` 当前仍被 git 跟踪（`git ls-files backend/dsagents.egg-info` 有结果），但它是 setuptools 生成元数据；改依赖或 `py-modules` 时可能产生机械 churn，是否移出索引需确认。
+- **已清理**｜`backend/dsagents.egg-info/` 已从 git 索引移除（`git ls-files | grep egg-info` 为空，commit `864470d`/`007bb57`），且 `.gitignore:17` 已加入 `backend/dsagents.egg-info/`。该目录仍会在本地由 setuptools 重新生成，但不再造成入库 churn。
 - **已确认**｜`__pycache__/` 与 `*.pyc` 已在 `.gitignore`，未入库（`git ls-files | grep __pycache__` 为空）。
 
 ## 4. 测试覆盖不足
@@ -39,7 +39,7 @@
 - **已确认**｜`harness.py:160-171` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
 - **已确认**｜`api.py:160-172` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
 - **风险**｜真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是"调用方自行处理"，但无护栏。
-- **已确认**｜`_error_text` 同时定义在 `api.py:231` 与 `harness.py:556`（重复实现）。
+- **已确认**｜`_error_text` 在三处重复实现，逻辑完全一致（`str(exc).strip() or exc.__class__.__name__`）：`api.py:239`、`harness.py:556`、`tools.py:431`。三处都用裸 `str(exc)` 透传错误文本。
 
 ## 6. 持久化边界（SQLite 多 db）
 
@@ -47,8 +47,14 @@
   - `dsagents_runs.db` — run 与 run_events（`run_ledger.py`，自建表 `runs` / `run_events`，含 `idx_runs_session_created` / `idx_run_events_run_order`）。
   - `dsagents_store.db` — LangGraph `SqliteStore`（仅 `/memories/` 显式长期记忆路由，见 `resources.py:55-66`）。
   - `dsagents_checkpoints.db` — LangGraph `SqliteSaver` checkpointer（`thread_id=session_id`）。
-- **风险**｜三 db 各自独立连接、无跨库事务；`run_ledger` 每次操作都 `sqlite3.connect()` 短连接（`run_ledger.py` 当前 8 处 `connect`：`50/79/111/152/186/218/249/341`），高并发下锁竞争与写吞吐有限（SQLite 默认 WAL 未显式开启）。
-- **需确认**｜是否需要在 `_setup` 中 `PRAGMA journal_mode=WAL` 以提升并发写。
+- **风险**｜三 db 各自独立连接、无跨库事务；`run_ledger` 每次操作都 `sqlite3.connect()` 短连接（`run_ledger.py` 当前 8 处 `connect`：`49/78/110/151/185/217/248/341`），高并发下锁竞争与写吞吐有限。
+- **已确认**｜journal_mode 各库不一致：`dsagents_runs.db` 为 `delete`（`run_ledger._setup` 未设 PRAGMA），而 `dsagents_checkpoints.db` 由 LangGraph `SqliteSaver` 开启 WAL（磁盘上存在 `dsagents_checkpoints.db-wal` / `-shm`，4MB+ 未 checkpoint）。`dsagents_store.db` 同走 LangGraph `SqliteStore`。WAL 的生命周期与 checkpoint 频率由 LangGraph 管理，非本仓代码控制。
+- **风险**｜`runs.db` 的 `delete` 模式下，`emit_run_event` 在 run 执行期间高频短连接写（每个 stream chunk 一条），与读端 `get_run_events` 轮询并发时易触发 `database is locked`（SQLite 默认 5s busy timeout，本仓未显式设置 `busy_timeout`）。
+- **需确认**｜是否需要在 `_setup` 或连接级为 `runs.db` 设置 `PRAGMA journal_mode=WAL` 与 `busy_timeout` 以缓解写锁竞争；以及是否需要对 checkpoints.db 的 WAL 做 checkpoint/归档。
+- **风险（时区与数据迁移，commit `c8cc563`）｜**`run_ledger.py` 已从 UTC ISO（`_utcnow()`/`datetime.now(timezone.utc).isoformat()`）切换为本机时区秒级文本（`_now_text()` = `datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"`，`run_ledger.py:454-455`）。三处隐患：
+  1. **时区依赖宿主**：`astimezone()` 无显式 tz 时取系统本地时区，部署到不同时区的机器会让同一数据库内的 `created_at`/`updated_at` 混用多套时区文本，且无 tz 后缀（裸 `YYYY-MM-DD HH:MM:SS`），下游无法可靠还原 UTC。
+  2. **一次性迁移假设**：`_migrate`（`run_ledger.py:385-389`）仅在 `pragma user_version < 1` 时跑 `_normalize_existing_timestamps(assume_naive_utc=True)`，把历史无 tz 时间戳**一律当作 UTC** 转本机时区。若历史数据实际已混入本机时区或其它来源的裸文本，迁移会引入偏移；迁移完成后 `user_version=1`，不会再次执行（幂等且单向，不可回滚）。
+  3. **schema 版本机制单薄**：`RUN_LEDGER_SCHEMA_VERSION=1` 是唯一版本号，未来表结构变更需复用同一 `user_version` 递增；目前没有迁移失败回滚或版本不匹配的告警。
 
 ## 7. provider 耦合（Anthropic / langchain / deepagents）
 
@@ -69,6 +75,7 @@
 ## 10. 并发 / 运行时边界
 
 - **已确认**｜`api.py:66-68/175-191` 并发保护靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）。多 worker（如 `uvicorn --workers N`）部署时，同一 `session_id` 可在不同进程并发执行 run，锁失效。
+- **风险**｜`app.state.session_locks`（`dict[session_id, threading.Lock]`）只增不删：`_release_session_run`（`api.py:199-206`）只 `pop` `active_runs`，不清理 `session_locks`，每个新 `session_id` 都会 `setdefault` 一个永久残留的 Lock 对象。长期运行 + 高唯一会话量下是内存泄漏点。
 - **已确认**｜run 在 daemon 线程跑（`api.py:94-98` `threading.Thread(..., daemon=True)`）：进程被强杀时，run 状态可能停在 `running`，靠下次启动 `fail_incomplete_runs` 兜底（`api.py:63` lifespan 调用 + `run_ledger.py:247-267`）。
 - **已确认**｜`dsagents_runs.db` 与 `data/internal/run-events/` 只增不删，无 TTL/归档/压缩（`run_ledger.py` 无清理方法）；raw chunk 长期留存（见原 §2，调试有利但占空间且保留模型/错误细节）。
 

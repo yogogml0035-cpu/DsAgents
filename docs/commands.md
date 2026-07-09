@@ -22,8 +22,10 @@ backend 测试统一放在 `backend/tests/test_*.py`。按改动影响范围直�
 
 ```powershell
 cd backend
-uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload
+uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
+
+或直接运行根级脚本 `scripts/start-backend.bat`（等价命令，会自动切到 `backend/` 再启动）。
 
 ## 调用 HTTP
 

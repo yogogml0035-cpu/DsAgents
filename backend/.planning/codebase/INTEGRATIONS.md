@@ -1,7 +1,7 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> 本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`；artifact 存储拆分为上传源 `uploads/`（HTTP `/upload`）与工具解析产物 `downloads/`（`parse_documents`/`extract_archives`）两路，共用 `/artifacts/` 虚拟前缀。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
@@ -98,6 +98,19 @@ brain.stream(
 | `/memories/` | `StoreBackend(store, namespace=("dsagents",))` | 显式长期记忆，跨会话持久（SQLite store） |
 | `/artifacts/`、`/large_tool_results/` | `FilesystemBackend(root_dir=artifacts_dir, virtual_mode=True)` | 落磁盘 |
 | 其它（含 `/conversation_history/`、`/logs/`） | `StateBackend()` | 同 `thread_id` 图状态；不进入跨 session store |
+
+### artifact 目录拆分规则（上传源 vs 解析产物）
+
+`data/artifacts/` 下按写入来源拆成两路子目录，共用 `/artifacts/` 虚拟前缀，由 `_resolve_document_path` 统一回解析：
+
+| 物理子目录 | 虚拟前缀 | 写入者 | 命名规则 | 证据 |
+|---|---|---|---|---|
+| `uploads/` | `/artifacts/uploads/` | HTTP `POST /upload`（`api.py`） | `<cleaned-stem>_<upload-ts>(_n).ext`，`make_timestamped_name` + 同请求共用时间戳；`clean_filename` 清洗 | `api.py`、`artifact_names.py` |
+| `downloads/` | `/artifacts/downloads/` | 工具产物（`tools.py`）：`parse_documents` 存 MinerU task 级 ZIP；`extract_archives` 解压到 `<zip-stem>/` | task ZIP：单文件复用源 stem、多文件为 `<first-stem>_etc_<batch-ts>.zip`，统一走 `make_unique_name` 去重 | `tools.py` |
+
+- 上传源只进 `uploads/`，工具产物只进 `downloads/`；两路命名互不污染、互不重名（`make_timestamped_name` vs `make_unique_name`）。
+- `_resolve_document_path` 对 `/artifacts/...` 与绝对路径一视同仁，工具层不关心产物来自上传还是解析。
+- `downloads/` 由 `tools.py` 在落盘/解压前 lazy `mkdir(parents=True, exist_ok=True)`；`uploads/` 由 `api.py` 同样 lazy mkdir。
 
 ## 5. 环境变量集成（python-dotenv）
 

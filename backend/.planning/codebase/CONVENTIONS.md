@@ -1,6 +1,6 @@
 # CONVENTIONS
 
-> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-08）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
 > 区分「已确认」（直接对应代码）与「需确认」（证据不足）。
 
 ## 1. 包管理器（已确认）
@@ -31,7 +31,7 @@
 | HTTP 上传文件 | `POST /upload`（multipart 字段名 `files`，支持 1 个或多个文件） |
 | HTTP 提交 run | `POST /runs`（body `{session_id?, messages[]}`），轮询 `GET /runs/{run_id}` |
 | 测试脚本 / 主要验证 | 按影响范围运行 `cd backend && python -m tests.test_xxx` |
-| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500 --reload`（端口与 `scripts/start-backend.bat`、`tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致） |
+| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`（与根级 `scripts/start-backend.bat` 完全一致；端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致） |
 | 程序内调用 | `AgentResources(config)` + `create_harness(resources).execute_run(messages, session_id, run_id)` |
 
 - **没有** `from session import run_session`（已确认 grep 无此导入，且无 `session.py`）。Session 概念已移除，改由 `thread_id=session_id` + run ledger 承载。
