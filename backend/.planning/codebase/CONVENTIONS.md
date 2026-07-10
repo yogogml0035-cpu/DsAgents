@@ -20,6 +20,13 @@
 
 - 扁平顶层模块：`backend/` 下的 `.py` 直接作为顶层模块，绝对导入写作 `from hands import ...`、`from resources import AgentResources`，**不**带 `backend.` 前缀。
 - `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `artifact_names` / `hands` / `harness` / `philips_wgq_import` / `resources` / `run_ledger` / `subagents` / `tecan_import` / `tools` / `workflow_artifacts`。新增顶层 `.py` 必须同步追加。
+
+  **PR 审查 checklist（py-modules 同步）**：
+  1. 本次 PR 是否在 `backend/` 根新增了任何顶层 `.py` 文件？
+  2. 若是，是否已把模块名（不含 `.py`）追加到 `pyproject.toml` 的 `[tool.setuptools].py-modules` 列表？
+  3. 是否已确认 `uv sync` 后能从全新 venv 通过绝对导入（如 `from hands import ...`）成功导入该模块？
+
+  > 漏配的后果：开发环境因源码在 `PYTHONPATH` 上可正常导入；生产安装（`uv pip install .`）后该模块不会被打包，绝对导入 `from hands import ...` 会以 `ModuleNotFoundError` 失败。
 - **没有** `backend/__init__.py` / `backend/__main__.py`（已确认不存在）。
 - **没有** `python -m backend.*` 这种调用方式（包不是这么组织的）。
 - backend 测试源码目录是 `backend/tests/`；测试脚本统一命名为 `test_*.py`，可执行脚本保留 `run()` 并支持 `python -m tests.test_xxx` 直接运行（见 TESTING.md）。
@@ -92,7 +99,7 @@
 ## 10. Skill 与业务 artifact 约定（已确认）
 
 - Skill 根固定为 `backend/skills/`，通过 `/skills/` 虚拟路由挂载；主 agent 不得写 `/skills/**`，extractor 的内置文件能力为只读。
-- `SKILL.md` 控制在约 100 行内；字段/规则只放一层 `references/`，模板放同 Skill 的 `assets/`。普通 PDF 阅读/通用抽取不属于业务 Skill 触发条件。
+- `SKILL.md` 控制在 ≤ 50 行内（当前两个 `SKILL.md` 实际分别约 42 行 / 39 行）；字段/规则只放一层 `references/`，模板放同 Skill 的 `assets/`。普通 PDF 阅读/通用抽取不属于业务 Skill 触发条件。
 - extraction/canonical/adjudication 都采用当前严格合同，不提供旧 envelope 或字段别名；缺失字段用正常 status 返回，不增加图 state schema、HTTP 恢复接口或持久化游标。
 - `/artifacts/downloads/` 中的业务 JSON/Excel 不覆盖、不原地编辑；generator 只接受 canonical artifact 路径。
 
@@ -108,6 +115,7 @@
 
 - 默认 `DeepAgentsBrainFactory`：从 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 环境变量构造，映射到 LangChain 的 Anthropic 客户端（`init_chat_model("anthropic:...", thinking={"type":"adaptive"})`）。
 - 当前 `deepagents==0.6.12` 通过 `skills` / `subagents` / `permissions` / `response_format` / `name` 装配；官方新文档与该版本不一致处以实际签名为准，不写未来兼容层。
+- **硬规则（版本锁定）**：以锁定版本签名为准（`deepagents>=0.6.12` / `langchain-anthropic>=1.4.8`），不写面向未来版本的兼容层或参数 shim。`harness_profile` 等未来版本才存在的参数在当前锁定版本中**不存在**；升级 `deepagents` 前，必须在 `harness.py` `register_harness_profile`（及调用处）先验证目标版本是否真正暴露该参数，确认后再切换，禁止盲改。
 - 普通本地测试用 `FakeBrainFactory` / `FakeBrain`：验证 Brain 可替换、payload 接收当前请求的 `messages[]`、`thread_id` 路由、失败 run 后同 thread 续跑不回滚。
 
 ## 13. 文档与交付约定（来自根级 `docs/conventions.md`）

@@ -140,6 +140,8 @@ brain.stream(
 | `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` | `philips_wgq_import.py` | 可选；三者齐备才查询 Philips 单位 |
 | `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | `philips_wgq_import.py` | 可选 thick client 目录与连接/调用超时；默认 30 秒 |
 
+> 交叉引用：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` 三者齐备才会发起查询，否则**优雅降级**（跳过法定单位查询，单位字段填“需确认”并返回人工校验项）；`ORACLE_CLIENT_LIB_DIR` 指向 Oracle instant client，是 thick mode 部署依赖（详见 `CONCERNS.md`）。Tecan 不消费任何 Oracle 键。
+
 ## 6. 外部 HTTP 调用（requests）
 
 仅 `tools.py`，对接 MinerU 3.4.0 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_download_mineru_json` / `_download_mineru_zip`）：
@@ -154,11 +156,39 @@ brain.stream(
 工具 `parse_documents`：AI 侧看到 `parse_documents(file_paths, return_md=False, return_content_list=True, return_images=False, return_original_file=False, response_format_zip=False)`。默认只要 content_list，保存 task 级 JSON 到 `/artifacts/downloads/<stem>.json` 并返回 `result_path`、`archive_path=None`；用户明确要 Markdown、图片、原始文件或完整下载包时应传五个输出参数全 true，工具保存 ZIP 并返回 `archive_path`、`result_path=None`。单文件命名复用源文件 stem（如 `report_20260708000000.pdf` → `report_20260708000000.json/.zip`），多文件命名为 `<first-stem>_etc_<batch-ts>.json/.zip`，重名继续用 `make_unique_name`。成功返回结构化 JSON（`task_id/status_url/result_url/archive_path/result_path/result_format/output_options/succeeded[]/failed[]`）；`succeeded[]` 只记录成功提交的源文件 `file_path`，不再伪造每文件输出路径；无有效输入时两种路径均为 `None`。
 `parse_documents` 的 LangChain 工具 schema 由短 docstring 加 `Annotated` 参数说明组成；调用策略写在参数说明和系统 prompt，不把长操作手册塞进函数 docstring。
 
-工具 `extract_archives(zip_paths: list[str])`：最小本地解压工具，用标准库 `zipfile` 把每个 ZIP 解压到 `/artifacts/downloads/<zip-stem>/`，返回 `succeeded[]`（含 `archive_path`/`output_dir`/`files[]`）与 `failed[]`（逐 ZIP 错误）；不新增通用命令/代码执行工具、不引入依赖、不做历史兼容。
+工具 `extract_archives(zip_paths: list[str])`：最小本地解压工具，用标准库 `zipfile` 把每个 ZIP 解压到 `/artifacts/downloads/<zip-stem>/`，返回结构与 `parse_documents` 详略对齐的 JSON：
+
+```json
+{
+  "succeeded": [
+    {"archive_path": "/artifacts/downloads/<zip>.zip", "output_dir": "/artifacts/downloads/<zip-stem>/", "files": ["<解压出的相对文件路径>..."]}
+  ],
+  "failed": [
+    {"archive_path": "/artifacts/downloads/<zip>.zip", "error": "<逐 ZIP 错误信息>"}
+  ]
+}
+```
+
+`succeeded[].files[]` 列出该 ZIP 解压出的相对路径；`failed[]` 逐 ZIP 记录错误。不新增通用命令/代码执行工具、不引入依赖、不做历史兼容。
 
 `parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `archive_path` 或 `result_path` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 
 `default_tool_catalog()` 当前注册十个工具：`parse_documents`、`extract_archives`，以及 Philips/Tecan 各四个 `save extraction` / `build canonical` / `save adjudication` / `generate documents` 工具。生成器唯一业务参数均为 canonical artifact 路径。
+
+### 业务工具契约（8 个业务工具）
+
+| 工具名 | 所属模块 | 关键入参 | 返回 |
+|---|---|---|---|
+| `save_philips_wgq_extraction` | `philips_wgq_import.py` | `extractor`, `source_artifact`, `logistics`, `items` | `{extractor, artifact_path}` |
+| `save_philips_wgq_adjudication` | `philips_wgq_import.py` | `source_artifacts`, `decisions` | `{artifact_path}` |
+| `build_philips_wgq_canonical` | `philips_wgq_import.py` | `extraction_artifacts`, `tracking_artifact`, `international_forwarder?`, `customs_mode?`, `adjudication_artifact?` | `{status, ...}` 状态机：`canonical` / `needs_c` / `needs_adjudication` / `needs_input` |
+| `generate_philips_wgq_documents` | `philips_wgq_import.py` | `canonical_artifact` | 生成的 Excel artifact 路径 |
+| `save_tecan_extraction` | `tecan_import.py` | `extractor`, `source_artifact`, `logistics`, `items`（强制 `[]`） | `{extractor, artifact_path}` |
+| `save_tecan_adjudication` | `tecan_import.py` | `source_artifacts`, `decisions` | `{artifact_path}` |
+| `build_tecan_canonical` | `tecan_import.py` | `extraction_artifacts`, `order_artifact`, `information_artifacts`, `info_source_preference?`, `pn_info_source_overrides?`, `adjudication_artifact?` | `{status, ...}` 同上状态机 |
+| `generate_tecan_documents` | `tecan_import.py` | `canonical_artifact` | 生成的 Excel artifact 路径 |
+
+> `?` 表示可选参数。两个 canonical builder 的 `status` 共用同一套状态机；canonical artifact 只在 `status=="canonical"` 时用于 generator。
 
 ## 7. Oracle 与业务工作簿边界
 

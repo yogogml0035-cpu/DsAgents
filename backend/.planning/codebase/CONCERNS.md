@@ -38,9 +38,9 @@
 ## 5. 错误透传约定
 
 - **已确认**｜`harness.py:203-210` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
-- **已确认**｜`api.py:175-188` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
+- **已确认**｜`api.py` 的 `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏（行号 `api.py:175-188` 仅为辅助，以函数名为准）。
 - **风险**｜真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是"调用方自行处理"，但无护栏。
-- **已确认**｜`_error_text` 在三处重复实现，逻辑完全一致（`str(exc).strip() or exc.__class__.__name__`）：`api.py:239`、`harness.py:599`、`tools.py:502`。三处都用裸 `str(exc)` 透传错误文本。
+- **已确认**｜`_error_text` 在三处独立实现（`api.py` / `harness.py` / `tools.py` 的 `_error_text` 函数），逻辑完全一致（`str(exc).strip() or exc.__class__.__name__`）。三处都用裸 `str(exc)` 透传错误文本。可用 `grep -rn "_error_text" backend/*.py` 复现（参考行号 `api.py:239`、`harness.py:599`、`tools.py:502` 仅为辅助定位，以提交 `8890292` 为准）。
 
 ## 6. 持久化边界（SQLite 多 db）
 
@@ -48,7 +48,7 @@
   - `dsagents_runs.db` — run 与 run_events（`run_ledger.py`，自建表 `runs` / `run_events`，含 `idx_runs_session_created` / `idx_run_events_run_order`）。
   - `dsagents_store.db` — LangGraph `SqliteStore`（仅 `/memories/` 显式长期记忆路由，见 `resources.py:55-66`）。
   - `dsagents_checkpoints.db` — LangGraph `SqliteSaver` checkpointer（`thread_id=session_id`）。
-- **风险**｜三 db 各自独立连接、无跨库事务；`run_ledger` 每次操作都 `sqlite3.connect()` 短连接（`run_ledger.py` 当前 8 处 `connect`：`49/78/110/151/185/217/248/341`），高并发下锁竞争与写吞吐有限。
+- **风险**｜三 db 各自独立连接、无跨库事务；`run_ledger` 每次数据库操作都开短连接（`sqlite3.connect()` 后在 `with`/`try-finally` 内关闭），高并发下锁竞争与写吞吐有限。可用 `grep -n "connect" run_ledger.py` 复现全部调用点（行号随提交漂移，以定性描述为准）。
 - **已确认**｜journal_mode 各库不一致：`dsagents_runs.db` 为 `delete`（`run_ledger._setup` 未设 PRAGMA），而 `dsagents_checkpoints.db` 由 LangGraph `SqliteSaver` 开启 WAL（磁盘上存在 `dsagents_checkpoints.db-wal` / `-shm`，4MB+ 未 checkpoint）。`dsagents_store.db` 同走 LangGraph `SqliteStore`。WAL 的生命周期与 checkpoint 频率由 LangGraph 管理，非本仓代码控制。
 - **风险**｜`runs.db` 的 `delete` 模式下，`emit_run_event` 在 run 执行期间高频短连接写（每个 stream chunk 一条），与读端 `get_run_events` 轮询并发时易触发 `database is locked`（SQLite 默认 5s busy timeout，本仓未显式设置 `busy_timeout`）。
 - **需确认**｜是否需要在 `_setup` 或连接级为 `runs.db` 设置 `PRAGMA journal_mode=WAL` 与 `busy_timeout` 以缓解写锁竞争；以及是否需要对 checkpoints.db 的 WAL 做 checkpoint/归档。
@@ -65,28 +65,35 @@
 - **已确认**｜官方新文档展示的 `harness_profile` 参数不在锁定 `deepagents==0.6.12` 的 `create_deep_agent` 签名中；当前使用公开的 provider profile 注册 API 禁用默认 general-purpose subagent。
 - **风险**｜provider profile 注册是进程级全局行为且当前只覆盖 `anthropic`。若将默认模型改成其它 provider，需重新核对是否会自动多出 general-purpose subagent；不要假设当前四个 extractor 配置自动跨 provider 等价。
 
-## 8. 文档同步风险
+## 8. Oracle instant client 部署依赖
+
+- **已确认**｜`philips_wgq_import.py` 的 `_oracle_units` 通过 `oracledb` thick mode 连接 Oracle，依赖 `ORACLE_CLIENT_LIB_DIR` 环境变量指向 Oracle instant client 目录（`init_oracle_client(lib_dir=...)`）。
+- **风险**｜该 instant client 曾从仓库删除（`backend/instantclient/`，见 §3，约 109MB，commit 历史留痕），意味着**生产部署必须由外部提供该目录**（容器镜像挂载、主机预装等），不能依赖仓库存放。
+- **已确认（降级行为）**｜若 `ORACLE_CLIENT_LIB_DIR` 缺失或配置错误导致 thick mode 初始化失败，`_oracle_units` 会优雅降级（跳过法定单位查询），不抛错；但生成的核注清单将**缺少法定单位字段**（业务影响，非崩溃）。
+- **验证步骤**｜部署时设置好 `ORACLE_CLIENT_LIB_DIR` 后，运行涉及 Oracle 的业务流程（`philips_wgq_import.py` 的 `_oracle_units` 调用链），确认无 Oracle 初始化报错且生成的核注清单含法定单位字段。
+
+## 9. 文档同步风险
 
 - **已确认**｜文档分四层需手工保持一致：根 `AGENTS.md`/`ARCHITECTURE.md`/`INTERFACES.md` → `coding_maps/SYSTEM_MAP.md` → `docs/*.md` → `backend/.planning/codebase/*`。`AGENTS.md` 明确要求"改代码后先更新 `.planning/codebase/` 再回看上层"。
 - **风险**｜`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 这类必需配置缺失只能在运行时 fail-fast 暴露，目前无自动化配置完整性校验。
 
-## 9. 配置完整性风险（已确认）
+## 10. 配置完整性风险（已确认）
 
 - **已确认**｜`tools.py` 对 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 走 `_required_env(...)`；`MINERU_EFFORT` 走 `os.getenv(... ) or ""`，可缺省或留空，并会原样以空字符串提交到 MinerU。
 - **建议**：维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。
 
-## 10. 并发 / 运行时边界
+## 11. 并发 / 运行时边界
 
-- **已确认**｜`api.py:66-68/175-191` 并发保护靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）。多 worker（如 `uvicorn --workers N`）部署时，同一 `session_id` 可在不同进程并发执行 run，锁失效。
-- **风险**｜`app.state.session_locks`（`dict[session_id, threading.Lock]`）只增不删：`_release_session_run`（`api.py:199-206`）只 `pop` `active_runs`，不清理 `session_locks`，每个新 `session_id` 都会 `setdefault` 一个永久残留的 Lock 对象。长期运行 + 高唯一会话量下是内存泄漏点。
-- **已确认**｜run 在 daemon 线程跑（`api.py:94-98` `threading.Thread(..., daemon=True)`）：进程被强杀时，run 状态可能停在 `running`，靠下次启动 `fail_incomplete_runs` 兜底（`api.py:63` lifespan 调用 + `run_ledger.py:247-267`）。
+- **已确认**｜`api.py` 的并发保护（`_acquire_session_run` / `_release_session_run` 等会话级锁函数，行号 `66-68`/`175-191` 仅为辅助，以函数名为准）靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）。多 worker（如 `uvicorn --workers N`）部署时，同一 `session_id` 可在不同进程并发执行 run，锁失效。
+- **风险（量化）**｜`app.state.session_locks`（`dict[session_id, threading.Lock]`）只增不删：`_release_session_run` 只 `pop` `active_runs`，不清理 `session_locks`，每个新 `session_id` 都会 `setdefault` 一个永久残留的 Lock 对象。**严重性低**：每个 `threading.Lock` 对象体积很小（约几十字节），即便上千 `session_id` 也只占几十 KB；真正的风险不在内存，而在 `active_runs` 字典里残留的 `run_id` 可能因清理逻辑 bug 让同 session 的新 run 误判旧 run 仍活跃（需确认 `active_runs` 的清理时机）。长期运行仍建议定期清理 `session_locks`。
+- **已确认**｜run 在 daemon 线程跑（`api.py` 的 run 启动逻辑用 `threading.Thread(..., daemon=True)`）：进程被强杀时，run 状态可能停在 `running`，靠下次启动 `fail_incomplete_runs` 兜底（lifespan 启动调用 + `run_ledger.py` 的 `fail_incomplete_runs` 函数）。
 - **已确认**｜`dsagents_runs.db` 与 `data/internal/run-events/` 只增不删，无 TTL/归档/压缩（`run_ledger.py` 无清理方法）；raw chunk 长期留存（见原 §2，调试有利但占空间且保留模型/错误细节）。
 
-## 11. 程序内入口
+## 12. 程序内入口
 
 - **已确认**｜旧的 `from session import run_session` 已不存在；如需库式调用，只能显式组合 `AgentResources` + `create_harness(resources)` + `harness.execute_run(...)`（见 `AGENTS.md`、`harness.py:134`）。非缺陷，仅作记录以防误用。
 
-## 12. Skills / 业务 artifact 风险
+## 13. Skills / 业务 artifact 风险
 
 - **已确认**｜本地 assert 脚本覆盖装配、投票、裁决、严格合同与工作簿关键单元格，但不调用真实模型/MinerU/Oracle。真实 extractor 对 PDF 的准确性、同一回合并行 task 以及 Oracle 命中率仍需独立真实集成验证。
 - **风险**｜Philips/Tecan 的 Excel 模板是二进制资产，格式或固定行位置变化不会产生可读 diff；更新模板时必须重跑对应工作簿断言并人工抽查渲染结果。

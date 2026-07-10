@@ -87,6 +87,10 @@ brain.stream(
 - Philips extraction 固定为 `workflow/extractor/source_artifact/logistics/items`，物流四字段、商品九字段均使用 `{value, confidence}`；Tecan 使用相同 envelope，但物流只含 `pieces/gross_weight` 且 `items=[]`。
 - canonical 固定含 `workflow/source_artifacts/logistics/items/manual_checks` 加业务专属字段；不接受旧 envelope。generator 唯一业务参数是 canonical artifact 路径。
 - 所有输入路径必须显式指向 `/artifacts/...`；业务 JSON/Excel 写到 `/artifacts/downloads/` 的唯一新文件。流程中间状态不增加 HTTP、数据库或恢复接口。
+- 8 个业务工具名清单（全部由 `tools.py` 的 `default_tool_catalog()` 注册）：
+  - Philips：`save_philips_wgq_extraction`、`save_philips_wgq_adjudication`、`build_philips_wgq_canonical`、`generate_philips_wgq_documents`
+  - Tecan：`save_tecan_extraction`、`save_tecan_adjudication`、`build_tecan_canonical`、`generate_tecan_documents`
+- 完整的工具入参契约（关键入参、返回结构、状态机四态）见 `backend/.planning/codebase/INTEGRATIONS.md` §6。
 
 ## 5. 存储接口边界
 
@@ -110,6 +114,8 @@ brain.stream(
 - 完整键清单见 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) §2/§5。
 - Philips Oracle 是独立可选集成，只消费 `ORACLE_*` 键；配置缺失或查询失败继续生成并标人工校验。
 
+**Oracle thick client 部署依赖**：`_oracle_units` 走 `oracledb` thick mode，需 `ORACLE_CLIENT_LIB_DIR` 指向外部 Oracle instant client 目录（仓库已不再存放，约 109MB）；缺失或初始化失败时优雅降级，核注清单缺法定单位字段。详见 `backend/.planning/codebase/CONCERNS.md` §8。
+
 ## 7. 未证实的跨系统关系 / 需确认
 
 当前系统文档未确认其它子项目或跨系统调用方；已删除的旧 session 接口见 §1。
@@ -127,3 +133,4 @@ brain.stream(
 - **写系统文档**：只记录配置键、边界和消费者，不把本地 `.env` 的真实值、连接串或服务地址写回长期文档。
 - **跨进程部署**：单飞锁仅进程内语义；多 worker 部署前需引入跨进程锁或单进程约束。
 - **验证入口**：HTTP 行为变更已被 `backend/tests/test_api.py` 覆盖；backend 代码变更按影响范围运行对应 `cd backend && python -m tests.test_xxx` 脚本。
+- **部署 Philips Oracle**：确认 `ORACLE_CLIENT_LIB_DIR` 指向有效 instant client 目录，且 `ORACLE_DSN/USERNAME/PASSWORD` 齐备；验证步骤见 `backend/.planning/codebase/CONCERNS.md` §8。

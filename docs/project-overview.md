@@ -17,6 +17,7 @@
 
 - 运行时主链：`backend/harness.py`
 - 业务 Skill/规则：`backend/skills/`、`backend/philips_wgq_import.py`、`backend/tecan_import.py`
+- artifact 基础设施：`backend/artifact_names.py` — 文件名清洗与去重；`backend/workflow_artifacts.py` — workflow artifact 虚拟路径与物理路径互转、原子落盘
 - Run 持久化：`backend/run_ledger.py`
 - HTTP 契约：[INTERFACES.md](../INTERFACES.md)
 - 系统地图：[coding_maps/SYSTEM_MAP.md](../coding_maps/SYSTEM_MAP.md)

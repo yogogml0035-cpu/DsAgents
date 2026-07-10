@@ -31,6 +31,7 @@
 - `tools.py`：MinerU/解压及八个业务工具注册
 - `subagents.py`：四个临时 extractor
 - `philips_wgq_import.py` / `tecan_import.py`：业务合同、投票和 Excel
+- `artifact_names.py` — 上传/下载文件名清洗与去重（`clean_filename` / `make_unique_name` / `make_timestamped_name` / `has_upload_suffix`），被 `api.py` 的 `/upload`、`workflow_artifacts.unique_download_path`、`tools.py` 共同使用。
 - `workflow_artifacts.py`：安全路径和 immutable JSON helper
 
 ## 数据与边界
@@ -39,6 +40,7 @@
 - 上传只负责保存文件并返回 artifact 路径；常见办公文件和任意图片都可以上传。是否能被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 - 业务产物统一落 `/artifacts/downloads/`，不覆盖上传原件或既有 JSON/Excel；模板位于 `backend/skills/*/assets/`。
 - 长期文档只记录配置键和边界，不抄录本地 `.env` 的真实值。
+- Philips 侧的法定单位查询（`philips_wgq_import.py` 的 `_oracle_units`）走 `oracledb` thick mode，依赖 `ORACLE_CLIENT_LIB_DIR` 指向外部 Oracle instant client 目录；缺失或失败时优雅降级（核注清单缺法定单位字段），不阻塞 Excel 生成。详见 `../backend/.planning/codebase/CONCERNS.md` §8。
 
 ## 已删除
 

@@ -150,7 +150,8 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - **文档同步**：四层文档需手工保持一致（根三件套 → 本文件 → `docs/*.md` → `backend/.planning/codebase/*`）。
 - **私有配置**：`backend/.env` 被 `.gitignore` 排除且不应进入长期文档；provider key 经 `os.getenv` 直读，无统一脱敏或 secret manager 封装。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。`_error_text` 在 `api.py`、`harness.py`、`tools.py` 三处重复定义（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §5）。
-- **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。
+- **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。`active_runs` 字典残留 `run_id` 可能导致同 session 新 run 误判旧 run 仍活跃（清理时机需确认）。
+- **Oracle thick client 部署依赖**：`oracledb` thick mode 需要 `ORACLE_CLIENT_LIB_DIR` 指向 Oracle instant client 目录；该 instant client 已从仓库删除（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §3/§8），生产部署需外部提供。缺失时 `philips_wgq_import._oracle_units` 优雅降级，生成的核注清单将缺法定单位字段。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents、投票与 Excel 关键单元格；无 pytest/CI/lint gate，真实模型/MinerU/Oracle 仍需独立验证。
 

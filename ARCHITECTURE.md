@@ -42,7 +42,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 | `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
 | `tools.py` | 工具抽象 + MinerU/解压工具 + 八个 Philips/Tecan 工具注册 |
 | `subagents.py` | 四个声明式临时 extractor 及 structured response 合同 |
-| `philips_wgq_import.py` / `tecan_import.py` | 各业务的严格 artifact 合同、投票/裁决、Excel 规则 |
+| `philips_wgq_import.py` / `tecan_import.py` | 各业务的严格 artifact 合同、投票/裁决、Excel 规则。Philips 侧含可选 Oracle thick mode 法定单位查询 |
 | `workflow_artifacts.py` | 安全路径、唯一文件名和 immutable JSON 共享 helper |
 
 固定数据目录 `backend/data/`（与 CWD 无关）：三条逻辑 SQLite 通道 + `artifacts/`（上传、MinerU、业务 JSON/Excel）+ `internal/run-events/`（大 payload 外溢）。Skill 指令和模板来自只读源码目录 `backend/skills/`。
@@ -75,3 +75,4 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。
 - **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents 配置、A/B/C 与 Excel 关键单元格；无 pytest/CI，真实模型/MinerU/Oracle 仍需独立集成验证。
+- **Oracle thick client 部署依赖**：Philips 法定单位查询（`philips_wgq_import.py` 的 `_oracle_units`）走 `oracledb` thick mode，依赖 `ORACLE_CLIENT_LIB_DIR` 指向 Oracle instant client 目录；该目录已从仓库删除（约 109MB），生产部署必须由外部提供（镜像挂载/主机预装）。缺失或初始化失败时优雅降级——核注清单缺法定单位字段但不崩溃。证据见 `backend/.planning/codebase/CONCERNS.md` §8。

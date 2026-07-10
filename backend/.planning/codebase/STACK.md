@@ -34,7 +34,7 @@ py-modules = ["api", "artifact_names", "hands", "harness", "philips_wgq_import",
 |---|---|---|---|
 | `deepagents` | `>=0.6.12`（lock: `0.6.12`） | Agent 主体；`create_deep_agent(...)` 装配 Skills、临时 subagents、权限与可流式 agent | `harness.py`、`subagents.py`、`resources.py` |
 | `fastapi` | `>=0.116.1` | HTTP 框架；`create_app()` → `FastAPI(lifespan=...)` | `api.py` |
-| `httpx2` | `>=2.5.0` | `fastapi.testclient.TestClient` 的 HTTP 客户端传输层，用于本地 HTTP 断言且避免 `starlette.testclient` 对 `httpx` 的弃用警告 | `backend/tests/test_api.py`、`backend/tests/test_support.py` |
+| `httpx2` | `>=2.5.0` | **测试依赖**（通过 `[project.dependencies]` 装入但实际只被测试使用，非运行时依赖）：`fastapi.testclient.TestClient` 的 HTTP 客户端传输层，用于本地 HTTP 断言且避免 `starlette.testclient` 对 `httpx` 的弃用警告 | `backend/tests/test_api.py`、`backend/tests/test_support.py`（仅测试代码引用） |
 | `langchain` | `>=1.3.11` | `init_chat_model`、`AgentMiddleware`、`ToolCallRequest` | `harness.py`、`hands.py` |
 | `langchain-anthropic` | `>=1.4.8` | LLM provider（Anthropic 兼容客户端，实际可指向 MiniMax 端点） | 经 `init_chat_model("anthropic:...")` 间接使用；测试脚本断言 `ChatAnthropic` |
 | `langchain-core` | `>=1.4.8` | `BaseChatModel`、`AIMessage` / `AIMessageChunk`；测试最终 AIMessage 的 `thinking`/`text` block 载荷 | `harness.py`、`backend/tests/test_support.py`、`backend/tests/test_harness.py` |
@@ -69,6 +69,8 @@ py-modules = ["api", "artifact_names", "hands", "harness", "philips_wgq_import",
 | `FakeBrain`（本地测试） | `FakeBrain` / `FakeBrainFactory`，模拟 `stream(...)` 产出 `values/messages/custom` chunk，并覆盖 snapshot → `tool_call` / `tool_result` / `assistant_message` 派生 | `backend/tests/test_support.py` |
 
 锁定的 `deepagents==0.6.12` 已确认支持 `skills`、`subagents`、`permissions`、`response_format` 与 `name`，但不支持当前官方文档出现的 `harness_profile` 调用参数。当前实现按该版本公开 API 使用 `register_harness_profile("anthropic", ...)` 禁用自动 general-purpose subagent，不增加未来兼容层。
+
+> **`thinking` 参数版本敏感性**：`langchain-anthropic` 的 `thinking={"type":"adaptive"}` 参数对版本敏感。当前依赖锁版本为 `deepagents>=0.6.12` / `langchain-anthropic>=1.4.8`；升级这两个依赖时需验证 `thinking` 参数仍被 `init_chat_model("anthropic:...", thinking=...)` 接受（更多细节见 `CONCERNS.md` §7）。
 
 ## 6. 配置加载
 

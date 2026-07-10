@@ -6,6 +6,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器、�
 
 - **包管理器**：`uv`（**非 pip**）。安装：`cd backend && uv sync`。
 - **技术栈定位**：Python / FastAPI / DeepAgents / LangGraph / SQLite；完整依赖、配置键和 provider 边界不要塞进本文件，先看 `backend/.planning/codebase/STACK.md` 与 `INTEGRATIONS.md`。
+- **外部部署依赖**：Philips 法定单位查询走 `oracledb` thick mode，需 `ORACLE_CLIENT_LIB_DIR` 指向外部 Oracle instant client 目录（仓库不存放，生产须镜像挂载/主机预装）；缺失则优雅降级，详见 `backend/.planning/codebase/CONCERNS.md` §8。
 - **run-first 架构**：run 是唯一执行/查询单位；`run_events` append-only，`runs` 是投影快照；`session_id` 只作 LangGraph `thread_id` 和进程内单飞锁键，不再是一等持久化对象；`values` 只保留在 raw snapshot。
 - **运行入口**：HTTP 用 `POST /runs`、`GET /runs/{run_id}` 与 `POST /upload`；程序内用 `AgentResources` + `create_harness(resources).execute_run(messages, session_id, run_id)`；没有 `from session import run_session` 或 `python -m backend.*`。
 - **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界（`Brain` / `BrainFactory` / `Hands`）；工具保持 callable + `ToolCatalog`，资源 / ledger 保持具体类；不要为单实现小功能新增 Protocol/ABC。

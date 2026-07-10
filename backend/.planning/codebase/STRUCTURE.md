@@ -21,6 +21,23 @@
 | `tools.py` | `ToolCatalog`/`ToolHandler`、MinerU/解压工具，以及八个业务工具的默认注册入口 |
 | `workflow_artifacts.py` | 共享 `/artifacts/` 路径、唯一下载名和 immutable JSON helper；不承载业务判断 |
 
+### 1.1 业务工具 → 模块映射
+
+八个业务工具（按可调用名）分属两个业务模块，另有两个通用工具位于 `tools.py`。全部十个工具由 `tools.py` 的 `default_tool_catalog()`（`tools.py:507`）打包成 `ToolCatalog`。
+
+| 工具可调用名 | 所属模块 |
+|---|---|
+| `save_philips_wgq_extraction` | `philips_wgq_import.py` |
+| `save_philips_wgq_adjudication` | `philips_wgq_import.py` |
+| `build_philips_wgq_canonical` | `philips_wgq_import.py` |
+| `generate_philips_wgq_documents` | `philips_wgq_import.py` |
+| `save_tecan_extraction` | `tecan_import.py` |
+| `save_tecan_adjudication` | `tecan_import.py` |
+| `build_tecan_canonical` | `tecan_import.py` |
+| `generate_tecan_documents` | `tecan_import.py` |
+| `parse_documents` | `tools.py` |
+| `extract_archives` | `tools.py` |
+
 `backend/dsagents.egg-info/` 是 setuptools 安装时生成的元数据目录，已被 gitignore 忽略、**不进版本控制**，也不是运行入口；改依赖或 `py-modules` 后由 `uv sync` 的 editable 安装按需生成，属正常 churn。
 
 已删除（本次重构）：
@@ -69,12 +86,19 @@ backend/
 ├── skills/
 │   ├── philips-wgq-import/
 │   │   ├── SKILL.md
-│   │   ├── references/{fields,rules}.md
-│   │   └── assets/{invoice,packing进境.xlsx,核注清单导入模板.xlsx}
+│   │   ├── references/
+│   │   │   ├── fields.md
+│   │   │   └── rules.md
+│   │   └── assets/
+│   │       ├── invoice,packing进境.xlsx      # 文件名内含逗号，整体是一个文件
+│   │       └── 核注清单导入模板.xlsx
 │   └── tecan-import/
 │       ├── SKILL.md
-│       ├── references/{fields,rules}.md
-│       └── assets/Tecan_进口_发票箱单_空运.xlsx
+│       ├── references/
+│       │   ├── fields.md
+│       │   └── rules.md
+│       └── assets/
+│           └── Tecan_进口_发票箱单_空运.xlsx
 ├── tests/
 │   ├── __init__.py
 │   ├── test_api.py
@@ -118,7 +142,7 @@ backend/
   - `POST /upload` —— multipart `files[]`，支持一个或多个文件，返回 `{files:[{file_path,name,mime_type,size}]}`
   - `POST /runs` —— body `{messages, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
   - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event}`，未知 run 返回 `404`
-  - 默认由 `scripts/start-backend.bat` 拉起：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）
+  - 默认由 `scripts/start-backend.bat` 拉起：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。`scripts/` 目录还包含 `ralph`（Ralph 执行器脚本，与 `start-backend.bat` 同级）。
 - **测试脚本**：按影响范围从 `backend/` 目录运行对应脚本，例如 `python -m tests.test_api`、`python -m tests.test_harness`。
 - **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`。
 
