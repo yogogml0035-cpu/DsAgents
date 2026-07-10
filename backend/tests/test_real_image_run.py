@@ -11,10 +11,10 @@ import requests
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8500"
-DEFAULT_IMAGE_PATH = Path(r"D:\AgentProject\DsAgents\backend\tests\tests_images\imags1.jpg")
+DEFAULT_IMAGE_PATH = Path(r"D:\AgentProject\DsAgents\backend\tests\tests_file\imags1.jpg")
 DEFAULT_QUESTION = "请详细描述这张图片"
 DEFAULT_TIMEOUT_SECONDS = 180.0
-DEFAULT_POLL_SECONDS = 2.0
+DEFAULT_POLL_SECONDS = 0.1
 
 
 def run() -> None:
