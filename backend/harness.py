@@ -4,7 +4,13 @@ import os
 from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence
 
-from deepagents import create_deep_agent
+from deepagents import (
+    FilesystemPermission,
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from dotenv import load_dotenv
 from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
@@ -13,6 +19,7 @@ from langchain_core.language_models import BaseChatModel
 from hands import Hands, ToolStatusHands
 from resources import AgentResources
 from run_ledger import RunEvent
+from subagents import workflow_subagents
 from tools import ToolCatalog, ToolHandler, default_tool_catalog
 
 
@@ -23,8 +30,25 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a document-processing agent. When a user provides a local "
     "/artifacts/ path, use `read_file` for images or media inspection and "
     "`parse_documents` for documents when structured extraction is needed. "
+    "Use a business Skill only when the user clearly requests that business "
+    "outcome; a filename or an ordinary PDF extraction request is not enough. "
+    "Business tools accept only explicit artifact paths and never search for "
+    "a recent file or prior task. "
     "Persist important notes under /memories/ and write large outputs under "
     "/artifacts/."
+)
+
+MAIN_AGENT_NAME = "dsagents-main"
+SKILLS_SOURCE = "/skills/"
+
+# deepagents 0.6.12 exposes profile registration, not a create_deep_agent
+# harness_profile argument. Disable its auto-added fifth subagent at the
+# provider profile and keep the four explicit workflow extractors below.
+register_harness_profile(
+    "anthropic",
+    HarnessProfile(
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+    ),
 )
 
 ARTIFACT_REFERENCE_HINT = (
@@ -80,6 +104,16 @@ class DeepAgentsBrainFactory:
             backend=resources.backend,
             checkpointer=resources.checkpointer,
             store=resources.store,
+            skills=[SKILLS_SOURCE],
+            subagents=workflow_subagents(),
+            permissions=[
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/skills/**"],
+                    mode="deny",
+                )
+            ],
+            name=MAIN_AGENT_NAME,
         )
 
 
@@ -121,6 +155,8 @@ class HarnessRuntime:
                 if not isinstance(chunk, dict):
                     continue
                 if chunk["type"] == "messages":
+                    if _is_subagent_message(chunk["data"]):
+                        continue
                     thinking = _thinking_delta(chunk["data"])
                     if thinking:
                         yield self.resources.runs.emit_run_event(
@@ -283,6 +319,13 @@ def _message_delta(data: Any) -> str:
             return ""
         return _content_text(message.get("delta")) or _content_text(message.get("content")) or _content_text(message)
     return _content_text(_message_content(message))
+
+
+def _is_subagent_message(data: Any) -> bool:
+    if not isinstance(data, tuple) or len(data) < 2 or not isinstance(data[1], dict):
+        return False
+    agent_name = data[1].get("lc_agent_name")
+    return isinstance(agent_name, str) and agent_name not in {"", MAIN_AGENT_NAME}
 
 
 def _thinking_delta(data: Any) -> str:

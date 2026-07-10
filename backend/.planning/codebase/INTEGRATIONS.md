@@ -1,7 +1,7 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`；artifact 存储拆分为上传源 `uploads/`（HTTP `/upload`）与工具解析产物 `downloads/`（`parse_documents`/`extract_archives`）两路，共用 `/artifacts/` 虚拟前缀。
+> 本轮刷新（2026-07-10）已核对当前工作树：HTTP/run ledger 表面未变；新增 DeepAgents Skills/Subagents、Philips/Tecan artifact 工具链、Excel 模板与可选 Oracle 查询。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
@@ -36,9 +36,17 @@
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", api_key=<KEY>, base_url=<URL>, thinking={"type":"adaptive"})` → `ChatAnthropic`；`create_deep_agent(model=..., tools=..., system_prompt=..., middleware=..., backend=..., checkpointer=..., store=...)` | `harness.py` |
+| 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", ...)` → `ChatAnthropic`；`create_deep_agent(...)` 同时注入 `skills=["/skills/"]`、四个 subagents、`/skills/**` 写禁令与主 agent 名 | `harness.py` |
 | 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `backend/tests/test_support.py` |
-| 系统 prompt | `DEFAULT_SYSTEM_PROMPT`（本地 `/artifacts/` 路径优先引导 `read_file` 看图片/媒体，`parse_documents` 做文档抽取） | `harness.py` |
+| 系统 prompt | `DEFAULT_SYSTEM_PROMPT` 引导文件工具，并明确只有用户清晰要求业务结果时才使用业务 Skill；普通 PDF 请求不触发业务流程 | `harness.py` |
+
+### Skills / Subagents 边界
+
+- `/skills/` 映射到 `backend/skills/`；两个 `SKILL.md` 均少于 100 行，字段/规则只下沉一层 `references/`，模板位于各 Skill 的 `assets/`。
+- `philips-wgq-extractor-a/b` 与 `tecan-extractor-a/b` 是创建 DeepAgent 时一次性注册的临时 subagent；每个只获得对应 extraction 保存工具，内置文件写入被拒绝，并用 `ToolStrategy(ExtractionReference)` 返回 `{extractor, artifact_path}`。
+- A/B 并行、C 回查和裁决由 Skill 指令驱动；业务模块不扫描 session、上传历史或最近文件，所有 builder/generator 只消费显式 artifact 路径。
+- `HarnessRuntime` 仍保留 task 工具调用/结果事件，但按 stream metadata 的 `lc_agent_name` 丢弃 subagent thinking/text token，只对外暴露主 agent 模型 token。
+- 当前锁定 `deepagents==0.6.12` 没有官方新文档中的 `harness_profile` 参数；代码使用该版本公开的 provider profile 注册 API 禁用默认 general-purpose subagent。
 
 环境变量（**仅键名 / 用途，不含值**）：
 
@@ -74,6 +82,7 @@ brain.stream(
 - `thread_id = session_id`
 - `text` block 原样保留；`artifact` block 转成文本路径提示
 - `messages` / `custom` / `values` 三 channel 全部消费，其中 `values` 只保留 raw snapshot，并派生 `tool_call` / `tool_result` / `assistant_message`；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`
+- `messages` channel 只把主 agent 的模型 token 规范化为 `thinking` / `text_delta`；subagent token 由 `lc_agent_name` 过滤
 - `values` 不是公开 run event type；外部调用方应消费七类规范化事件，完整 snapshot 仅保留在事件 `raw`
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`），不只是 `chunk["data"]`
 - run event 查询维度始终是 `run_id`；`thread_id=session_id` 只用于 checkpointer 上下文，不参与 `run_events` 查询
@@ -97,6 +106,7 @@ brain.stream(
 |---|---|---|
 | `/memories/` | `StoreBackend(store, namespace=("dsagents",))` | 显式长期记忆，跨会话持久（SQLite store） |
 | `/artifacts/`、`/large_tool_results/` | `FilesystemBackend(root_dir=artifacts_dir, virtual_mode=True)` | 落磁盘 |
+| `/skills/` | `FilesystemBackend(root_dir=backend/skills, virtual_mode=True)` | Skill/参考文档/模板读取；agent 权限禁止写入 |
 | 其它（含 `/conversation_history/`、`/logs/`） | `StateBackend()` | 同 `thread_id` 图状态；不进入跨 session store |
 
 ### artifact 目录拆分规则（上传源 vs 解析产物）
@@ -106,7 +116,7 @@ brain.stream(
 | 物理子目录 | 虚拟前缀 | 写入者 | 命名规则 | 证据 |
 |---|---|---|---|---|
 | `uploads/` | `/artifacts/uploads/` | HTTP `POST /upload`（`api.py`） | `<cleaned-stem>_<upload-ts>(_n).ext`，`make_timestamped_name` + 同请求共用时间戳；`clean_filename` 清洗 | `api.py`、`artifact_names.py` |
-| `downloads/` | `/artifacts/downloads/` | 工具产物（`tools.py`）：`parse_documents` 默认存 MinerU task 级 JSON，按需存 ZIP；`extract_archives` 解压 ZIP 到 `<zip-stem>/` | 单文件复用源 stem，多文件为 `<first-stem>_etc_<batch-ts>`；后缀随结果为 `.json` 或 `.zip`，统一走 `make_unique_name` 去重 | `tools.py` |
+| `downloads/` | `/artifacts/downloads/` | MinerU/解压产物；Philips/Tecan extraction、adjudication、canonical JSON 与 Excel | MinerU 沿用源 stem；业务 JSON/Excel 使用时间戳 + `make_unique_name`，以 exclusive create/新工作簿保存，不覆盖旧文件 | `tools.py`、`workflow_artifacts.py`、两个业务模块 |
 
 - 上传源只进 `uploads/`，工具产物只进 `downloads/`；两路命名互不污染、互不重名（`make_timestamped_name` vs `make_unique_name`）。
 - `_resolve_document_path` 对 `/artifacts/...` 与绝对路径一视同仁，工具层不关心产物来自上传还是解析。
@@ -127,6 +137,8 @@ brain.stream(
 |---|---|---|
 | `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `harness.py` | 已确认 |
 | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` | `tools.py` | 已确认（其中 `MINERU_EFFORT` 可省略或留空） |
+| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` | `philips_wgq_import.py` | 可选；三者齐备才查询 Philips 单位 |
+| `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | `philips_wgq_import.py` | 可选 thick client 目录与连接/调用超时；默认 30 秒 |
 
 ## 6. 外部 HTTP 调用（requests）
 
@@ -146,4 +158,11 @@ brain.stream(
 
 `parse_documents` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_status` payload：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `archive_path` 或 `result_path` 与 `succeeded_count/failed_count`；脱离 LangGraph 独立调用时静默跳过这些进度事件。
 
-`default_tool_catalog()` 当前注册两个工具：`parse_documents`、`extract_archives`。
+`default_tool_catalog()` 当前注册十个工具：`parse_documents`、`extract_archives`，以及 Philips/Tecan 各四个 `save extraction` / `build canonical` / `save adjudication` / `generate documents` 工具。生成器唯一业务参数均为 canonical artifact 路径。
+
+## 7. Oracle 与业务工作簿边界
+
+- `openpyxl` 读取 Philips tracking、Tecan 订单/信息表，并从三个已校验模板生成最终工作簿；上传原件和模板均不被编辑。
+- Philips 单位查询通过 `oracledb.connect(...)` 延迟建立，SQL 只按明确料号候选读取三个单位字段。配置缺失、未命中或查询异常时继续生成，结果使用“需确认”值并返回人工校验项。
+- Tecan 不调用 Oracle；订单和信息表按表头/内容识别，信息来源冲突返回正常 `needs_input` 结果，后续 run 必须重新显式传原路径与选择。
+- 两个 canonical builder 都只在瞬时返回值中报告 `needs_c` / `needs_adjudication` / `needs_input`，不增加数据库、恢复状态或 artifact registry。

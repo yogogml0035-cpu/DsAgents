@@ -15,6 +15,8 @@ dependencies = [
     "langchain-core>=1.4.8",
     "langgraph>=1.2.7",
     "langgraph-checkpoint-sqlite>=3.1.0",
+    "openpyxl>=3.1,<4",
+    "oracledb>=3,<4",
     "python-multipart>=0.0.20",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
@@ -26,4 +28,4 @@ dependencies = [
 # 这样模块内部 `from hands import ...` 等绝对导入在安装后同样可用。
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "artifact_names", "hands", "harness", "resources", "run_ledger", "tools"]
+py-modules = ["api", "artifact_names", "hands", "harness", "philips_wgq_import", "resources", "run_ledger", "subagents", "tecan_import", "tools", "workflow_artifacts"]

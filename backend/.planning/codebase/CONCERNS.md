@@ -1,13 +1,13 @@
 # CONCERNS
 
 > backend 风险、技术债、关注点。每条均带证据（文件/commit/配置）。状态分 **已确认**（代码或配置可证）与 **需确认**（推断，需人工核实）。
-> 本轮刷新（2026-07-09）已核对当前工作树：egg-info 已清理并 ignore；时区迁移（commit `c8cc563`）已落地；WAL/journal_mode 各库差异已实测；`_error_text` 三处重复已更新；新增 session_locks 内存泄漏与时区迁移风险。行号以当前源码为准。
+> 本轮刷新（2026-07-10）已核对当前工作树：新增 Skills/Subagents、业务 artifact 与 Oracle fallback 风险；既有 SQLite、错误透传和进程内锁关注点仍成立。行号以当前源码为准。
 
 ## 1. 架构迁移残留（run-first 重构，commit 8890292）
 
 - **已确认**｜代码层已彻底去 session：`session.py` 已删除，`grep` 在 `backend/*.py`（非 `.venv`）中无 `run_session` / `sessions.db` / `session.py` 引用；`run_ledger.py` 接管原 session 职责。
 - **已清理**｜旧 session 磁盘遗留 `data/dsagents_sessions.db` 与 `data/artifacts/session-events/` 已删除；代码只引用 `dsagents_runs.db` / `dsagents_store.db` / `dsagents_checkpoints.db`（见 `resources.py:23-31`）。
-- **已确认**｜`pyproject.toml` 的 `py-modules` 已更新为 `["api","hands","harness","resources","run_ledger","tools"]`，无 `session` / `self_check`。
+- **已确认**｜`pyproject.toml` 的 `py-modules` 已包含四个新增扁平模块，仍无已删除的 session/self-check 模块。
 - **已确认（文档已同步）**｜`docs/backend.md` 的「已删除」节已压缩为指向 `INTERFACES.md` §1 的一句话引用；旧 session 端点的完整清单唯一权威出处为 `INTERFACES.md` §1。
 - **已确认**｜长期事实以当前代码和本目录文档为准；被 `.gitignore` 排除的个人研究目录不作为项目事实来源。
 
@@ -16,8 +16,9 @@
 | 项 | 状态 | 证据 |
 |---|---|---|
 | `.env` 属于私有配置文件 | 已确认（已缓解） | `.gitignore` 排除 `backend/.env`，`git ls-files` 未跟踪该文件。长期文档只记录配置键与消费者，不读取、不抄录本地值；分享工作区前仍需检查私有配置和运行时数据。 |
-| provider key 通过 `os.getenv` 直读 | 已确认 | `harness.py:59-63` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL"/"MINIMAX_BASE_URL")` 直接构造 `init_chat_model`，无校验/无脱敏日志护栏。 |
+| provider key 通过 `os.getenv` 直读 | 已确认 | `harness.py:81-89` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL"/"MINIMAX_BASE_URL")` 直接构造 `init_chat_model`，无校验/无脱敏日志护栏。 |
 | 文档解析服务配置通过环境变量传入 | 已确认 | `tools.py` 读取 `MINERU_*` 键；开发文档只记录键名与用途，不写本地服务地址或连接串。 |
+| Oracle 凭据通过环境变量传入 | 已确认 | `philips_wgq_import.py` 只读取 `ORACLE_*` 键且不记录值；配置缺失/查询失败返回人工校验。连接异常文本不会写入生成结果。 |
 | `data/*.db` 含运行时数据 | 已确认（已缓解） | `backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。从 `run_ledger.py` 可直接确认 `input_messages_json`、`reply`、`error` 与 `run_events.raw` 会入库；上传文件本体落在 `data/artifacts/uploads/`，大 payload spill 落在 `data/internal/run-events/`。分享前需同时清理数据库与运行时文件目录。 |
 | 无鉴权 / 无用户隔离 | 已确认 | `api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/upload` 全部匿名可调。 |
 | CORS 未实现 | 已确认 | `grep` 在 `api.py` 中无 `CORSMiddleware` / `add_middleware` —— 浏览器跨域实际不会被处理。 |
@@ -30,16 +31,16 @@
 
 ## 4. 测试覆盖不足
 
-- **已确认**｜当前测试源码位于 `backend/tests/`：`test_tools.py`、`test_run_ledger.py`、`test_harness.py`、`test_api.py`、`test_real_image_run.py`，共享替身在 `test_support.py`。
+- **已确认**｜当前新增 `test_workflow_setup.py`、`test_philips_wgq_import.py`、`test_tecan_import.py`；原有本地与两个 `test_real_*` 脚本保留。
 - **已确认**｜没有总控自检脚本；实际验证按影响范围直接运行 `cd backend && python -m tests.test_xxx`。普通本地脚本仍用 `FakeBrain` 替代真实模型，并 patch MinerU；覆盖：env 加载、`parse_documents` env 守卫与批量提交流程、resources/ledger、tool status middleware、harness、API（TestClient）、startup recovery、virtual artifacts。`test_real_image_run.py` 与 `test_real_multi_pdf_run.py` 是手动真实 HTTP / 模型集成脚本。
 - **风险**：无 CI 可运行的自动化测试断言；回归靠人工选择并运行对应测试脚本。
 
 ## 5. 错误透传约定
 
-- **已确认**｜`harness.py:160-171` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
-- **已确认**｜`api.py:160-172` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
+- **已确认**｜`harness.py:203-210` 捕获异常后只把 `_error_text(exc)`（即 `str(exc)`，空则取类名）写入 run status `error` 字段，并将 `repr(exc)` 放进 `raw`。
+- **已确认**｜`api.py:175-188` `_ensure_failed_run` 同样透传 `_error_text(exc)`；HTTP 层不包装、不脱敏。
 - **风险**｜真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是"调用方自行处理"，但无护栏。
-- **已确认**｜`_error_text` 在三处重复实现，逻辑完全一致（`str(exc).strip() or exc.__class__.__name__`）：`api.py:239`、`harness.py:556`、`tools.py:431`。三处都用裸 `str(exc)` 透传错误文本。
+- **已确认**｜`_error_text` 在三处重复实现，逻辑完全一致（`str(exc).strip() or exc.__class__.__name__`）：`api.py:239`、`harness.py:599`、`tools.py:502`。三处都用裸 `str(exc)` 透传错误文本。
 
 ## 6. 持久化边界（SQLite 多 db）
 
@@ -58,9 +59,11 @@
 
 ## 7. provider 耦合（Anthropic / langchain / deepagents）
 
-- **已确认**｜`harness.py:59-63` 把 MiniMax（OpenAI/Anthropic 兼容）密钥/模型硬编码塞进 `init_chat_model(f"anthropic:{model}", api_key=..., base_url=..., thinking={"type":"adaptive"})` —— 强耦合 Anthropic 客户端协议与 `thinking` 参数。
+- **已确认**｜`harness.py:81-89` 把 MiniMax（OpenAI/Anthropic 兼容）配置传入 `init_chat_model(f"anthropic:{model}", api_key=..., base_url=..., thinking={"type":"adaptive"})` —— 强耦合 Anthropic 客户端协议与 `thinking` 参数。
 - **已确认**｜依赖下限在 `pyproject.toml`：`deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langchain-core>=1.4.8`、`langgraph>=1.2.7` —— 均为 `>=` 无上限，`uv.lock`（311KB）锁具体版本，但任一主版本升级可能破坏 stream chunk 解析（`harness.py` 的 `_message_delta`/`_thinking_delta` 大量依赖 chunk 字段形状）。
 - **风险**｜stream chunk 形状（`chunk["type"]` ∈ `messages`/`custom`/`values`、`event` 后缀 `delta`、`thinking`/`reasoning`/`non_standard` block 类型、snapshot 中 `message.id` / `tool_call_id` / `tool_calls[]` 形状）是 langchain/deepagents 内部约定，无版本契约保护。
+- **已确认**｜官方新文档展示的 `harness_profile` 参数不在锁定 `deepagents==0.6.12` 的 `create_deep_agent` 签名中；当前使用公开的 provider profile 注册 API 禁用默认 general-purpose subagent。
+- **风险**｜provider profile 注册是进程级全局行为且当前只覆盖 `anthropic`。若将默认模型改成其它 provider，需重新核对是否会自动多出 general-purpose subagent；不要假设当前四个 extractor 配置自动跨 provider 等价。
 
 ## 8. 文档同步风险
 
@@ -81,4 +84,11 @@
 
 ## 11. 程序内入口
 
-- **已确认**｜旧的 `from session import run_session` 已不存在；如需库式调用，只能显式组合 `AgentResources` + `create_harness(resources)` + `harness.execute_run(...)`（见 `AGENTS.md`、`harness.py:173`）。非缺陷，仅作记录以防误用。
+- **已确认**｜旧的 `from session import run_session` 已不存在；如需库式调用，只能显式组合 `AgentResources` + `create_harness(resources)` + `harness.execute_run(...)`（见 `AGENTS.md`、`harness.py:134`）。非缺陷，仅作记录以防误用。
+
+## 12. Skills / 业务 artifact 风险
+
+- **已确认**｜本地 assert 脚本覆盖装配、投票、裁决、严格合同与工作簿关键单元格，但不调用真实模型/MinerU/Oracle。真实 extractor 对 PDF 的准确性、同一回合并行 task 以及 Oracle 命中率仍需独立真实集成验证。
+- **风险**｜Philips/Tecan 的 Excel 模板是二进制资产，格式或固定行位置变化不会产生可读 diff；更新模板时必须重跑对应工作簿断言并人工抽查渲染结果。
+- **风险**｜`backend/skills/` 是源码目录路由，当前 `uv sync` 的 editable 开发运行可用；若未来改为仅分发 wheel，非 Python Skill/模板是否被打包需另行确认。
+- **已确认**｜业务 JSON/Excel 只增不改且无 registry/清理策略；高频运行会持续增长 `data/artifacts/downloads/`，生命周期由部署方管理。

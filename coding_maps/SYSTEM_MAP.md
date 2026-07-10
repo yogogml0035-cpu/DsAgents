@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-09）已核对当前 HEAD 后的工作树：`1e8cf94`（extract_archives 工具 + parse_documents 默认保存 task JSON、按需保存 ZIP）、`82152a0`/`5100f31`（artifact 存储与命名重构、run-event 目录拆分）、`709f805`（文档解析工具改为批量处理）、`c8cc563`（run-ledger 时区统一与 schema 迁移）。
+> 本轮刷新（2026-07-10）已核对当前工作树：run-first HTTP/ledger 不变；默认 DeepAgent 新增 Philips/Tecan Skills、四个临时 extractor、八个业务工具与 Excel/Oracle 边界。
 
 ## 1. 系统目的和仓库形态
 
@@ -13,6 +13,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器 Han
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
 - **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；工具保持普通 callable + `ToolCatalog`。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` / `ToolStatusHands` / `default_tool_catalog()`），本地测试用 `FakeBrainFactory` 替换。运行时不写死具体模型实现。
 - **入口形态**：HTTP（`POST /runs`，run-first 轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
+- **业务能力形态**：模型按明确业务目标加载 Skill；A/B/C、裁决、canonical 与 Excel 以显式 artifact 串联，不增加业务 HTTP、状态表或恢复接口。
 
 详细运行时原则与维护规则见根级 [`docs/conventions.md`](../docs/conventions.md)（`AGENTS.md` 要求改动 backend 前必读）。
 
@@ -20,7 +21,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器 Han
 
 | 子项目 | 目录 | 当前职责 | 技术栈要点 | 边界 |
 |--------|------|----------|------------|------|
-| backend | `backend/` | run-first agent runtime：提交 run、轮询 run、上传文件、维护 LangGraph checkpointer/store 与本地 run ledger | Python `>=3.11,<4.0`；`uv` + setuptools（扁平顶层 `py-modules`）；FastAPI + uvicorn；`deepagents` + `langchain`/`langgraph` + `langchain-anthropic`；SQLite（标准库 `sqlite3` + LangGraph savers）；`requests`（MinerU） | 不提供 session 模块/表/事件回放；不提供 SSE；不提供鉴权/CORS；不绑定具体模型/工具实现 |
+| backend | `backend/` | run-first runtime + Skills/Subagents + Philips/Tecan artifact 工具 | Python `>=3.11,<4.0`；`uv`；FastAPI；DeepAgents/LangGraph；SQLite；MinerU；openpyxl；可选 oracledb | 不提供 session/业务状态表、SSE、鉴权/CORS、通用工作流引擎或跨进程队列 |
 
 ## 3. 跨子项目调用链和数据流
 
@@ -30,7 +31,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、执行器 Han
 
 ```text
 POST /upload  multipart files[]
-  └─ 保存到 /artifacts/uploads/<uuid>_<filename>，返回 file_path/name/mime_type/size
+  └─ 保存到 /artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext，返回元数据
 
 POST /runs  {messages, session_id?}
   ├─ session_id 为空 → 生成 uuid4().hex；run_id = uuid4().hex
@@ -47,7 +48,7 @@ HarnessRuntime.execute_run(...)
   ├─ brain.stream({"messages": normalized_messages},
   │                config={"configurable":{"thread_id":session_id}},
   │                stream_mode=["messages","custom","values"], version="v2")
-  │    ├─ messages chunk → thinking / text_delta
+  │    ├─ messages chunk → 仅主 agent thinking / text_delta（subagent token 按 lc_agent_name 过滤）
   │    ├─ custom   chunk → tool_status（来自 ToolStatusMiddleware）
   │    └─ values   snapshot → tool_call / tool_result / assistant_message（assistant_message 保留最终 AIMessage 的最后一个 thinking 文本；同时更新 reply 候选；values 只保留在 raw）
   ├─ 成功 → emit status=succeeded(reply=...)
@@ -55,6 +56,8 @@ HarnessRuntime.execute_run(...)
 
 GET /runs/{run_id}?after_event_id=N  → 读 runs 快照 + 增量 run_events + latest_content_event
 ```
+
+业务分支由同一主链中的工具调用完成：`parse_documents` → 同一主模型回合并行 A/B `task` → save extraction artifacts → build canonical；需要时主 agent 写 C 或最小 adjudication → generator 只接 canonical 路径 → 唯一新 Excel。中间 status 只作为当前工具返回值，不写额外 workflow state。
 
 - **事件获取靠轮询**，当前无 `StreamingResponse` / `text/event-stream`（[`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1）。
 - run 状态机：`queued → running → succeeded | failed`；启动恢复把遗留 `queued/running` 标 `failed("执行已中断，请重试")`。
@@ -66,6 +69,7 @@ GET /runs/{run_id}?after_event_id=N  → 读 runs 快照 + 增量 run_events + l
 |------|------|----------|------|
 | Anthropic 兼容（生产） | LLM | `DeepAgentsBrainFactory` 用 `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`，注入 `create_deep_agent(...)`；实际端点可指向 MiniMax | `harness.py` |
 | MinerU（内网 HTTP） | 文档解析（`parse_documents` 工具） | `tools.py` 用 `requests` 一次 `POST {MINERU_BASE_URL}/tasks` 提交多个文件、轮询 `GET /tasks/{id}`、`GET /tasks/{id}/result` | `tools.py` |
+| Oracle（可选） | Philips 计量单位查询 | 仅在三个凭据键齐备时由 `oracledb` 查询；缺配置/失败继续生成并标人工校验 | `philips_wgq_import.py` |
 | LangGraph savers | checkpointer / store 持久化 | `SqliteSaver` / `SqliteStore`（本地 SQLite） | `resources.py` |
 
 provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2/§5/§6 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md) §5。
@@ -85,6 +89,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 `api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（无 `--reload`；端口与真实集成测试脚本默认地址一致）。
 `assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `raw.type=="values"` 的最终 AIMessage snapshot；调用方不应直接依赖 `values` 事件类型。
+临时 subagent 的模型 token 不形成公开 `thinking`/`text_delta`，但 `task` 工具调用与结果仍使用现有事件合同。
 
 ### 4.2 LLM provider 边界
 
@@ -97,9 +102,11 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 ### 4.4 文件 / artifacts 边界
 
-- 上传：`POST /upload` → `data/artifacts/uploads/<uuid>_<cleaned_name>`，返回虚拟路径 `/artifacts/uploads/...` 与元数据数组。
+- 上传：`POST /upload` → `data/artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext`，返回虚拟路径与元数据数组。
 - 工具层 `tools._resolve_document_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权。
 - `parse_documents` 默认把 task 级结果 JSON 写到 `data/artifacts/downloads/<stem>.json`（只开 `return_content_list=true`）；用户要 Markdown、图片、原始文件或完整下载包时写 ZIP 到 `<stem>.zip`（五个输出参数全 true）。单文件复用源 stem；多文件为 `<first-stem>_etc_<batch-ts>.json/.zip`；`extract_archives` 把 ZIP 解压到 `data/artifacts/downloads/<zip-stem>/`。
+- 业务 extraction/adjudication/canonical JSON 与 Excel 同样写到 `downloads/`，每次生成唯一新文件；输入路径必须显式给出，上传原件和模板不被编辑。
+- `/skills/` 映射源码 `backend/skills/`；主 agent 和 extractor 的文件权限阻止写入 Skill/模板。
 - `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
 
 ### 4.5 鉴权 / 跨域边界（已确认缺失）
@@ -126,9 +133,10 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 | 改 run 状态/事件/持久化 | [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §4/§7 → `backend/run_ledger.py` |
 | 改模型流式行为 / Brain | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2 → `backend/harness.py` |
 | 改工具 / MinerU 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §6 → `backend/tools.py` |
+| 改 Philips/Tecan 工作流 | 对应 `backend/skills/*/SKILL.md` + `references/` → 业务模块 → `backend/tests/test_*_import.py` |
 | 改 HTTP 契约 | [`INTERFACES.md`](../INTERFACES.md) §1 → [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1 → `backend/api.py` |
 | 跨系统接口修改 | [`INTERFACES.md`](../INTERFACES.md)（provider/存储/artifacts 边界）→ 本文件 §4 |
-| 文档维护 | [`AGENTS.md`](../AGENTS.md) 关键约定与末尾维护规则 → [`backend/.planning/codebase/CONVENTIONS.md`](../backend/.planning/codebase/CONVENTIONS.md) §12 |
+| 文档维护 | [`AGENTS.md`](../AGENTS.md) 关键约定与末尾维护规则 → [`backend/.planning/codebase/CONVENTIONS.md`](../backend/.planning/codebase/CONVENTIONS.md) §13 |
 | 验证 / 测试策略 | [`backend/.planning/codebase/TESTING.md`](../backend/.planning/codebase/TESTING.md) |
 
 完整任务→阅读顺序映射见根级 [`docs/reading-order.md`](../docs/reading-order.md)。
@@ -144,7 +152,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。`_error_text` 在 `api.py`、`harness.py`、`tools.py` 三处重复定义（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §5）。
 - **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
-- **测试覆盖**：无 pytest 套件、无 CI、无 lint/type-check gate；回归按影响范围直接运行 `backend/tests/test_*.py` 脚本，普通本地脚本用 `FakeBrain`，不打真实 provider/MinerU。
+- **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents、投票与 Excel 关键单元格；无 pytest/CI/lint gate，真实模型/MinerU/Oracle 仍需独立验证。
 
 **验证入口**：
 
@@ -172,4 +180,4 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 刷新时参考的旧版：`coding_maps/SYSTEM_MAP.md`（保留仍正确的调用链与接口面，改写/补全系统层视图）。
 
-本轮（2026-07-09）在 `$gsd-map-codebase` 刷新 7 个 fact docs 后同步：更新 HEAD 核对说明（至 `1e8cf94`，含 extract_archives / artifact 重构 / 批量解析）、修正启动命令为无 `--reload`、修正 `_error_text` 重复定义为三处并链接到 CONCERNS §5。
+本轮（2026-07-10）在刷新 7 个 backend fact docs 后同步 Skills/Subagents、业务 artifact、Excel/Oracle、测试与风险边界。

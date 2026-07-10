@@ -78,6 +78,14 @@ def run() -> None:
     assert [handler.__name__ for handler in default_tool_catalog().handlers] == [
         "parse_documents",
         "extract_archives",
+        "save_philips_wgq_extraction",
+        "build_philips_wgq_canonical",
+        "save_philips_wgq_adjudication",
+        "generate_philips_wgq_documents",
+        "save_tecan_extraction",
+        "build_tecan_canonical",
+        "save_tecan_adjudication",
+        "generate_tecan_documents",
     ]
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -38,6 +38,10 @@ class ResourceConfig:
     def run_events_dir(self) -> Path:
         return self.data_dir / "internal" / "run-events"
 
+    @property
+    def skills_dir(self) -> Path:
+        return _BACKEND_DIR / "skills"
+
 
 class AgentResources:
     def __init__(self, config: ResourceConfig | None = None) -> None:
@@ -58,12 +62,14 @@ class AgentResources:
 
         persistent = StoreBackend(store=self.store, namespace=lambda _rt: ("dsagents",))
         disk = FilesystemBackend(root_dir=self.config.artifacts_dir.resolve(), virtual_mode=True)
+        skills = FilesystemBackend(root_dir=self.config.skills_dir.resolve(), virtual_mode=True)
         self.backend = CompositeBackend(
             default=StateBackend(),
             routes={
                 "/memories/": persistent,
                 "/artifacts/": disk,
                 "/large_tool_results/": disk,
+                "/skills/": skills,
             },
         )
         return self

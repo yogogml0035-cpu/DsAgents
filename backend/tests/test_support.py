@@ -58,6 +58,14 @@ class FakeBrain:
                 {"langgraph_node": "model"},
             ),
         }
+        yield {
+            "type": "messages",
+            "ns": ("task",),
+            "data": (
+                AIMessageChunk(content="subagent secret"),
+                {"langgraph_node": "model", "lc_agent_name": "philips-wgq-extractor-a"},
+            ),
+        }
         if text == "fail":
             raise RuntimeError("planned failure")
         if text == "hold":

@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94` 后的工作树：`extract_archives` 工具 + `parse_documents` 默认保存 task 级 JSON、按需保存 ZIP；artifact 存储命名重构；文档解析改为批量处理。
+> 本轮刷新（2026-07-10）已核对当前工作树：HTTP/run-first 边界保持不变；默认能力新增 Philips/Tecan Skills、四个临时 extractor 与 immutable JSON/Excel 工作流。
 
 ## 1. 系统定位
 
@@ -12,13 +12,14 @@
 - **run-first**：`session` 模块与 session 持久化层已在 commit `8890292` 移除；run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
 - **入口形态**：HTTP（`POST /runs`，轮询模型，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
+- **业务工作流形态**：业务意图由模型按需选择 Skill；A/B/C、裁决、canonical 和 Excel 都是显式路径 artifact，不新增 workflow API、数据库表或持久化恢复状态。
 - **单子项目**：仓库当前只有 `backend/` 一个产品子项目（扁平顶层模块、绝对导入、`uv` 包管理）；当前源文档未确认任何前端子项目归属本仓库。
 
 ## 2. 子系统职责
 
 | 子项目 | 目录 | 当前职责 | 边界（不做什么） |
 |--------|------|----------|------------------|
-| backend | `backend/` | run-first agent runtime：提交 run、轮询 run、上传文件、维护 LangGraph checkpointer/store 与本地 run ledger；能力层（Brain/Hands/Tools）可插拔 | 不提供 session 模块/表/事件回放；不提供 SSE；不提供鉴权/CORS；不绑定具体模型/工具实现；不提供跨进程锁或队列 |
+| backend | `backend/` | run-first agent runtime；维护 Brain/Hands/Tools，并挂载 Skills/Subagents 与 Philips/Tecan 确定性 artifact 工具 | 不提供 session/业务状态表、SSE、鉴权/CORS、跨进程锁、队列或通用工作流引擎 |
 
 backend 内部架构、目录组织、配置加载、事件源模型等实现事实见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) 与 [`backend/.planning/codebase/STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)。
 
@@ -35,13 +36,16 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 | 模块 | 系统级职责 |
 |------|-----------|
 | `api.py` | FastAPI HTTP 适配层（run-first 三端点：`POST /runs` / `GET /runs/{run_id}` / `POST /upload` + 同 session 单飞锁 + 启动恢复） |
-| `harness.py` | run 执行核心 + Brain/Hands/Tools 装配 + 默认工厂 `create_harness` |
+| `harness.py` | run 执行核心 + Brain/Hands/Tools/Skills/Subagents 装配 + subagent token 隔离 |
 | `hands.py` | 执行器/中间件抽象（`Hands` Protocol + `ToolStatusMiddleware`） |
-| `resources.py` | 资源装配器（`AgentResources`：run ledger + checkpointer + store + `CompositeBackend`） |
+| `resources.py` | 资源装配器（run ledger + checkpointer + store + `/artifacts/`/`/skills/` 路由） |
 | `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
-| `tools.py` | 工具抽象 + 默认业务工具 `parse_documents`（批量调 MinerU，默认保存 task 级 JSON，按需保存 ZIP）与 `extract_archives`（解压 ZIP） |
+| `tools.py` | 工具抽象 + MinerU/解压工具 + 八个 Philips/Tecan 工具注册 |
+| `subagents.py` | 四个声明式临时 extractor 及 structured response 合同 |
+| `philips_wgq_import.py` / `tecan_import.py` | 各业务的严格 artifact 合同、投票/裁决、Excel 规则 |
+| `workflow_artifacts.py` | 安全路径、唯一文件名和 immutable JSON 共享 helper |
 
-固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（文件按需创建）+ `artifacts/`（`uploads/` 上传落地、`downloads/` 文档解析与解压产物）+ `internal/run-events/`（大 payload 外溢，按需创建）。
+固定数据目录 `backend/data/`（与 CWD 无关）：三条逻辑 SQLite 通道 + `artifacts/`（上传、MinerU、业务 JSON/Excel）+ `internal/run-events/`（大 payload 外溢）。Skill 指令和模板来自只读源码目录 `backend/skills/`。
 
 ## 5. 系统层面维护约定
 
@@ -53,6 +57,8 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 - **run-first**：无 `session.py`、无 session 表、无 `context_window`、无 `RemoveMessage(REMOVE_ALL_MESSAGES)`、无 `run_turn`/`stream_turn`；旧 `from session import run_session` 已删除。
 - **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`；LangGraph `values` snapshot 只保留在 `raw` 中，最终 `assistant_message.payload` 可带 `thinking` 与 `text`。
+- **模型流隔离**：临时 subagent 的 thinking/text token 不暴露为公开事件；task 调用/结果和 artifact 路径仍保留。
+- **artifact-only 业务状态**：builder/generator 只消费显式 `/artifacts/...` 路径；每次生成新文件，不扫描 session 或“最近任务”。
 - **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。
 - **`uv` 包管理**：安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
 - **`.env` 加载**：由 `harness.py` 与 `tools.py` 在导入时 `load_dotenv(Path(__file__).with_name(".env"))`（删除 `session.py` 后保留配置加载点）。
@@ -68,4 +74,4 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 - **文档同步**：四层文档手工保持一致。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
 - **错误透传**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、文件路径）原样落 `runs.error` 与 `run_events.raw`，无脱敏护栏。
-- **测试覆盖**：无 pytest 套件、无 CI；回归按影响范围直接运行 `backend/tests/test_*.py` 脚本，普通本地脚本用 `FakeBrain` 替身，不打真实 provider/MinerU。
+- **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents 配置、A/B/C 与 Excel 关键单元格；无 pytest/CI，真实模型/MinerU/Oracle 仍需独立集成验证。

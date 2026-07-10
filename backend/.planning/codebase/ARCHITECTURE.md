@@ -1,7 +1,7 @@
 # ARCHITECTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime）。
-> 本轮刷新（2026-07-09）已核对当前工作树：能力可插拔边界、events→runs 投影、程序内/HTTP 双入口均与源码一致；`extract_archives` 工具、批量 `parse_documents`（默认 task 级 JSON，按需 ZIP）、artifact 时间戳命名均已就位。
+> 本轮刷新（2026-07-10）已核对当前工作树：运行时表面和 run-first 投影未变；默认 DeepAgent 新增两个业务 Skill、四个临时 extraction subagent、八个确定性业务工具及不可覆盖的 JSON/Excel artifact。
 
 ## 1. 架构定位
 
@@ -9,7 +9,8 @@
 
 - **Brain 可插拔**：`Brain` 是 `Protocol`（`harness.py`），任何实现了 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic）模型。
 - **执行器（Hands）可插拔**：`Hands` 是 `Protocol`，`Hands.middleware()` 返回一组 `AgentMiddleware`；默认 `ToolStatusHands` 只挂 `ToolStatusMiddleware`（发 `tool_status` custom event）。
-- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 当前含 `parse_documents`（默认解析为 task 级 JSON，用户要 Markdown/图片/完整包时解析为 ZIP）与 `extract_archives`（解压 ZIP）。
+- **工具可插拔**：`ToolCatalog` 是一组 `ToolHandler`（普通 callable），不是 `Protocol`；`default_tool_catalog()` 含 `parse_documents`、`extract_archives`，以及 Philips/Tecan 各四个 save/build/adjudicate/generate 工具。
+- **业务能力按需加载**：`DeepAgentsBrainFactory` 从只读虚拟 `/skills/` 挂载 `philips-wgq-import` 与 `tecan-import`，并一次性注册四个声明式临时 extractor；A/B 抽取由 Skill 编排，确定性投票、canonical 与 Excel 生成留在业务模块。
 - 模型 / 后端存储 / 持久化通道都被收口在 `AgentResources` 中，由调用方注入。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。
@@ -60,7 +61,7 @@ Harness 层 (harness.py execute_run)
        stream_mode=["messages","custom","values"],
        version="v2",
      )
-  -> chunk[type=messages] => thinking / text_delta
+  -> chunk[type=messages] => 主 agent thinking / text_delta；按 lc_agent_name 丢弃 subagent 模型 token
   -> chunk[type=custom]   => tool_status
   -> chunk[type=values]   => 从 snapshot 派生 tool_call / tool_result / assistant_message（assistant_message 会保留同条 AIMessage 最后一个 thinking 文本；末位 assistant 文本仍作 reply 候选）
   -> 结束 => status=succeeded(reply=assistant_text 或拼接 text_parts)
@@ -80,7 +81,10 @@ Harness 层 (harness.py execute_run)
 
 - `/memories/` → `StoreBackend`（显式长期记忆，持久化到 store）
 - `/artifacts/`、`/large_tool_results/` → `FilesystemBackend`（落 `data/artifacts/`，virtual_mode=True）
+- `/skills/` → `FilesystemBackend`（只读业务 Skill 源；主 agent 原生权限禁止写 `/skills/**`）
 - 其它（含 DeepAgents 内部 `/conversation_history/` 与未使用的 `/logs/`）→ `StateBackend`（同 `thread_id` 图状态，不进跨 session store）
+
+业务工作流不增加图状态字段、恢复接口或数据库表。A/B/C extraction、adjudication、canonical 与生成工作簿均以显式 `/artifacts/downloads/...` 路径传递；每次写入唯一新文件。缺信息时当前 run 正常返回问题，下一 run 仍需显式给出路径和选择。
 
 ## 4. 事件源模型（run 是事件源）
 
@@ -116,6 +120,10 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 | `Hands` / `ToolStatusHands` | `hands.py` | 中间件装配抽象（Protocol）+ 默认实现 |
 | `SqliteRunLedger` | `run_ledger.py` | run 元数据 + 事件 + 大 payload 外溢 |
 | `ToolCatalog` / `ToolHandler` | `tools.py` | 工具集合抽象；`default_tool_catalog()` 默认装配 |
+| `workflow_subagents()` | `subagents.py` | 四个临时 extractor 配置；每个仅暴露对应 extraction 保存工具和内置只读文件能力 |
+| Philips 业务模块 | `philips_wgq_import.py` | extraction/canonical/adjudication 严格合同、tracking 历史与 Oracle fallback、三个 Excel 生成 |
+| Tecan 业务模块 | `tecan_import.py` | 物流投票、订单/信息表内容识别、重量守恒、一个 Excel 生成 |
+| artifact 路径/JSON helper | `workflow_artifacts.py` | `/artifacts/` 安全解析、唯一下载名、不可覆盖 JSON 读写；不含业务分支 |
 | `FakeBrain` / `FakeBrainFactory` | `backend/tests/test_support.py` | 本地测试用的 Brain 替身（流式产出固定 chunk） |
 
 ## 7. 存储边界
@@ -128,7 +136,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 | `dsagents_checkpoints.db` | LangGraph checkpointer | `SqliteSaver`（`thread_id=session_id`） |
 | `dsagents_store.db` | LangGraph store | `SqliteStore`（`namespace=("dsagents",)`） |
 
-其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。用户可见文件仍只落在 `data/artifacts/uploads/` 与 `data/artifacts/downloads/`（`parse_documents` 默认写 task 级 JSON，按需写 ZIP；`extract_archives` 解压到 `<zip-stem>/` 子目录），内部大 payload spill 独立落在 `data/internal/run-events/`。
+其中 `dsagents_runs.db` 会在首次创建 run 或显式进入 `AgentResources` 时出现；`dsagents_checkpoints.db` / `dsagents_store.db` 同样由资源装配按需创建。用户可见文件只落在 `data/artifacts/uploads/` 与 `data/artifacts/downloads/`：后者除 MinerU JSON/ZIP 和解压目录外，也保存唯一命名的 extraction、adjudication、canonical JSON 与业务 Excel。内部大 payload spill 独立落在 `data/internal/run-events/`。
 
 `dsagents_runs.db` 表结构：
 
@@ -162,7 +170,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - `harness.py`（MiniMax 模型相关：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`）
 - `tools.py`（MinerU 相关：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT`〔可留空〕/ `MINERU_TIMEOUT_SECONDS`）
 
-这两个加载点覆盖了全部需要环境变量的调用路径。
+Philips generator 另从已加载环境读取可选的 `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`。Oracle 配置缺失、无记录或查询失败只追加人工校验并继续生成。
 
 ## 10. 这里没有（已确认的范围边界）
 
@@ -170,4 +178,5 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - 没有 `context_window` 概念（短期上下文全交给 checkpointer + thread_id）。
 - 没有 `RemoveMessage(REMOVE_ALL_MESSAGES)`、`run_turn` / `stream_turn`。
 - 没有 model/tool trace 落库。
+- 没有业务工作流接口、业务状态表、恢复游标、动态路由 middleware 或通用 A/B 引擎。
 - 没有真正的 one-shot 单函数入口；程序内调用需显式组合 `AgentResources` + `create_harness(...)` + `execute_run(...)`。

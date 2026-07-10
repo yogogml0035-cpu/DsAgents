@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-09）已核对当前 HEAD `1e8cf94` 后的工作树：`extract_archives` 工具 + `parse_documents` 默认保存 task 级 JSON、按需保存 ZIP；artifact 存储命名重构；文档解析改为批量处理。
+> 本轮刷新（2026-07-10）已核对当前工作树：三个 HTTP 端点不变；新增 Skills/Subagents 和 Philips/Tecan artifact 工具合同。
 
 ## 1. HTTP API 边界
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | `POST /runs` | `{"session_id": str\|null, "messages": [{"role": str, "content": [{"type":"text","text":str} \| {"type":"artifact","path":str}]}...]}` | `session_id` 为空生成 `uuid4().hex`；同 session 已有运行中 run → `409`；写 ledger 后起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；校验失败 `422`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
 | `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
-| `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `data/artifacts/uploads/<uuid>_<cleaned_name>`；只保存文件，不解析 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
+| `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `data/artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext`；只保存文件，不解析 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
 
 - `POST /runs` **不再支持**旧 `{"message":"..."}` 请求体；Pydantic/FastAPI 直接返回校验错误。
 - `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。进入 Brain 前会被转成文本提示：`Uploaded artifact: /artifacts/uploads/...`，再由 agent 决定何时用 `read_file` 或 `parse_documents`。
@@ -19,6 +19,7 @@
 - `latest_content_event`：始终返回当前 run 全局最新的非 `status` 事件；没有非 `status` 事件时为 `null`；**不受** `after_event_id` 影响。
 - 事件类型固定七类：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
 - 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生，`values` 本身不是公开事件类型；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`。
+- 临时 subagent 的 thinking/text token 不进入公开事件；`task` 调用、工具结果和 artifact 路径仍可从现有事件读取。
 - 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 
 明确**已删除**的旧接口（不要引用）：`POST /files`、`POST /sessions/messages`、`POST /sessions/messages/stream`、`POST /sessions/messages/runs`、`GET /sessions/{session_id}/runs`、`from session import run_session`。
@@ -75,10 +76,19 @@ brain.stream(
 - `thread_id = session_id`（短期上下文键）。
 - `text` block 原样保留；`artifact` block 转成文本路径提示后再传给 Brain。
 - 三 channel 全部消费：`messages` → `thinking`/`text_delta`；`custom` → `tool_status`（来自 `ToolStatusMiddleware` 经 `get_stream_writer()`）；`values` snapshot → `tool_call` / `tool_result` / `assistant_message`（保留同条 AIMessage 最后一个 `thinking` 文本和最终 `text`），同时末位 assistant 文本仍作 `runs.reply` 候选。
+- `messages` metadata 中 `lc_agent_name` 非主 agent 时跳过 token 事件；该过滤不改变 snapshot 派生事件。
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`）。
 - LangGraph classic `stream(..., stream_mode=["messages","custom","values"], version="v2")` 仍是当前契约；`thread_id=session_id` 只作为 checkpointer 上下文键，不参与 run event 查询。
 
-## 4. 存储接口边界
+## 4. Skills / 业务工具边界
+
+- `DeepAgentsBrainFactory` 挂载 `/skills/`，注册 Philips/Tecan 各两个临时 extractor；业务意图由模型依据用户目标选择，不按文件名硬路由，普通 PDF 请求不触发业务 Skill。
+- 两个业务各注册四个 callable：保存 extraction、构建 canonical、保存 adjudication、生成文档。A/B/C 使用同一 extraction 合同，builder 返回 `canonical` / `needs_c` / `needs_adjudication` / `needs_input`。
+- Philips extraction 固定为 `workflow/extractor/source_artifact/logistics/items`，物流四字段、商品九字段均使用 `{value, confidence}`；Tecan 使用相同 envelope，但物流只含 `pieces/gross_weight` 且 `items=[]`。
+- canonical 固定含 `workflow/source_artifacts/logistics/items/manual_checks` 加业务专属字段；不接受旧 envelope。generator 唯一业务参数是 canonical artifact 路径。
+- 所有输入路径必须显式指向 `/artifacts/...`；业务 JSON/Excel 写到 `/artifacts/downloads/` 的唯一新文件。流程中间状态不增加 HTTP、数据库或恢复接口。
+
+## 5. 存储接口边界
 
 `AgentResources`（`resources.py`）暴露三类持久资源：
 
@@ -88,28 +98,30 @@ brain.stream(
 
 固定三条**逻辑** SQLite 通道（`runs`/`store`/`checkpoints`，文件按需创建），完整文件→通道→写入方映射与表结构详见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) §7。run 输入快照字段现为 `input_messages_json`（保存 `messages[]` JSON 字符串）。大 run event payload/raw（默认 `max_inline_bytes=262_144`）外溢到 `data/internal/run-events/*.json`（按需创建）；`CompositeBackend` 路由规则同样见该文档。
 
-## 5. LLM provider 边界
+## 6. LLM provider 边界
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", api_key=<KEY>, base_url=<URL>, thinking={"type":"adaptive"})` → `ChatAnthropic`；注入 `create_deep_agent(...)` | `harness.py` |
+| 生产 brain | Anthropic 兼容 `ChatAnthropic`；注入两个 Skills、四个临时 extractors、权限、主 agent 名与十个默认工具 | `harness.py` / `subagents.py` / `tools.py` |
 | 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `backend/tests/test_support.py` |
 
 - 生产 Brain 强耦合 Anthropic 客户端协议与 `thinking={"type":"adaptive"}`；实际端点可指向 MiniMax（OpenAI/Anthropic 兼容）。
 - 环境变量（仅键名 / 用途，不含值）：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 由 `harness.py` 在导入时 `load_dotenv` 读取。
 - 完整键清单见 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) §2/§5。
+- Philips Oracle 是独立可选集成，只消费 `ORACLE_*` 键；配置缺失或查询失败继续生成并标人工校验。
 
-## 6. 未证实的跨系统关系 / 需确认
+## 7. 未证实的跨系统关系 / 需确认
 
 当前系统文档未确认其它子项目或跨系统调用方；已删除的旧 session 接口见 §1。
 
 证据与建议见 [`backend/.planning/codebase/CONCERNS.md`](backend/.planning/codebase/CONCERNS.md) 与 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md)。
 
-## 7. 任务排查建议 / 可扩展集成入口
+## 8. 任务排查建议 / 可扩展集成入口
 
 - **改 HTTP 契约**：先改本文件 §1，再回看 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) §1 与 `api.py`；不要重新引入 SSE、`POST /files` 或旧 `message` 字段。
 - **替换 LLM provider**：实现新的 `BrainFactory`（`harness.py` 的 `Brain` Protocol），通过 `create_harness` 注入；当前生产 brain 强耦合 Anthropic 协议与 `thinking` 参数，切换 provider 需同步调整 stream chunk 解析。
 - **新增工具**：实现 `ToolHandler`（callable），注册进 `default_tool_catalog()`（`tools.py`）；`Hands` 中间件会自动发 `tool_status` 事件。
+- **改业务 Skill/工具**：先看 `backend/skills/<workflow>/SKILL.md` 与对应业务模块；维持显式 artifact 路径、当前严格合同和生成器单参数边界。
 - **新增持久化通道**：在 `resources.py` 的 `CompositeBackend` 路由表追加前缀；不要直接在 harness 写文件。
 - **加鉴权 / CORS**：当前 `api.py` 未注册任何 auth/CORS middleware（已确认缺失）；若需开放给浏览器，需显式补 `CORSMiddleware` 和对应配置键。
 - **写系统文档**：只记录配置键、边界和消费者，不把本地 `.env` 的真实值、连接串或服务地址写回长期文档。

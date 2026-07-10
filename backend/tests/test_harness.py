@@ -15,6 +15,7 @@ from harness import (
     DeepAgentsBrainFactory,
     HarnessRuntime,
     _assistant_message_payload,
+    _is_subagent_message,
     _thinking_delta,
 )
 from resources import AgentResources, ResourceConfig
@@ -23,6 +24,8 @@ from tools import ToolCatalog
 
 
 def run() -> None:
+    assert _is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
+    assert not _is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
     assert _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
     assert _assistant_message_payload(
         AIMessage(

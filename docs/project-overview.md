@@ -7,14 +7,16 @@
 - 对话短期上下文：LangGraph `checkpointer` + `thread_id=session_id`
 - 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建
 - HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`
+- 业务能力：Philips 外高桥与 Tecan 进口 Skills；临时 A/B extractor + 确定性 canonical/Excel 工具，状态只存唯一 artifact
 
 ## 技术栈指针
 
-完整技术栈（Python 版本、`uv` + setuptools、FastAPI/uvicorn、`deepagents`/`langchain`/`langgraph`/`langchain-anthropic`、SQLite、`requests`）见 [`coding_maps/SYSTEM_MAP.md`](../coding_maps/SYSTEM_MAP.md) §2 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md)。
+完整技术栈（含 DeepAgents/LangGraph、SQLite、MinerU、openpyxl 与可选 oracledb）见 [`coding_maps/SYSTEM_MAP.md`](../coding_maps/SYSTEM_MAP.md) §2 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md)。
 
 ## 源码阅读入口
 
 - 运行时主链：`backend/harness.py`
+- 业务 Skill/规则：`backend/skills/`、`backend/philips_wgq_import.py`、`backend/tecan_import.py`
 - Run 持久化：`backend/run_ledger.py`
 - HTTP 契约：[INTERFACES.md](../INTERFACES.md)
 - 系统地图：[coding_maps/SYSTEM_MAP.md](../coding_maps/SYSTEM_MAP.md)

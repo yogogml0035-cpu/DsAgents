@@ -1,6 +1,6 @@
 # CONVENTIONS
 
-> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-09）已核对当前工作树：上传/下载 artifact 命名已切到时间戳语义，run-event spill 已移到 `data/internal/run-events/`。
+> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml` + 根级 `docs/conventions.md`；本轮刷新（2026-07-10）已核对当前工作树：新增 Skills/Subagents 与 Philips/Tecan artifact 工具链，run-first HTTP/ledger 约定不变。
 > 区分「已确认」（直接对应代码）与「需确认」（证据不足）。
 
 ## 1. 包管理器（已确认）
@@ -19,7 +19,7 @@
 ## 2. 模块组织（已确认）
 
 - 扁平顶层模块：`backend/` 下的 `.py` 直接作为顶层模块，绝对导入写作 `from hands import ...`、`from resources import AgentResources`，**不**带 `backend.` 前缀。
-- `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `artifact_names` / `hands` / `harness` / `resources` / `run_ledger` / `tools`。新增顶层 `.py` 必须同步追加到此处。
+- `pyproject.toml` 的 `py-modules` 当前显式列出：`api` / `artifact_names` / `hands` / `harness` / `philips_wgq_import` / `resources` / `run_ledger` / `subagents` / `tecan_import` / `tools` / `workflow_artifacts`。新增顶层 `.py` 必须同步追加。
 - **没有** `backend/__init__.py` / `backend/__main__.py`（已确认不存在）。
 - **没有** `python -m backend.*` 这种调用方式（包不是这么组织的）。
 - backend 测试源码目录是 `backend/tests/`；测试脚本统一命名为 `test_*.py`，可执行脚本保留 `run()` 并支持 `python -m tests.test_xxx` 直接运行（见 TESTING.md）。
@@ -41,6 +41,8 @@
 - **能力可插拔**：`Brain` / `BrainFactory` / `Hands` 是 `typing.Protocol`；运行时通过依赖注入接收 `brain_factory`、`hands`、`tools`。`create_harness` 用默认实现，本地测试用 `FakeBrainFactory` 注入。工具保持普通 callable + `ToolCatalog`，不为单实现工具新增 Protocol/ABC。
 - **run 是事件源**：`run_events` 表 append-only；`runs` 表是当前快照。短期上下文靠 LangGraph `thread_id=session_id`，不再有 session 层。
 - **保持运行时薄**：`HarnessRuntime.execute_run` 只做「派发 payload → 解析 stream chunk → 写 run event」。不在运行时内引入服务层 / 工作流引擎。
+- **业务状态外置为 artifact**：A/B/C、裁决、canonical 与 Excel 只写唯一新文件；builder/generator 依靠调用方显式传路径，不扫描 session、历史上传或“最近任务”。
+- **按业务保留确定性规则**：Philips/Tecan 各自实现投票与 Excel 规则，不抽象通用 A/B 引擎、插件注册表或工作流 DSL；共享模块只做路径和 JSON 读写。
 - **真实错误透传**：见 §5。
 - **优先删减范围**：HTTP 表面只保留 `POST /runs` / `GET /runs/{run_id}` / `POST /upload`（旧 session 端点与 `POST /files` 已删，见 §7）。
 
@@ -53,6 +55,7 @@
 - `_error_text(exc)` = `str(exc)` 去空白，为空则回退到异常类名。
 - fail-fast 模式：`parse_documents` 在存在可提交文件且缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError("Missing required environment variable: ...")`；`MINERU_EFFORT` 可留空（测试脚本显式断言此行为）。
 - run 状态非法值：`SqliteRunLedger.emit_run_status` 对非 `RUN_STATUSES` 抛 `ValueError`。
+- Oracle 是明确例外：Philips 单位查询失败必须转成人工校验并继续生成；其它业务合同、路径和工作簿错误保持可见，不由 harness 吞掉。
 
 ## 6. run-first 架构（已确认）
 
@@ -83,9 +86,17 @@
 - run ledger 事件类型固定 7 种：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
 - `raw.type=="values"` 只保留在原始 snapshot；业务层从 snapshot 中派生 `tool_call` / `tool_result` / `assistant_message`，不再把 `values` 当作业务事件写库，外部调用方也不应依赖 `values` 事件。
 - 最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 保留最后一个 `thinking` 文本和最终 `text`；改动该结构必须同步 `INTERFACES.md`、`SYSTEM_MAP.md` 和 API / harness 测试断言。
+- 临时 subagent 的 `messages` chunk 通过 `lc_agent_name` 过滤，不写公开 `thinking` / `text_delta`；task 调用、task 结果和 artifact 路径仍按现有 snapshot 规则进入事件。
 - 工具状态中间件只发 `started` / `completed` / `error` 三态（测试脚本断言）。
 
-## 10. 持久化约定（已确认）
+## 10. Skill 与业务 artifact 约定（已确认）
+
+- Skill 根固定为 `backend/skills/`，通过 `/skills/` 虚拟路由挂载；主 agent 不得写 `/skills/**`，extractor 的内置文件能力为只读。
+- `SKILL.md` 控制在约 100 行内；字段/规则只放一层 `references/`，模板放同 Skill 的 `assets/`。普通 PDF 阅读/通用抽取不属于业务 Skill 触发条件。
+- extraction/canonical/adjudication 都采用当前严格合同，不提供旧 envelope 或字段别名；缺失字段用正常 status 返回，不增加图 state schema、HTTP 恢复接口或持久化游标。
+- `/artifacts/downloads/` 中的业务 JSON/Excel 不覆盖、不原地编辑；generator 只接受 canonical artifact 路径。
+
+## 11. 持久化约定（已确认）
 
 - `runs` 行 = 当前 run 快照（状态机：`queued→running→succeeded|failed`）。
 - `run_events` = append-only 事件流。
@@ -93,12 +104,13 @@
 - 数据目录固定锚定在 `backend/data/`（`_BACKEND_DIR = Path(__file__).resolve().parent`，与 CWD 无关）。
 - 不做清理策略、不做历史迁移。
 
-## 11. LLM / Brain 约定（已确认）
+## 12. LLM / Brain 约定（已确认）
 
 - 默认 `DeepAgentsBrainFactory`：从 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 环境变量构造，映射到 LangChain 的 Anthropic 客户端（`init_chat_model("anthropic:...", thinking={"type":"adaptive"})`）。
+- 当前 `deepagents==0.6.12` 通过 `skills` / `subagents` / `permissions` / `response_format` / `name` 装配；官方新文档与该版本不一致处以实际签名为准，不写未来兼容层。
 - 普通本地测试用 `FakeBrainFactory` / `FakeBrain`：验证 Brain 可替换、payload 接收当前请求的 `messages[]`、`thread_id` 路由、失败 run 后同 thread 续跑不回滚。
 
-## 12. 文档与交付约定（来自根级 `docs/conventions.md`）
+## 13. 文档与交付约定（来自根级 `docs/conventions.md`）
 
 - **事实层在子项目**：`backend/.planning/codebase/` 是 backend 实现细节的事实来源；根级只放导航与稳定全局原则。
 - **改代码后同步事实层**：改 `backend/` 实现后，先更新本目录对应文档，再视影响回看 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`。

@@ -7,7 +7,7 @@ import time
 import zipfile
 from contextlib import ExitStack
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Annotated, Any, Callable, Sequence
 from urllib.parse import urljoin
 
@@ -16,7 +16,19 @@ from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
 
 from artifact_names import make_unique_name
-from resources import ResourceConfig
+from philips_wgq_import import (
+    build_philips_wgq_canonical,
+    generate_philips_wgq_documents,
+    save_philips_wgq_adjudication,
+    save_philips_wgq_extraction,
+)
+from tecan_import import (
+    build_tecan_canonical,
+    generate_tecan_documents,
+    save_tecan_adjudication,
+    save_tecan_extraction,
+)
+from workflow_artifacts import artifacts_root, resolve_artifact_path, to_virtual_artifact_path
 
 load_dotenv(Path(__file__).with_name(".env"))
 
@@ -292,28 +304,18 @@ def _download_mineru_json(result_url: str, *, result_filename: str, timeout_seco
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:
-    if not raw_path:
-        raise ValueError("Path is required")
-    if raw_path == "/artifacts" or raw_path.startswith("/artifacts/"):
-        virtual_path = PurePosixPath(raw_path)
-        if ".." in virtual_path.parts:
-            raise ValueError(f"Invalid /artifacts path: {raw_path}")
-        relative = virtual_path.relative_to("/artifacts")
-        return _artifacts_root().joinpath(*relative.parts).resolve()
-    return Path(raw_path).expanduser().resolve()
+    return resolve_artifact_path(raw_path, root=_artifacts_root(), allow_local=True)
 
 
 def _to_virtual_path(resolved: Path) -> str:
-    root = _artifacts_root().resolve()
     try:
-        relative = resolved.relative_to(root)
+        return to_virtual_artifact_path(resolved, root=_artifacts_root())
     except ValueError:
         return str(resolved)
-    return f"/artifacts/{relative.as_posix()}"
 
 
 def _artifacts_root() -> Path:
-    return ResourceConfig().artifacts_dir.resolve()
+    return artifacts_root()
 
 
 def _required_env(name: str) -> str:
@@ -503,4 +505,17 @@ def _error_text(exc: Exception) -> str:
 
 
 def default_tool_catalog() -> ToolCatalog:
-    return ToolCatalog((parse_documents, extract_archives))
+    return ToolCatalog(
+        (
+            parse_documents,
+            extract_archives,
+            save_philips_wgq_extraction,
+            build_philips_wgq_canonical,
+            save_philips_wgq_adjudication,
+            generate_philips_wgq_documents,
+            save_tecan_extraction,
+            build_tecan_canonical,
+            save_tecan_adjudication,
+            generate_tecan_documents,
+        )
+    )

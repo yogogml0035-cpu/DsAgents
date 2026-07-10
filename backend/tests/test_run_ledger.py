@@ -30,7 +30,12 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert not resources.config.run_events_dir.exists()
         assert not (data_dir / "artifacts" / "run-events").exists()
         assert resources.backend is not None
-        assert set(resources.backend.routes) == {"/memories/", "/artifacts/", "/large_tool_results/"}
+        assert set(resources.backend.routes) == {
+            "/memories/",
+            "/artifacts/",
+            "/large_tool_results/",
+            "/skills/",
+        }
 
         queued = resources.runs.create_run("run-1", "s1", messages_json(hello_messages))
         assert queued.status == "queued"

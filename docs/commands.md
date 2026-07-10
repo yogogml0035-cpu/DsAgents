@@ -14,7 +14,7 @@ cd backend
 python -m tests.test_api
 ```
 
-backend 测试统一放在 `backend/tests/test_*.py`。按改动影响范围直接运行对应脚本，例如 `python -m tests.test_tools`、`python -m tests.test_harness`、`python -m tests.test_run_ledger`。真实外部集成脚本单独运行，不混入普通本地回归。
+backend 测试统一放在 `backend/tests/test_*.py`。业务工作流改动运行 `test_workflow_setup`、`test_philips_wgq_import`、`test_tecan_import`，并复跑 `test_tools`、`test_harness`、`test_api`；真实外部集成脚本保持独立。
 
 真实图片 HTTP / 模型集成脚本默认跳过；只有显式设置 `DSAGENTS_RUN_REAL_IMAGE_TEST=1` 时才触达真实服务。
 
