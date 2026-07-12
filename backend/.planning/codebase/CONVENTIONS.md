@@ -90,11 +90,13 @@
 
 - Brain 调用统一走 `brain.stream({"messages": normalized_messages}, config={"configurable":{"thread_id":session_id}}, stream_mode=["messages","custom","values"], version="v2")`。
 - payload **只**传当前请求的 `messages[]`；`text` block 原样保留，`artifact` block 会在进入 Brain 前转成文本路径提示（测试脚本的 `FakeBrain` 断言 Brain 侧只收到 text blocks，证明不再直接透传 artifact block，也不再注入 `RemoveMessage`）。
-- run ledger 事件类型固定 7 种：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
+- run ledger 事件类型固定 8 种：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result` / `model_usage`。
+- `model_usage` 是唯一的成本/缓存观测事件：在 `messages` 分支的 subagent 过滤**之前**提取终态 `AIMessageChunk.usage_metadata`，每个模型调用仅在非空时写一次；payload 固定为 `{model, scope, agent_name, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}`。`cache_creation_input_tokens` 汇总 `input_token_details.cache_creation + ephemeral_5m_input_tokens + ephemeral_1h_input_tokens`（库在 5m/1h 存在时会把 generic 置 0，相加安全）。`model` 固定为常量 `"MiniMax-M3"`。它不计入 `latest_content_event`，也不进 AgentState/checkpointer/store。
 - `raw.type=="values"` 只保留在原始 snapshot；业务层从 snapshot 中派生 `tool_call` / `tool_result` / `assistant_message`，不再把 `values` 当作业务事件写库，外部调用方也不应依赖 `values` 事件。
 - 最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 保留最后一个 `thinking` 文本和最终 `text`；改动该结构必须同步 `INTERFACES.md`、`SYSTEM_MAP.md` 和 API / harness 测试断言。
-- 临时 subagent 的 `messages` chunk 通过 `lc_agent_name` 过滤，不写公开 `thinking` / `text_delta`；task 调用、task 结果和 artifact 路径仍按现有 snapshot 规则进入事件。
+- 临时 subagent 的 `messages` chunk 通过 `lc_agent_name` 过滤，不写公开 `thinking` / `text_delta`；但其 `model_usage` 仍按 `scope="subagent"` + 真实 `agent_name` 计入。task 调用、task 结果和 artifact 路径仍按现有 snapshot 规则进入事件。
 - 工具状态中间件只发 `started` / `completed` / `error` 三态（测试脚本断言）。
+- `GET /runs/{run_id}` 顶层 `usage` 字段始终从该 run 全部 `model_usage` 事件汇总，不受 `after_event_id` 影响；含 `model_calls`、四类 token 总量、`cache_hit_rate`（无输入为 `null`）、`estimated_cost_cny` / `estimated_savings_cny`（按调用 input ≤/>512k 分 tier 后汇总）、`pricing_as_of`、估算说明与 `by_agent` 分项。模型不可计价时金额为 `null`，token 原始事实保留。
 
 ## 10. Skill 与业务 artifact 约定（已确认）
 

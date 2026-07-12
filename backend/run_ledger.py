@@ -161,7 +161,7 @@ class SqliteRunLedger:
                     raw_json,
                     raw_artifact_path
                 from run_events
-                where run_id = ? and type != 'status'
+                where run_id = ? and type not in ('status', 'model_usage')
                 order by event_id desc
                 limit 1
                 """,
@@ -170,6 +170,47 @@ class SqliteRunLedger:
         if row is None:
             return None
         return self._read_run_event(row)
+
+    def aggregate_model_usage(self, run_id: str) -> dict[str, Any] | None:
+        """Sum all model_usage events for a run into token totals + by-agent.
+
+        Returns None when the run has no model_usage events. Token figures are
+        the raw facts; cost/price estimation is layered on by the API caller.
+        Per-call records (model + per-call token counts) are kept for tier-aware
+        pricing, which cannot be reconstructed from the sums alone.
+        """
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            rows = conn.execute(
+                """
+                select payload_json, payload_artifact_path
+                from run_events
+                where run_id = ? and type = 'model_usage'
+                order by event_id
+                """,
+                (run_id,),
+            ).fetchall()
+        if not rows:
+            return None
+        totals = _new_usage_bucket()
+        by_agent: dict[tuple[str, str], dict[str, int]] = {}
+        calls: list[dict[str, Any]] = []
+        for payload_json, artifact_path in rows:
+            payload = self._load_blob(payload_json, artifact_path)
+            if not isinstance(payload, dict):
+                continue
+            _add_usage(totals, payload)
+            agent_key = (str(payload.get("scope", "main_agent")), str(payload.get("agent_name", "")))
+            _add_usage(by_agent.setdefault(agent_key, _new_usage_bucket()), payload)
+            calls.append({
+                "model": payload.get("model", ""),
+                "input_tokens": _usage_int(payload.get("input_tokens")),
+                "output_tokens": _usage_int(payload.get("output_tokens")),
+                "cache_read_input_tokens": _usage_int(payload.get("cache_read_input_tokens")),
+                "cache_creation_input_tokens": _usage_int(payload.get("cache_creation_input_tokens")),
+            })
+        totals["by_agent"] = by_agent
+        totals["calls"] = calls
+        return totals
 
     def emit_run_event(
         self,
@@ -449,6 +490,28 @@ def _safe(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return repr(value)
+
+
+_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _new_usage_bucket() -> dict[str, int]:
+    return {"model_calls": 0, **{key: 0 for key in _USAGE_TOKEN_KEYS}}
+
+
+def _add_usage(bucket: dict[str, int], payload: dict[str, Any]) -> None:
+    bucket["model_calls"] += 1
+    for key in _USAGE_TOKEN_KEYS:
+        bucket[key] += _usage_int(payload.get(key))
+
+
+def _usage_int(value: Any) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _now_text() -> str:

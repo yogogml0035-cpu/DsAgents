@@ -27,6 +27,7 @@ def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_api(tmp)
         _check_startup_recovery(tmp)
+        _check_usage_pricing(tmp)
 
 
 def _check_api(tmp: str) -> None:
@@ -172,10 +173,12 @@ def _check_api(tmp: str) -> None:
             "status",
             "status",
             "thinking",
+            "model_usage",
             "text_delta",
             "tool_call",
             "tool_status",
             "tool_result",
+            "model_usage",
             "text_delta",
             "assistant_message",
             "status",
@@ -213,6 +216,31 @@ def _check_api(tmp: str) -> None:
         assert [event["type"] for event in cursor_payload["events"]] == ["status"]
         assert cursor_payload["events"][0]["event_id"] > cursor
         assert cursor_payload["latest_content_event"] == latest_content_event
+        # usage is always aggregated from the whole run, regardless of after_event_id.
+        assert cursor_payload["usage"] == run_payload["usage"]
+
+        # Top-level usage block: raw token facts + cache hit rate + tier-priced
+        # CNY estimates. main_agent input(1000) is standard tier (<=512k).
+        usage = run_payload["usage"]
+        assert usage["model_calls"] == 2
+        assert usage["input_tokens"] == 1200
+        assert usage["output_tokens"] == 340
+        assert usage["cache_read_input_tokens"] == 650
+        assert usage["cache_creation_input_tokens"] == 290
+        assert usage["cache_hit_rate"] == 650 / 1200
+        assert usage["pricing_as_of"] == "2026-07-12"
+        # Standard tier: input 2.10, output 8.40, cache_read 0.42 per million.
+        # cost = non-cache-read input (550) *2.10 + cache_read 650 *0.42 + out 340 *8.40, all /1e6
+        expected_cost = round((550 * 2.10 + 650 * 0.42 + 340 * 8.40) / 1_000_000, 6)
+        assert usage["estimated_cost_cny"] == expected_cost
+        # savings = cache_read 650 * (input 2.10 - cache_read 0.42) / 1e6
+        expected_savings = round(650 * (2.10 - 0.42) / 1_000_000, 6)
+        assert usage["estimated_savings_cny"] == expected_savings
+        agent_scopes = {agent["scope"] for agent in usage["by_agent"]}
+        assert agent_scopes == {"main_agent", "subagent"}
+        main_agent = [a for a in usage["by_agent"] if a["scope"] == "main_agent"][0]
+        assert main_agent["model_calls"] == 1
+        assert main_agent["cache_hit_rate"] == 600 / 1000
 
         multimodal_messages = [
             user_message(
@@ -257,6 +285,10 @@ def _check_api(tmp: str) -> None:
         failed_payload = failed.json()
         failed_run = wait_for_run(client, failed_payload["run_id"], "failed")
         assert failed_run["error"] == "planned failure"
+        # Failed run still returns usage for model calls recorded before the exception.
+        failed_detail = client.get(f"/runs/{failed_payload['run_id']}").json()
+        assert failed_detail["usage"] is not None
+        assert failed_detail["usage"]["model_calls"] == 1
         resumed = client.post("/runs", json={"messages": [user_message(text_block("recover"))], "session_id": "resume-session"})
         assert resumed.status_code == 200
         resumed_run = wait_for_run(client, resumed.json()["run_id"], "succeeded")
@@ -301,6 +333,124 @@ def _check_startup_recovery(tmp: str) -> None:
         assert running_run["run"]["error"] == INTERRUPTED_RUN_ERROR
         assert running_run["latest_content_event"] is None
         assert cleanup_factory_count["count"] == 1
+
+
+def _check_usage_pricing(tmp: str) -> None:
+    """Tier switching (long-context threshold), unpriceable model => null amounts,
+    and zero-input => null cache hit rate, exercised directly via the ledger."""
+    pricing_data_dir = Path(tmp) / "pricing-api"
+    pricing_store = SqliteRunLedger(
+        pricing_data_dir / "dsagents_runs.db",
+        pricing_data_dir / "internal" / "run-events",
+    )
+
+    pricing_store.create_run("tier-run", "s-tier", json.dumps([user_message(text_block("t"))], ensure_ascii=False))
+    pricing_store.emit_run_status("tier-run", "running")
+    # One standard-tier call (input 1000) + one long-context call (input 600000).
+    pricing_store.emit_run_event(
+        "tier-run",
+        "model_usage",
+        {
+            "model": "MiniMax-M3",
+            "scope": "main_agent",
+            "agent_name": "dsagents-main",
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        raw={"type": "messages"},
+    )
+    pricing_store.emit_run_event(
+        "tier-run",
+        "model_usage",
+        {
+            "model": "MiniMax-M3",
+            "scope": "main_agent",
+            "agent_name": "dsagents-main",
+            "input_tokens": 600_000,
+            "output_tokens": 1000,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        raw={"type": "messages"},
+    )
+    pricing_store.emit_run_status("tier-run", "succeeded", reply="t")
+
+    pricing_store.create_run("unpriceable-run", "s-unp", json.dumps([user_message(text_block("u"))], ensure_ascii=False))
+    pricing_store.emit_run_status("unpriceable-run", "running")
+    pricing_store.emit_run_event(
+        "unpriceable-run",
+        "model_usage",
+        {
+            "model": "SomeOtherModel",
+            "scope": "main_agent",
+            "agent_name": "dsagents-main",
+            "input_tokens": 500,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 0,
+        },
+        raw={"type": "messages"},
+    )
+    pricing_store.emit_run_status("unpriceable-run", "succeeded", reply="u")
+
+    pricing_store.create_run("no-input-run", "s-noin", json.dumps([user_message(text_block("n"))], ensure_ascii=False))
+    pricing_store.emit_run_status("no-input-run", "running")
+    pricing_store.emit_run_event(
+        "no-input-run",
+        "model_usage",
+        {
+            "model": "MiniMax-M3",
+            "scope": "main_agent",
+            "agent_name": "dsagents-main",
+            "input_tokens": 0,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        raw={"type": "messages"},
+    )
+    pricing_store.emit_run_status("no-input-run", "succeeded", reply="n")
+
+    factory_count = {"count": 0}
+
+    def noop_harness(resources: AgentResources) -> HarnessRuntime:
+        factory_count["count"] += 1
+        return HarnessRuntime(
+            resources=resources,
+            hands=ToolStatusHands(),
+            tools=ToolCatalog(()),
+            brain_factory=FakeBrainFactory(),
+        )
+
+    pricing_app = create_app(
+        resource_config=ResourceConfig(data_dir=pricing_data_dir),
+        harness_factory=noop_harness,
+    )
+    with TestClient(pricing_app) as pricing_client:
+        tier_usage = pricing_client.get("/runs/tier-run").json()["usage"]
+        # Mixed tiers: 1000@standard + 600000@long_context.
+        # standard: (1000*2.10 + 0*0.42 + 100*8.40)/1e6
+        # long_context (4.20, 16.80, 0.84): (600000*4.20 + 0*0.84 + 1000*16.80)/1e6
+        expected_cost = round(
+            (1000 * 2.10 + 100 * 8.40) / 1_000_000
+            + (600_000 * 4.20 + 1000 * 16.80) / 1_000_000,
+            6,
+        )
+        assert tier_usage["estimated_cost_cny"] == expected_cost
+
+        unpriceable_usage = pricing_client.get("/runs/unpriceable-run").json()["usage"]
+        # Unknown model => amounts null, token facts still complete.
+        assert unpriceable_usage["estimated_cost_cny"] is None
+        assert unpriceable_usage["estimated_savings_cny"] is None
+        assert unpriceable_usage["input_tokens"] == 500
+        assert unpriceable_usage["cache_read_input_tokens"] == 100
+
+        no_input_usage = pricing_client.get("/runs/no-input-run").json()["usage"]
+        # Zero input => null cache hit rate (no division by zero).
+        assert no_input_usage["cache_hit_rate"] is None
+        assert no_input_usage["input_tokens"] == 0
 
 
 if __name__ == "__main__":

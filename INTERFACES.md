@@ -10,15 +10,16 @@
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
 | `POST /runs` | `{"session_id": str\|null, "messages": [{"role": str, "content": [{"type":"text","text":str} \| {"type":"artifact","path":str}]}...]}` | `session_id` 为空生成 `uuid4().hex`；同 session 已有运行中 run → `409`；写 ledger 后起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；校验失败 `422`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
-| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
+| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status`/非 `model_usage` 事件 + 该 run 全部 `model_usage` 事件汇总出的 `usage` | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null,"usage":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}`。`usage` 含 `model_calls`、四类 token 总量、`cache_hit_rate`（无输入为 `null`）、`estimated_cost_cny` / `estimated_savings_cny`（按调用 input ≤/>512k 分 tier 后汇总，`pricing_as_of` 标日期）、估算说明与 `by_agent` 分项；模型不可计价时金额为 `null`，token 仍完整；无模型调用时 `usage` 为 `null` |
 | `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `data/artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext`；只保存文件，不解析 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
 
 - `POST /runs` **不再支持**旧 `{"message":"..."}` 请求体；Pydantic/FastAPI 直接返回校验错误。
 - `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。进入 Brain 前会被转成文本提示：`Uploaded artifact: /artifacts/uploads/...`，再由 agent 决定何时用 `read_file` 或 `parse_documents`。
 - `after_event_id` 游标：为空返回全部事件；有值只返回 `event_id > after_event_id` 的增量事件。
-- `latest_content_event`：始终返回当前 run 全局最新的非 `status` 事件；没有非 `status` 事件时为 `null`；**不受** `after_event_id` 影响。
-- 事件类型固定七类：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`。
-- 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生，`values` 本身不是公开事件类型；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`。
+- `latest_content_event`：始终返回当前 run 全局最新的非 `status`/非 `model_usage` 事件；没有此类事件时为 `null`；**不受** `after_event_id` 影响。
+- `usage`：始终返回该 run 全部 `model_usage` 事件汇总出的 usage 块；**同样不受** `after_event_id` 影响（`after_event_id` 只裁剪 `events[]`）。
+- 事件类型固定八类：`status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result` / `model_usage`（前七类为业务事件，`model_usage` 为 prompt-cache/成本观测事件）。
+- 成功 run 的最终 `latest_content_event` 通常是 `assistant_message`；`tool_call` / `tool_result` / `assistant_message` 都由 `raw.type=="values"` 的 snapshot 派生，`thinking` / `text_delta` / `model_usage` 由 `raw.type=="messages"` 派生（`model_usage` 在 subagent 文本过滤之前提取，覆盖主 agent 与 subagent 调用）；`values` 本身不是公开事件类型；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`。
 - 临时 subagent 的 thinking/text token 不进入公开事件；`task` 调用、工具结果和 artifact 路径仍可从现有事件读取。
 - 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 

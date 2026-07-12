@@ -12,7 +12,7 @@
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
 | `POST /runs` | `{"session_id": str\|null, "messages": [{"role": str, "content": [{"type":"text","text":str} \| {"type":"artifact","path":str}]}...]}`（`RunRequest`） | `session_id` 为空生成 `uuid4().hex`；`run_id = uuid4().hex`；获取单飞锁 → 写 ledger → 起 daemon 线程执行 | `200 {"run_id","session_id","status":"queued"}`；校验失败 `422`；冲突 `409 {"error":"该会话正在运行","active_run_id"}` |
-| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status` 事件 | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}` |
+| `GET /runs/{run_id}` | query `after_event_id: int\|null` | 读 run 快照 + run events（支持增量游标）+ 当前 run 全局最新非 `status`/非 `model_usage` 事件 + 该 run 全部 `model_usage` 汇总出的 `usage` | `200 {"run":{...},"events":[...],"latest_content_event":{...}\|null,"usage":{...}\|null}`；未知 run `404 {"error":"Unknown run: ..."}`。`usage` 含 `model_calls`、四类 token 总量、`cache_hit_rate`（无输入为 `null`）、`estimated_cost_cny` / `estimated_savings_cny`（按调用 input ≤/>512k 分 tier 后汇总；MiniMax-M3 standard 定价，`pricing_as_of` 标注日期）、估算说明、`by_agent` 分项；模型不可计价时金额为 `null`，token 仍完整 |
 | `POST /upload` | multipart `files: UploadFile[]`（字段名固定 `files`，支持 1 个或多个） | 落到 `<artifacts_dir>/uploads/<cleaned-stem>_<upload-ts>(_n).ext`；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`；`name` 继续返回清洗后的原始文件名 | `200 {"files":[{"file_path":"/artifacts/uploads/...","name":"<原名>","mime_type":"<mime-or-application/octet-stream>","size":123}]}` |
 
 > 注：当前**无 SSE / `StreamingResponse` / `text/event-stream`**，事件获取靠轮询 `GET /runs/{run_id}?after_event_id=...`。
@@ -39,6 +39,8 @@
 | 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", ...)` → `ChatAnthropic`；`create_deep_agent(...)` 同时注入 `skills=["/skills/"]`、四个 subagents、`/skills/**` 写禁令与主 agent 名 | `harness.py` |
 | 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，不触达真实 provider） | `backend/tests/test_support.py` |
 | 系统 prompt | `DEFAULT_SYSTEM_PROMPT` 引导文件工具，并明确只有用户清晰要求业务结果时才使用业务 Skill；普通 PDF 请求不触发业务流程 | `harness.py` |
+| prompt-cache 中间件 | **不新增自定义 cache middleware**。`create_deep_agent` 已在尾栈自动挂 `AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")`（`deepagents/graph.py`），给 system 末块与末个 tool 打 `cache_control={"type":"ephemeral","ttl":"5m"}`；因为 MiniMax 走 `ChatAnthropic`，该中间件对 MiniMax-M3 生效。固定前缀 = `DEFAULT_SYSTEM_PROMPT` + `default_tool_catalog()` tool schema + SDK 默认 deep-agent prompt，**不要**向其注入时间/run_id 等动态内容 | `harness.py` + `langchain_anthropic/middleware/prompt_caching.py`（库源） |
+| usage 观测出口 | usage 不实现 Agent middleware，而是复用 `harness.execute_run` 的统一 `messages` 流出口：在 subagent 文本过滤之前从终态 `AIMessageChunk.usage_metadata` 提取，每个模型调用仅在非空时写一次 `model_usage` 事件（含 subagent 调用）；不写入 AgentState/checkpointer/store，不新增表 | `harness.py` `_model_usage`/`_chunk_agent` + `run_ledger.py` `aggregate_model_usage` + `api.py` `_usage_summary` |
 
 ### Skills / Subagents 边界
 
@@ -82,8 +84,8 @@ brain.stream(
 - `thread_id = session_id`
 - `text` block 原样保留；`artifact` block 转成文本路径提示
 - `messages` / `custom` / `values` 三 channel 全部消费，其中 `values` 只保留 raw snapshot，并派生 `tool_call` / `tool_result` / `assistant_message`；最终 AIMessage 同时含 `thinking` 与 `text` block 时，`assistant_message.payload` 会带上最后一个 `thinking` 文本和最终 `text`
-- `messages` channel 只把主 agent 的模型 token 规范化为 `thinking` / `text_delta`；subagent token 由 `lc_agent_name` 过滤
-- `values` 不是公开 run event type；外部调用方应消费七类规范化事件，完整 snapshot 仅保留在事件 `raw`
+- `messages` channel 先在 subagent 过滤之前提取 `model_usage`（覆盖主 agent 与 subagent 调用），再只把主 agent 的模型 token 规范化为 `thinking` / `text_delta`；subagent 文本 token 由 `lc_agent_name` 过滤
+- `values` 不是公开 run event type；外部调用方应消费八类规范化事件（七类业务事件 + `model_usage` 观测事件），完整 snapshot 仅保留在事件 `raw`
 - raw 完整 v2 chunk 整体落库（`run_events.raw_*`），不只是 `chunk["data"]`
 - run event 查询维度始终是 `run_id`；`thread_id=session_id` 只用于 checkpointer 上下文，不参与 `run_events` 查询
 

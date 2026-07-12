@@ -9,13 +9,13 @@
 
 | 模块 | 职责（一两句话） |
 |------|------------------|
-| `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`；run 后台线程调度、同 session 并发保护、启动恢复、多文件上传落盘 |
+| `api.py` | FastAPI run-first HTTP 层：`POST /runs`、`GET /runs/{run_id}`、`POST /upload`；run 后台线程调度、同 session 并发保护、启动恢复、多文件上传落盘；`GET /runs/{run_id}` 顶层 `usage` 汇总 + tier 计价（`_usage_summary`） |
 | `artifact_names.py` | 共享 artifact 命名 helper：文件名清洗、`<stem>_<timestamp>(_n).ext` 生成、上传后缀剥离 |
-| `harness.py` | run 执行核心：装配 Brain/Hands/Tools/Skills/Subagents，把 stream chunk 规范化为 `RunEvent`，并按 `lc_agent_name` 隔离 subagent 模型 token |
+| `harness.py` | run 执行核心：装配 Brain/Hands/Tools/Skills/Subagents，把 stream chunk 规范化为 `RunEvent`，在 subagent 文本过滤之前提取 `model_usage`（`_model_usage`/`_chunk_agent`），并按 `lc_agent_name` 隔离 subagent 模型 token |
 | `hands.py` | 执行器抽象：`Hands` Protocol + 默认 `ToolStatusHands`/`ToolStatusMiddleware`（在工具调用前后发 `tool_status` custom event） |
 | `philips_wgq_import.py` | Philips 外高桥 extraction/canonical/adjudication 合同、tracking/Oracle 规则及三个 Excel 生成器 |
 | `resources.py` | 资源装配：`AgentResources`（context manager）与 `ResourceConfig`；装配 run ledger、LangGraph store、LangGraph checkpointer、`CompositeBackend` |
-| `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复 |
+| `run_ledger.py` | SQLite run ledger：`SqliteRunLedger` 维护 `runs`/`run_events` 表，支持状态投影、增量事件查询、大 payload 外溢、启动恢复、`model_usage` 事件聚合（`aggregate_model_usage`：总量 + by_agent + per-call） |
 | `subagents.py` | 四个声明式临时 extractor 及两字段 structured response；每个只拿一个业务 save 工具 |
 | `tecan_import.py` | Tecan extraction/canonical/adjudication 合同、订单/信息表规则及发票箱单生成器 |
 | `tools.py` | `ToolCatalog`/`ToolHandler`、MinerU/解压工具，以及八个业务工具的默认注册入口 |
@@ -103,6 +103,7 @@ backend/
 │   ├── __init__.py
 │   ├── test_api.py
 │   ├── test_harness.py
+│   ├── test_minimax_cache_baseline.py   # 真实 MiniMax-M3 prompt-cache 基线（默认不运行，仅 HTTP 调 BASE_URL）
 │   ├── test_philips_wgq_import.py
 │   ├── test_run_ledger.py
 │   ├── test_real_image_run.py
@@ -141,7 +142,7 @@ backend/
 - **HTTP**（`api.py`，`app = create_app()`；`create_app(*, resource_config=None, harness_factory=create_harness)` 可注入测试用的 resource 配置与 Brain 工厂）：
   - `POST /upload` —— multipart `files[]`，支持一个或多个文件，返回 `{files:[{file_path,name,mime_type,size}]}`
   - `POST /runs` —— body `{messages, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`
-  - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event}`，未知 run 返回 `404`
+  - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event, usage}`（`usage` 始终从该 run 全部 `model_usage` 事件汇总，不受 `after_event_id` 影响；无模型调用时为 `null`），未知 run 返回 `404`
   - 默认由 `scripts/start-backend.bat` 拉起：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（端口与 `tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` 一致）。`scripts/` 目录还包含 `ralph`（Ralph 执行器脚本，与 `start-backend.bat` 同级）。
 - **测试脚本**：按影响范围从 `backend/` 目录运行对应脚本，例如 `python -m tests.test_api`、`python -m tests.test_harness`。
 - **程序内**：无单函数 one-shot 入口；需显式组合 `AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`。
@@ -151,13 +152,14 @@ backend/
 `backend/tests/` 是当前测试源码目录，断言分布在：
 
 - `test_tools.py`：MinerU/解压行为及十个默认工具注册
-- `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复
-- `test_harness.py`：FakeBrain、ToolStatusMiddleware、artifact block 归一化、最终 `thinking` 载荷及 subagent token 过滤
-- `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复
+- `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复、`model_usage` 事件聚合与 `get_latest_content_event` 排除
+- `test_harness.py`：FakeBrain、ToolStatusMiddleware、artifact block 归一化、最终 `thinking` 载荷、subagent token 过滤、`model_usage` 提取（主/subagent scope + failed run 保留）
+- `test_api.py`：`POST /upload`、`POST /runs` 新契约、`latest_content_event`、`assistant_message.thinking`、并发冲突、失败后续跑、启动恢复、顶层 `usage`（cache_hit_rate、tier 计价、节省、不可计价/零输入边界）
 - `test_workflow_setup.py`：Skill 挂载、四个 subagent、A/B 同回合 task 形状及 task 事件
 - `test_philips_wgq_import.py` / `test_tecan_import.py`：A/B/C、裁决、严格合同与代表性工作簿输出
 - `test_real_image_run.py`：手动真实图片 HTTP 集成测试
 - `test_real_multi_pdf_run.py`：手动真实 HTTP / 模型 / MinerU 集成脚本（确认 agent 会用 `parse_documents` 解析上传 PDF，调用次数与输出格式都由用户请求和 agent 策略决定）
+- `test_minimax_cache_baseline.py`：手动真实 MiniMax-M3 prompt-cache 基线脚本（默认不运行，只通过 HTTP 调 `BASE_URL` 跑两轮打 `model_usage` 基线）
 
 当前仍**不是 pytest 套件**；没有总控 runner，回归按影响范围直接运行对应 `test_*.py` 脚本。
 

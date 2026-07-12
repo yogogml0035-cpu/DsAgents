@@ -61,7 +61,7 @@ Harness 层 (harness.py execute_run)
        stream_mode=["messages","custom","values"],
        version="v2",
      )
-  -> chunk[type=messages] => 主 agent thinking / text_delta；按 lc_agent_name 丢弃 subagent 模型 token
+  -> chunk[type=messages] => 先在 subagent 过滤之前提取 model_usage（含 subagent 调用），再按 lc_agent_name 丢弃 subagent 模型 token，主 agent 发 thinking / text_delta
   -> chunk[type=custom]   => tool_status
   -> chunk[type=values]   => 从 snapshot 派生 tool_call / tool_result / assistant_message（assistant_message 会保留同条 AIMessage 最后一个 thinking 文本；末位 assistant 文本仍作 reply 候选）
   -> 结束 => status=succeeded(reply=assistant_text 或拼接 text_parts)
@@ -93,10 +93,10 @@ Harness 层 (harness.py execute_run)
 事件类型序列（典型成功 run）：
 
 ```text
-status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/tool_result/assistant_message/... -> status(succeeded)
+status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/tool_result/assistant_message/model_usage/... -> status(succeeded)
 ```
 
-`status` 事件同时驱动 `runs` 表的 `status`/`reply`/`error`/`updated_at` 列更新（即 run 状态是事件投影）。`emit_run_status` 校验 status 必须在 `RUN_STATUSES = {queued, running, succeeded, failed}` 内。`latest_content_event` 继续用 `type != 'status'` 取末位内容事件，成功 run 的最终结果通常会落在 `assistant_message`。
+`status` 事件同时驱动 `runs` 表的 `status`/`reply`/`error`/`updated_at` 列更新（即 run 状态是事件投影）。`emit_run_status` 校验 status 必须在 `RUN_STATUSES = {queued, running, succeeded, failed}` 内。`latest_content_event` 用 `type not in ('status','model_usage')` 取末位内容事件（`model_usage` 是成本/缓存观测，不算内容事件），成功 run 的最终结果通常会落在 `assistant_message`。
 
 `values` 不再作为公开业务事件写入 `run_events.type`；它只保留在 `raw` snapshot 中，业务层从 snapshot 中派生 `tool_call`、`tool_result` 和 `assistant_message`。当最终 AIMessage content 同时包含 `thinking` 与 `text` block 时，`assistant_message.payload` 保留最后一个 `thinking` 文本并继续保留最终 `text`；`tests/test_harness.py` 与 `tests/test_api.py` 已覆盖该载荷形状。
 
@@ -160,7 +160,7 @@ status(queued) -> status(running) -> thinking/text_delta/tool_call/tool_status/t
 - `POST /runs` 立即返回 `{"run_id","session_id","status":"queued"}`。
 - 同一 `session_id` 同时只允许一个活跃 run，靠进程内 `threading.Lock`（`session_locks`）+ `active_runs` 字典保护；冲突返回 `409 该会话正在运行`。
 - 启动时 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 把遗留 `queued`/`running` run 标记为 `failed("执行已中断，请重试")`。
-- `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`；未知 run 返回 `404`。
+- `GET /runs/{run_id}` 支持 `after_event_id` 增量；`after_event_id` 只影响 `events[]`，不影响 `latest_content_event`，也不影响顶层 `usage`（`usage` 始终从该 run 全部 `model_usage` 事件汇总）；未知 run 返回 `404`。
 - `POST /upload` 返回 `{"files":[...]}`；每项含 `/artifacts/uploads/<原名>_<上传时间戳>(_n).ext` 路径、清洗后的原名、mime、size；同一请求共用一个上传时间戳，只有真实物理重名时才追加 `_2`、`_3`。`parse_documents` 对单文件会复用源文件 stem 命名 JSON/ZIP（`<stem>.json` / `<stem>.zip`），便于上传/下载路径一一对应。
 
 ## 9. 配置加载
@@ -177,6 +177,6 @@ Philips generator 另从已加载环境读取可选的 `ORACLE_DSN` / `ORACLE_US
 - 没有 session 模块 / session 表 / session 事件回放。
 - 没有 `context_window` 概念（短期上下文全交给 checkpointer + thread_id）。
 - 没有 `RemoveMessage(REMOVE_ALL_MESSAGES)`、`run_turn` / `stream_turn`。
-- 没有 model/tool trace 落库。
+- 没有 model/tool trace 落库；唯一例外是 `model_usage` 事件，只记录每次模型调用的 token 计数与 cache 细节用于成本/缓存观测，不含请求/响应正文，也不进 AgentState/checkpointer/store。
 - 没有业务工作流接口、业务状态表、恢复游标、动态路由 middleware 或通用 A/B 引擎。
 - 没有真正的 one-shot 单函数入口；程序内调用需显式组合 `AgentResources` + `create_harness(...)` + `execute_run(...)`。

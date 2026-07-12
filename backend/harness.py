@@ -39,6 +39,9 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 MAIN_AGENT_NAME = "dsagents-main"
+# Stage 1 records usage for MiniMax-M3 only; this constant is the model name
+# written on every model_usage event. All model calls go through the same model.
+MAIN_AGENT_MODEL = "MiniMax-M3"
 SKILLS_SOURCE = "/skills/"
 
 # deepagents 0.6.12 exposes profile registration, not a create_deep_agent
@@ -155,6 +158,16 @@ class HarnessRuntime:
                 if not isinstance(chunk, dict):
                     continue
                 if chunk["type"] == "messages":
+                    # Extract usage before the subagent filter so subagent model
+                    # cost is captured even though subagent text stays private.
+                    usage = _model_usage(chunk["data"])
+                    if usage is not None:
+                        yield self.resources.runs.emit_run_event(
+                            run_id,
+                            "model_usage",
+                            usage,
+                            raw=chunk,
+                        )
                     if _is_subagent_message(chunk["data"]):
                         continue
                     thinking = _thinking_delta(chunk["data"])
@@ -322,10 +335,54 @@ def _message_delta(data: Any) -> str:
 
 
 def _is_subagent_message(data: Any) -> bool:
-    if not isinstance(data, tuple) or len(data) < 2 or not isinstance(data[1], dict):
-        return False
-    agent_name = data[1].get("lc_agent_name")
-    return isinstance(agent_name, str) and agent_name not in {"", MAIN_AGENT_NAME}
+    return _chunk_agent(data)[0] == "subagent"
+
+
+def _chunk_agent(data: Any) -> tuple[str, str]:
+    """Return (scope, agent_name) for a messages-mode chunk's metadata.
+
+    scope is "subagent" for declared subagent chunks and "main_agent" otherwise,
+    matching the text-filter boundary. agent_name is the lc_agent_name for
+    subagents and MAIN_AGENT_NAME for the main agent.
+    """
+    if isinstance(data, tuple) and len(data) >= 2 and isinstance(data[1], dict):
+        name = data[1].get("lc_agent_name")
+        if isinstance(name, str) and name not in {"", MAIN_AGENT_NAME}:
+            return "subagent", name
+    return "main_agent", MAIN_AGENT_NAME
+
+
+def _model_usage(data: Any) -> dict[str, Any] | None:
+    """Normalize a streamed chunk's usage_metadata into a model_usage payload.
+
+    langchain_anthropic attaches usage_metadata only on the terminal
+    message_delta chunk, so a non-None result is emitted exactly once per model
+    call. cache token details live under input_token_details; the generic
+    cache_creation is forced to 0 by the library when the 5m/1h breakdown is
+    present, so summing them is safe.
+    """
+    message = data[0] if isinstance(data, tuple) and data else data
+    metadata = getattr(message, "usage_metadata", None)
+    if not metadata:
+        return None
+    details = metadata.get("input_token_details") or {}
+    cache_creation = _usage_int(details.get("cache_creation")) + _usage_int(
+        details.get("ephemeral_5m_input_tokens")
+    ) + _usage_int(details.get("ephemeral_1h_input_tokens"))
+    scope, agent_name = _chunk_agent(data)
+    return {
+        "model": MAIN_AGENT_MODEL,
+        "scope": scope,
+        "agent_name": agent_name,
+        "input_tokens": _usage_int(metadata.get("input_tokens")),
+        "output_tokens": _usage_int(metadata.get("output_tokens")),
+        "cache_read_input_tokens": _usage_int(details.get("cache_read")),
+        "cache_creation_input_tokens": cache_creation,
+    }
+
+
+def _usage_int(value: Any) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _thinking_delta(data: Any) -> str:

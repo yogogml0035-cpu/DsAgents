@@ -62,7 +62,15 @@ class FakeBrain:
             "type": "messages",
             "ns": ("task",),
             "data": (
-                AIMessageChunk(content="subagent secret"),
+                AIMessageChunk(
+                    content="subagent secret",
+                    usage_metadata={
+                        "input_tokens": 200,
+                        "output_tokens": 40,
+                        "total_tokens": 240,
+                        "input_token_details": {"cache_read": 50, "cache_creation": 10},
+                    },
+                ),
                 {"langgraph_node": "model", "lc_agent_name": "philips-wgq-extractor-a"},
             ),
         }
@@ -109,7 +117,23 @@ class FakeBrain:
         yield {
             "type": "messages",
             "ns": (),
-            "data": (AIMessageChunk(content=f"{len(history)}]: {text}"), {"langgraph_node": "model"}),
+            "data": (
+                AIMessageChunk(
+                    content=f"{len(history)}]: {text}",
+                    usage_metadata={
+                        "input_tokens": 1000,
+                        "output_tokens": 300,
+                        "total_tokens": 1300,
+                        "input_token_details": {
+                            "cache_read": 600,
+                            "cache_creation": 200,
+                            "ephemeral_5m_input_tokens": 50,
+                            "ephemeral_1h_input_tokens": 30,
+                        },
+                    },
+                ),
+                {"langgraph_node": "model"},
+            ),
         }
         yield {
             "type": "values",

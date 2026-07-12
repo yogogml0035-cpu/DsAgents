@@ -16,6 +16,7 @@ from harness import (
     HarnessRuntime,
     _assistant_message_payload,
     _is_subagent_message,
+    _model_usage,
     _thinking_delta,
 )
 from resources import AgentResources, ResourceConfig
@@ -27,6 +28,7 @@ def run() -> None:
     assert _is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
     assert not _is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
     assert _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
+    _check_model_usage_helper()
     assert _assistant_message_payload(
         AIMessage(
             content=[
@@ -98,6 +100,60 @@ def _check_tool_status_middleware() -> None:
     ]
 
 
+def _check_model_usage_helper() -> None:
+    # No usage_metadata => nothing to record.
+    assert _model_usage((AIMessageChunk(content="x"), {"langgraph_node": "model"})) is None
+    # Main agent call: input_token_details optional, cache fields default to 0.
+    main_usage = _model_usage(
+        (
+            AIMessageChunk(
+                content="x",
+                usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            ),
+            {"langgraph_node": "model"},
+        )
+    )
+    assert main_usage == {
+        "model": "MiniMax-M3",
+        "scope": "main_agent",
+        "agent_name": "dsagents-main",
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    # Subagent call: scope/agent_name come from the same chunk metadata, and
+    # cache_creation sums the generic + 5m + 1h detail fields.
+    sub_usage = _model_usage(
+        (
+            AIMessageChunk(
+                content="x",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 8,
+                    "total_tokens": 108,
+                    "input_token_details": {
+                        "cache_read": 30,
+                        "cache_creation": 0,
+                        "ephemeral_5m_input_tokens": 7,
+                        "ephemeral_1h_input_tokens": 3,
+                    },
+                },
+            ),
+            {"langgraph_node": "model", "lc_agent_name": "tecan-extractor-a"},
+        )
+    )
+    assert sub_usage == {
+        "model": "MiniMax-M3",
+        "scope": "subagent",
+        "agent_name": "tecan-extractor-a",
+        "input_tokens": 100,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 10,
+    }
+
+
 def _check_harness(tmp: str) -> None:
     data_dir = Path(tmp) / "harness-data"
     factory = FakeBrainFactory()
@@ -114,10 +170,12 @@ def _check_harness(tmp: str) -> None:
         assert [event.event_type for event in events] == [
             "status",
             "thinking",
+            "model_usage",
             "text_delta",
             "tool_call",
             "tool_status",
             "tool_result",
+            "model_usage",
             "text_delta",
             "assistant_message",
             "status",
@@ -152,6 +210,23 @@ def _check_harness(tmp: str) -> None:
         }
         assert factory.received_payloads[0] == hello_messages
 
+        # Usage: one main_agent call + one subagent call, summed correctly.
+        # The subagent chunk carried usage but its text never leaks as text_delta.
+        usage_events = [event for event in raw_events if event.event_type == "model_usage"]
+        assert [event.payload["scope"] for event in usage_events] == ["subagent", "main_agent"]
+        assert all(event.payload["model"] == "MiniMax-M3" for event in usage_events)
+        assert "subagent secret" not in "".join(
+            event.payload["content"] for event in raw_events if event.event_type == "text_delta"
+        )
+        agg = resources.runs.aggregate_model_usage("run-h1")
+        assert agg["model_calls"] == 2
+        assert agg["input_tokens"] == 1000 + 200
+        assert agg["output_tokens"] == 300 + 40
+        assert agg["cache_read_input_tokens"] == 600 + 50
+        assert agg["cache_creation_input_tokens"] == (200 + 50 + 30) + 10
+        assert agg["by_agent"][("main_agent", "dsagents-main")]["model_calls"] == 1
+        assert agg["by_agent"][("subagent", "philips-wgq-extractor-a")]["model_calls"] == 1
+
         again_messages = [user_message(text_block("again"))]
         resources.runs.create_run("run-h2", "thread-a", messages_json(again_messages))
         list(harness.execute_run(again_messages, "thread-a", "run-h2"))
@@ -173,6 +248,18 @@ def _check_harness(tmp: str) -> None:
                 "text": ARTIFACT_REFERENCE_HINT.format(path="/artifacts/uploads/demo.png"),
             },
         ]
+
+        # Failed run (own thread so it never perturbs thread-a/b history counts)
+        # still preserves model_usage written before the exception is raised.
+        fail_messages = [user_message(text_block("fail"))]
+        resources.runs.create_run("run-fail", "thread-c", messages_json(fail_messages))
+        list(harness.execute_run(fail_messages, "thread-c", "run-fail"))
+        assert resources.runs.get_run("run-fail").status == "failed"
+        fail_agg = resources.runs.aggregate_model_usage("run-fail")
+        assert fail_agg is not None
+        # The subagent chunk is yielded before the "fail" raise, so its usage is kept.
+        assert fail_agg["model_calls"] == 1
+        assert fail_agg["by_agent"][("subagent", "philips-wgq-extractor-a")]["model_calls"] == 1
 
 
 if __name__ == "__main__":

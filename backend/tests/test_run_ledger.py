@@ -14,6 +14,7 @@ from tests.test_support import messages_json, text_block, user_message
 def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_resources_and_ledger(tmp)
+        _check_model_usage_aggregation(tmp)
 
 
 def _check_resources_and_ledger(tmp: str) -> None:
@@ -140,6 +141,72 @@ def _check_resources_and_ledger(tmp: str) -> None:
     normalized_again = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
     assert normalized_again.get_run("legacy-run").updated_at == normalized_run.updated_at
     assert normalized_again.get_run_events("legacy-run")[0].created_at == normalized.get_run_events("legacy-run")[0].created_at
+
+
+def _check_model_usage_aggregation(tmp: str) -> None:
+    data_dir = Path(tmp) / "data" / "usage"
+    with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
+        # A run with no model_usage events aggregates to None and never counts as
+        # the latest content event.
+        resources.runs.create_run("empty-run", "s-empty", messages_json([user_message(text_block("hi"))]))
+        assert resources.runs.aggregate_model_usage("empty-run") is None
+        resources.runs.emit_run_status("empty-run", "running")
+        resources.runs.emit_run_event("empty-run", "text_delta", {"content": "hi"}, raw={"type": "messages"})
+        assert resources.runs.aggregate_model_usage("empty-run") is None
+        latest = resources.runs.get_latest_content_event("empty-run")
+        assert latest is not None and latest.event_type == "text_delta"
+
+        # A run with several model_usage events across two agents sums correctly.
+        resources.runs.create_run("usage-run", "s-usage", messages_json([user_message(text_block("q"))]))
+        resources.runs.emit_run_status("usage-run", "running")
+        for payload in (
+            {
+                "model": "MiniMax-M3",
+                "scope": "main_agent",
+                "agent_name": "dsagents-main",
+                "input_tokens": 1000,
+                "output_tokens": 100,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 100,
+            },
+            {
+                "model": "MiniMax-M3",
+                "scope": "subagent",
+                "agent_name": "tecan-extractor-a",
+                "input_tokens": 500,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 20,
+            },
+            {
+                "model": "MiniMax-M3",
+                "scope": "main_agent",
+                "agent_name": "dsagents-main",
+                "input_tokens": 2000,
+                "output_tokens": 200,
+                "cache_read_input_tokens": 800,
+                "cache_creation_input_tokens": 0,
+            },
+        ):
+            resources.runs.emit_run_event("usage-run", "model_usage", payload, raw={"type": "messages"})
+        resources.runs.emit_run_status("usage-run", "succeeded", reply="done")
+
+        agg = resources.runs.aggregate_model_usage("usage-run")
+        assert agg is not None
+        assert agg["model_calls"] == 3
+        assert agg["input_tokens"] == 3500
+        assert agg["output_tokens"] == 350
+        assert agg["cache_read_input_tokens"] == 1200
+        assert agg["cache_creation_input_tokens"] == 120
+        assert agg["by_agent"][("main_agent", "dsagents-main")]["model_calls"] == 2
+        assert agg["by_agent"][("main_agent", "dsagents-main")]["input_tokens"] == 3000
+        assert agg["by_agent"][("subagent", "tecan-extractor-a")]["model_calls"] == 1
+        # Per-call records kept for tier-aware pricing.
+        assert [call["input_tokens"] for call in agg["calls"]] == [1000, 500, 2000]
+
+        # model_usage never becomes the latest content event.
+        latest_after = resources.runs.get_latest_content_event("usage-run")
+        assert latest_after is None
 
 
 def _assert_second_precision_timestamp(value: str) -> None:

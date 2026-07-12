@@ -99,3 +99,10 @@
 - **风险**｜Philips/Tecan 的 Excel 模板是二进制资产，格式或固定行位置变化不会产生可读 diff；更新模板时必须重跑对应工作簿断言并人工抽查渲染结果。
 - **风险**｜`backend/skills/` 是源码目录路由，当前 `uv sync` 的 editable 开发运行可用；若未来改为仅分发 wheel，非 Python Skill/模板是否被打包需另行确认。
 - **已确认**｜业务 JSON/Excel 只增不改且无 registry/清理策略；高频运行会持续增长 `data/artifacts/downloads/`，生命周期由部署方管理。
+
+## 14. prompt-cache 观测与成本估算（MiniMax-M3）
+
+- **已确认**｜`model_usage` 事件 + `GET /runs/{run_id}` 顶层 `usage` 已落库。usage 在 `harness.execute_run` 的 `messages` 分支、subagent 文本过滤之前提取终态 `AIMessageChunk.usage_metadata`，每个模型调用仅在非空时写一次；`model` 固定为常量 `"MiniMax-M3"`（第一阶段只有这一个模型，不读 env，避免观测链路引入 env 耦合）。token 计数是原始事实，`estimated_cost_cny` / `estimated_savings_cny` 是**趋势估算**，最终账单以 MiniMax 为准。
+- **已确认**｜`AnthropicPromptCachingMiddleware` 由 `create_deep_agent` 尾栈自动挂，仓库不新增 cache middleware。固定前缀 = `DEFAULT_SYSTEM_PROMPT` + tool schema + SDK 默认 prompt，未注入动态内容，保持被动 prompt cache 友好。
+- **风险**｜定价常量（标准/长上下文两档，CNY/M）硬编码在 `api.py`（`_PRICING_TIERS` / `_PRICEABLE_MODELS` / `pricing_as_of`），未做配置中心；MiniMax 调价或新增模型时需手动改代码并更新 `pricing_as_of` 日期。任一调用不可计价 → 整 run 金额 `null`（不输出系统性偏低的部分金额），token 仍完整。
+- **风险**｜cache hit 取决于 provider 5m ephemeral cache 是否命中，跨会话重复文档只记录数据、不承诺命中；第一阶段不设命中率门禁。库语义（usage 仅在终态 `message_delta` 一次出现）已通过库源码确认，但真实 MiniMax 端点是否回传 `cache_read_input_tokens` / `cache_creation_input_tokens` 需 `test_minimax_cache_baseline.py` 真实跑一轮确认——缺失时这些字段为 0，不影响 input/output token。

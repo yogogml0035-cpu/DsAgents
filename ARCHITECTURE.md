@@ -56,7 +56,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 ## 6. 关键约束
 
 - **run-first**：无 `session.py`、无 session 表、无 `context_window`、无 `RemoveMessage(REMOVE_ALL_MESSAGES)`、无 `run_turn`/`stream_turn`；旧 `from session import run_session` 已删除。
-- **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result`；LangGraph `values` snapshot 只保留在 `raw` 中，最终 `assistant_message.payload` 可带 `thinking` 与 `text`。
+- **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result` / `model_usage`（前七类为业务事件，`model_usage` 为 prompt-cache/成本观测事件，不计入 `latest_content_event`）；LangGraph `values` snapshot 只保留在 `raw` 中，最终 `assistant_message.payload` 可带 `thinking` 与 `text`。
 - **模型流隔离**：临时 subagent 的 thinking/text token 不暴露为公开事件；task 调用/结果和 artifact 路径仍保留。
 - **artifact-only 业务状态**：builder/generator 只消费显式 `/artifacts/...` 路径；每次生成新文件，不扫描 session 或“最近任务”。
 - **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。

@@ -23,6 +23,20 @@ from resources import AgentResources, ResourceConfig
 
 INTERRUPTED_RUN_ERROR = "执行已中断，请重试"
 
+# MiniMax-M3 standard tier pricing (CNY per million tokens). Each model call is
+# priced by its own input size: <=512k uses the standard tier, >512k the long
+# context tier. Cache creation is charged as non-cache-read input. These are
+# trend estimates only; final billing is whatever MiniMax actually invoices.
+PRICING_AS_OF = "2026-07-12"
+_TIER_THRESHOLD_INPUT_TOKENS = 512 * 1024
+# (input_per_m, output_per_m, cache_read_per_m) per tier
+_PRICING_TIERS: dict[str, tuple[float, float, float]] = {
+    "standard": (2.10, 8.40, 0.42),
+    "long_context": (4.20, 16.80, 0.84),
+}
+# Models we know how to price. Unknown model => amounts are null, tokens stay.
+_PRICEABLE_MODELS = {"MiniMax-M3"}
+
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -113,12 +127,14 @@ def create_app(
             run = runs.get_run(run_id)
             events = runs.get_run_events(run_id, after_event_id=after_event_id)
             latest_content_event = runs.get_latest_content_event(run_id)
+            usage = _usage_summary(runs.aggregate_model_usage(run_id))
         except KeyError:
             return JSONResponse(status_code=404, content={"error": f"Unknown run: {run_id}"})
         return {
             "run": _run_body(run),
             "events": [_run_event_body(event) for event in events],
             "latest_content_event": _run_event_body(latest_content_event) if latest_content_event else None,
+            "usage": usage,
         }
 
     @app.post("/upload")
@@ -239,3 +255,70 @@ def _virtual_upload_path(filename: str) -> str:
 def _error_text(exc: Exception) -> str:
     text = str(exc).strip()
     return text or exc.__class__.__name__
+
+
+def _usage_summary(agg: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Layer cache hit rate + tier-aware CNY estimates onto raw token totals.
+
+    Token counts are always the raw facts. If any model call cannot be priced
+    (unknown model), both estimated_* amounts are null for the whole run rather
+    than emitting a systematically-low partial figure. Savings is the discount
+    cache-read gives versus paying standard input price for those tokens.
+    """
+    if agg is None:
+        return None
+    input_tokens = agg["input_tokens"]
+    output_tokens = agg["output_tokens"]
+    cache_read = agg["cache_read_input_tokens"]
+    cache_hit_rate = (cache_read / input_tokens) if input_tokens else None
+
+    priceable = True
+    cost = 0.0
+    savings = 0.0
+    for call in agg.get("calls", []):
+        if call.get("model") not in _PRICEABLE_MODELS:
+            priceable = False
+            break
+        tier = _PRICING_TIERS[
+            "long_context" if call["input_tokens"] > _TIER_THRESHOLD_INPUT_TOKENS else "standard"
+        ]
+        input_per_m, output_per_m, cache_read_per_m = tier
+        # Cache creation is charged as ordinary non-cache-read input.
+        non_cache_read_input = call["input_tokens"] - call["cache_read_input_tokens"]
+        cost += (
+            non_cache_read_input * input_per_m / 1_000_000
+            + call["cache_read_input_tokens"] * cache_read_per_m / 1_000_000
+            + call["output_tokens"] * output_per_m / 1_000_000
+        )
+        savings += call["cache_read_input_tokens"] * (input_per_m - cache_read_per_m) / 1_000_000
+
+    by_agent: list[dict[str, Any]] = []
+    for (scope, name), bucket in sorted(agg.get("by_agent", {}).items()):
+        agent_input = bucket["input_tokens"]
+        by_agent.append({
+            "scope": scope,
+            "agent_name": name,
+            "model_calls": bucket["model_calls"],
+            "input_tokens": agent_input,
+            "output_tokens": bucket["output_tokens"],
+            "cache_read_input_tokens": bucket["cache_read_input_tokens"],
+            "cache_creation_input_tokens": bucket["cache_creation_input_tokens"],
+            "cache_hit_rate": (bucket["cache_read_input_tokens"] / agent_input) if agent_input else None,
+        })
+
+    return {
+        "model_calls": agg["model_calls"],
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": agg["cache_creation_input_tokens"],
+        "cache_hit_rate": cache_hit_rate,
+        "estimated_cost_cny": round(cost, 6) if priceable else None,
+        "estimated_savings_cny": round(savings, 6) if priceable else None,
+        "pricing_as_of": PRICING_AS_OF,
+        "estimated_cost_note": (
+            "Trend estimate only from observed token usage and MiniMax-M3 "
+            "standard pricing; final billing is whatever MiniMax invoices."
+        ),
+        "by_agent": by_agent,
+    }

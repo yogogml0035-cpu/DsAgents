@@ -48,7 +48,7 @@ HarnessRuntime.execute_run(...)
   ├─ brain.stream({"messages": normalized_messages},
   │                config={"configurable":{"thread_id":session_id}},
   │                stream_mode=["messages","custom","values"], version="v2")
-  │    ├─ messages chunk → 仅主 agent thinking / text_delta（subagent token 按 lc_agent_name 过滤）
+  │    ├─ messages chunk → 先在 subagent 过滤之前提取 model_usage（覆盖主 agent + subagent 调用），再仅主 agent thinking / text_delta（subagent 文本 token 按 lc_agent_name 过滤，但 subagent 的 model_usage 仍计入）
   │    ├─ custom   chunk → tool_status（来自 ToolStatusMiddleware）
   │    └─ values   snapshot → tool_call / tool_result / assistant_message（assistant_message 保留最终 AIMessage 的最后一个 thinking 文本；同时更新 reply 候选；values 只保留在 raw）
   ├─ 成功 → emit status=succeeded(reply=...)
@@ -81,11 +81,11 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 | 方法 / 路径 | 行为 | 返回 |
 |---|---|---|
 | `POST /runs` | body `{messages, session_id?}`；`messages[]` 的 `content` 只接受 `text` / `artifact` blocks；同 session 已有运行中 run → `409` | `200 {run_id, session_id, status:"queued"}` |
-| `GET /runs/{run_id}` | query `after_event_id?`；未知 run → `404` | `200 {run, events[], latest_content_event}` |
+| `GET /runs/{run_id}` | query `after_event_id?`；未知 run → `404` | `200 {run, events[], latest_content_event, usage}`（`usage` 始终从该 run 全部 `model_usage` 事件汇总，无模型调用时为 `null`） |
 | `POST /upload` | multipart `files[]`；支持一个或多个文件；只保存不解析 | `200 {files:[{file_path,name,mime_type,size}]}` |
 
 完整契约（请求/响应 JSON 形状、错误码）见 [`INTERFACES.md`](../INTERFACES.md) §1 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
-`after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`。
+`after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`，也不会影响 `usage`（两者都按 run 全量计算）。
 
 `api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。默认启动命令 `scripts/start-backend.bat`：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（无 `--reload`；端口与真实集成测试脚本默认地址一致）。
 `assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `raw.type=="values"` 的最终 AIMessage snapshot；调用方不应直接依赖 `values` 事件类型。
@@ -153,7 +153,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接，未显式开 WAL。`active_runs` 字典残留 `run_id` 可能导致同 session 新 run 误判旧 run 仍活跃（清理时机需确认）。
 - **Oracle thick client 部署依赖**：`oracledb` thick mode 需要 `ORACLE_CLIENT_LIB_DIR` 指向 Oracle instant client 目录；该 instant client 已从仓库删除（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §3/§8），生产部署需外部提供。缺失时 `philips_wgq_import._oracle_units` 优雅降级，生成的核注清单将缺法定单位字段。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
-- **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents、投票与 Excel 关键单元格；无 pytest/CI/lint gate，真实模型/MinerU/Oracle 仍需独立验证。
+- **测试覆盖**：本地 assert 脚本覆盖 Skills/Subagents、投票与 Excel 关键单元格，以及 prompt-cache usage 观测（`model_usage` 事件、`GET /runs` 顶层 `usage`、tier 计价、failed run 保留）；无 pytest/CI/lint gate，真实模型/MinerU/Oracle 仍需独立验证。另有默认不运行的 `test_minimax_cache_baseline.py` 真实 MiniMax 基线脚本。
 
 **验证入口**：
 
