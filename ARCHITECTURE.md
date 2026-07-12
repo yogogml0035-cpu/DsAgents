@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-10）已核对当前工作树：HTTP/run-first 边界保持不变；默认能力新增 Philips/Tecan Skills、四个临时 extractor 与 immutable JSON/Excel 工作流。
+> 本轮刷新（2026-07-11）已对齐 backend 全部 7 份事实文档（同日刷新，HEAD `7126b83`）：run-first HTTP/ledger、Skills/Subagents、Philips/Tecan 八个业务工具、model_usage/tier 计价与 Oracle/Excel 边界均无架构性变化；仅补正稳定模块清单（11 个扁平顶层 `.py`，补回 `artifact_names.py`）。
 
 ## 1. 系统定位
 
@@ -33,19 +33,22 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 
 `backend/` 是扁平顶层模块（非 Python 包）。顶层 `.py` 的系统级职责概览（不展开实现，详见 [`backend/.planning/codebase/STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)）：
 
+`backend/` 是扁平顶层模块（非 Python 包），当前 11 个 `.py` 全部经 `pyproject.toml` 的 `py-modules` 直接安装为顶层模块。顶层模块的系统级职责概览（不展开实现，详见 [`backend/.planning/codebase/STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)）：
+
 | 模块 | 系统级职责 |
 |------|-----------|
-| `api.py` | FastAPI HTTP 适配层（run-first 三端点：`POST /runs` / `GET /runs/{run_id}` / `POST /upload` + 同 session 单飞锁 + 启动恢复） |
-| `harness.py` | run 执行核心 + Brain/Hands/Tools/Skills/Subagents 装配 + subagent token 隔离 |
-| `hands.py` | 执行器/中间件抽象（`Hands` Protocol + `ToolStatusMiddleware`） |
-| `resources.py` | 资源装配器（run ledger + checkpointer + store + `/artifacts/`/`/skills/` 路由） |
-| `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢） |
-| `tools.py` | 工具抽象 + MinerU/解压工具 + 八个 Philips/Tecan 工具注册 |
-| `subagents.py` | 四个声明式临时 extractor 及 structured response 合同 |
+| `api.py` | FastAPI HTTP 适配层（run-first 三端点：`POST /runs` / `GET /runs/{run_id}` / `POST /upload` + 同 session 单飞锁 + 启动恢复 + 顶层 `usage`/tier 计价） |
+| `harness.py` | run 执行核心 + Brain/BrainFactory（Protocol）+ Skills/Subagents 装配 + subagent token 隔离 + `.env` 加载（`MINIMAX_*`） |
+| `hands.py` | 执行器抽象（`Hands` Protocol + `ToolStatusHands` / `ToolStatusMiddleware`） |
+| `resources.py` | 资源装配器（`AgentResources` context manager：run ledger + checkpointer + store + `CompositeBackend` 路由） |
+| `run_ledger.py` | SQLite run ledger（`runs` + `run_events`，事件源模型 + 大 payload 外溢 + 时区迁移 + `aggregate_model_usage`） |
+| `tools.py` | 工具抽象 + MinerU/解压通用工具 + 八个 Philips/Tecan 工具的默认注册入口 + `.env` 加载（`MINERU_*`） |
+| `subagents.py` | 四个声明式临时 extractor 及 `ExtractionReference` structured response 合同 |
 | `philips_wgq_import.py` / `tecan_import.py` | 各业务的严格 artifact 合同、投票/裁决、Excel 规则。Philips 侧含可选 Oracle thick mode 法定单位查询 |
-| `workflow_artifacts.py` | 安全路径、唯一文件名和 immutable JSON 共享 helper |
+| `workflow_artifacts.py` | `/artifacts/` 安全路径解析、唯一下载名（`unique_download_path` 原子占位）、immutable JSON 读写 |
+| `artifact_names.py` | 共享 artifact 命名 helper：文件名清洗、`<stem>_<timestamp>(_n).ext` 生成、上传后缀识别 |
 
-固定数据目录 `backend/data/`（与 CWD 无关）：三条逻辑 SQLite 通道 + `artifacts/`（上传、MinerU、业务 JSON/Excel）+ `internal/run-events/`（大 payload 外溢）。Skill 指令和模板来自只读源码目录 `backend/skills/`。
+固定数据目录 `backend/data/`（路径由 `ResourceConfig` 决定，与 CWD 无关）：三条逻辑 SQLite 通道（`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db`，互不共享连接）+ `artifacts/`（`uploads/` 上传源、`downloads/` MinerU/解压产物与不可覆盖业务 JSON/Excel）+ `internal/run-events/`（大 payload 外溢，仅真正 spill 时创建）。Skill 指令、references 与三个 Excel 模板来自只读源码目录 `backend/skills/`。
 
 ## 5. 系统层面维护约定
 
@@ -59,7 +62,7 @@ backend 内部架构、目录组织、配置加载、事件源模型等实现事
 - **事件规范化**：公开 run event type 固定为 `status` / `thinking` / `text_delta` / `assistant_message` / `tool_call` / `tool_status` / `tool_result` / `model_usage`（前七类为业务事件，`model_usage` 为 prompt-cache/成本观测事件，不计入 `latest_content_event`）；LangGraph `values` snapshot 只保留在 `raw` 中，最终 `assistant_message.payload` 可带 `thinking` 与 `text`。
 - **模型流隔离**：临时 subagent 的 thinking/text token 不暴露为公开事件；task 调用/结果和 artifact 路径仍保留。
 - **artifact-only 业务状态**：builder/generator 只消费显式 `/artifacts/...` 路径；每次生成新文件，不扫描 session 或“最近任务”。
-- **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`；模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `pyproject.toml` 的 `py-modules`；无 `python -m backend.*`。
+- **扁平顶层模块 + 绝对导入**：`backend/` 不是包，无 `__init__.py` / `__main__.py`（`tests/__init__.py` 是例外，使 `python -m tests.test_*` 可导入）；当前 11 个顶层 `.py` 全部经 `pyproject.toml` 的 `py-modules` 安装为顶层模块，模块内一律 `from harness import ...` 这类绝对导入。新增顶层 `.py` 必须同步追加到 `py-modules`；无 `python -m backend.*`。
 - **`uv` 包管理**：安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
 - **`.env` 加载**：由 `harness.py` 与 `tools.py` 在导入时 `load_dotenv(Path(__file__).with_name(".env"))`（删除 `session.py` 后保留配置加载点）。
 - **run ledger 时间戳**：统一写本机时区秒级文本 `YYYY-MM-DD HH:mm:ss`；首次进入 `AgentResources` 时由 `_migrate`（`pragma user_version`）把旧 UTC / naive UTC 文本幂等平移到本机时区（commit `c8cc563`）。

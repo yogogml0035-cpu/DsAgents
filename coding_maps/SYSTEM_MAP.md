@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-10）已核对当前工作树：run-first HTTP/ledger 不变；默认 DeepAgent 新增 Philips/Tecan Skills、四个临时 extractor、八个业务工具与 Excel/Oracle 边界。
+> 本轮刷新（2026-07-11）已核对当前工作树（HEAD `7126b83`）与全部 7 份 backend 事实文档（同日刷新）：run-first HTTP/ledger、Skills/Subagents、Philips/Tecan 八个业务工具、model_usage/tier 计价、Oracle 与 Excel 边界均与最新事实层一致，无架构性变化。
 
 ## 1. 系统目的和仓库形态
 
@@ -181,4 +181,4 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 
 刷新时参考的旧版：`coding_maps/SYSTEM_MAP.md`（保留仍正确的调用链与接口面，改写/补全系统层视图）。
 
-本轮（2026-07-10）在刷新 7 个 backend fact docs 后同步 Skills/Subagents、业务 artifact、Excel/Oracle、测试与风险边界。
+本轮（2026-07-11）在 7 份 backend 事实文档（ARCHITECTURE / STRUCTURE / STACK / INTEGRATIONS / CONVENTIONS / TESTING / CONCERNS）同日刷新后做确认性同步：逐项比对调用链、HTTP 边界、provider/存储/artifacts、model_usage/tier 计价、风险清单与阅读指南，确认系统层视图与最新事实层一致；仅更新刷新日期、HEAD 引用与末尾说明，保持文档时间线与事实文档对齐。
