@@ -16,7 +16,7 @@ python -m tests.test_api
 
 backend 测试统一放在 `backend/tests/test_*.py`。业务工作流改动运行 `test_workflow_setup`、`test_philips_wgq_import`、`test_tecan_import`，并复跑 `test_tools`、`test_harness`、`test_api`；真实外部集成脚本保持独立。
 
-`python -m tests.test_run_ledger` — run ledger 事件存储、时区迁移、状态机的本地 assert 脚本。
+`python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机的本地 assert 脚本。
 
 真实图片 HTTP / 模型集成脚本默认跳过；只有显式设置 `DSAGENTS_RUN_REAL_IMAGE_TEST=1` 时才触达真实服务。
 
@@ -24,7 +24,7 @@ backend 测试统一放在 `backend/tests/test_*.py`。业务工作流改动运�
 
 ```powershell
 cd backend
-uv run uvicorn api:app --host 0.0.0.0 --port 8500
+uv run uvicorn dsagents.api:app --host 0.0.0.0 --port 8500
 ```
 
 或直接运行根级脚本 `scripts/start-backend.bat`（等价命令，会自动切到 `backend/` 再启动）。
@@ -49,6 +49,14 @@ curl "http://127.0.0.1:8500/runs/<run_id>"
 
 轮询增量事件时可加 `?after_event_id=<event_id>`；该游标只影响返回的 `events[]`，不影响 `latest_content_event`。
 
+取消一个活跃 run：
+
+```powershell
+curl -X POST http://127.0.0.1:8500/runs/<run_id>/cancel
+```
+
+活跃 run 返回 `202`（协作 drain，最终投影为 `cancelled`）；已 `cancelling`/`cancelled` 返回 `200`；已 `succeeded`/`failed` 返回 `409`；不存在返回 `404`。
+
 常见办公文件和任意图片都可以先用 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型的多模态能力。
 
 ## 程序内调用
@@ -58,8 +66,7 @@ curl "http://127.0.0.1:8500/runs/<run_id>"
 如需程序内调用，用：
 
 ```python
-from resources import AgentResources, ResourceConfig
-from harness import create_harness
+from dsagents.runtime import AgentResources, ResourceConfig, create_harness
 ```
 
 然后显式创建 `messages`、写入 run、执行 `execute_run(...)`、再从 `resources.runs.get_run(run_id)` 读取结果。例如：
@@ -67,8 +74,7 @@ from harness import create_harness
 ```python
 import json
 
-from resources import AgentResources, ResourceConfig
-from harness import create_harness
+from dsagents.runtime import AgentResources, ResourceConfig, create_harness
 
 messages = [
     {

@@ -7,23 +7,23 @@ from unittest.mock import patch
 
 from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage
 
-from harness import (
+from dsagents.runtime.agent import (
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
-    _snapshot_events,
+    workflow_subagents,
 )
-from resources import AgentResources, ResourceConfig
-from subagents import workflow_subagents
+from dsagents.runtime.execution import _update_events
+from dsagents.runtime.resources import AgentResources, ResourceConfig
 
 
 def run() -> None:
-    skills_root = Path(__file__).resolve().parents[1] / "skills"
-    philips = (skills_root / "philips-wgq-import" / "SKILL.md").read_text(encoding="utf-8")
-    tecan = (skills_root / "tecan-import" / "SKILL.md").read_text(encoding="utf-8")
+    skills_root = Path(__file__).resolve().parents[1] / "dsagents" / "skills"
+    philips = (skills_root / "philipswgqimport" / "SKILL.md").read_text(encoding="utf-8")
+    tecan = (skills_root / "tecanimport" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
     assert len(tecan.splitlines()) <= 100
     assert "同一个主模型回合并行" in philips
@@ -39,6 +39,9 @@ def run() -> None:
         "tecan-extractor-b",
     ]
     assert all(len(spec["tools"]) == 1 for spec in specs)
+    # Each declarative SubAgent installs its own runtime middleware (telemetry +
+    # no-progress) since they do not inherit the main agent's middleware.
+    assert all(len(spec["middleware"]) == 2 for spec in specs)
     assert all(isinstance(spec["response_format"], ToolStrategy) for spec in specs)
     assert all(
         spec["permissions"]
@@ -48,7 +51,7 @@ def run() -> None:
 
     sentinel = object()
     resources = SimpleNamespace(backend=object(), checkpointer=object(), store=object())
-    with patch("harness.create_deep_agent", return_value=sentinel) as create:
+    with patch("dsagents.runtime.agent.create_deep_agent", return_value=sentinel) as create:
         assert DeepAgentsBrainFactory(model="anthropic:test").create(
             resources=resources,
             middleware=[],
@@ -67,13 +70,15 @@ def run() -> None:
             listing = mounted.backend.ls("/skills/")
             assert listing.error is None
             paths = {entry["path"].rstrip("/") for entry in listing.entries}
-            assert "/skills/philips-wgq-import" in paths
-            assert "/skills/tecan-import" in paths
-            skill = mounted.backend.read("/skills/philips-wgq-import/SKILL.md")
+            assert "/skills/philipswgqimport" in paths
+            assert "/skills/tecanimport" in paths
+            skill = mounted.backend.read("/skills/philipswgqimport/SKILL.md")
             assert skill.error is None and skill.file_data is not None
             assert "philips-wgq-import" in skill.file_data["content"]
 
-    extraction_request = "read /artifacts/downloads/source.json and extract the exact Philips fields"
+    # _update_events turns an `updates`-mode node diff into tool_execution /
+    # assistant_message events. Two tool calls on one assistant message -> two
+    # tool_execution entries; a terminal text message -> one assistant_message.
     task_message = AIMessage(
         content="",
         id="task-message",
@@ -81,45 +86,26 @@ def run() -> None:
             {
                 "id": f"task-call-{name}",
                 "name": "task",
-                "args": {
-                    "subagent_type": f"philips-wgq-extractor-{name}",
-                    "description": extraction_request,
-                },
+                "args": {"subagent_type": f"philips-wgq-extractor-{name}", "description": "go"},
             }
             for name in ("a", "b")
         ],
     )
-    assert len(task_message.tool_calls) == 2
-    assert {call["args"]["description"] for call in task_message.tool_calls} == {extraction_request}
     events = list(
-        _snapshot_events(
-            {
-                "messages": [
-                    task_message,
-                    *[
-                        ToolMessage(
-                            content=(
-                                f'{{"extractor":"philips-wgq-extractor-{name}",'
-                                f'"artifact_path":"/artifacts/downloads/{name}.json"}}'
-                            ),
-                            id=f"task-result-{name}",
-                            tool_call_id=f"task-call-{name}",
-                            name="task",
-                        )
-                        for name in ("a", "b")
-                    ],
-                ]
-            },
-            seen_tool_call_ids=set(),
-            seen_tool_result_ids=set(),
-            seen_assistant_message_ids=set(),
-            tool_call_names={},
+        _update_events(
+            {"agent": {"messages": [task_message]}}
         )
     )
-    assert [event[0] for event in events] == ["tool_call", "tool_call", "tool_result", "tool_result"]
-    assert all(event[1]["name"] == "task" for event in events[:2])
-    assert "/artifacts/downloads/a.json" in events[2][1]["text"]
-    assert "/artifacts/downloads/b.json" in events[3][1]["text"]
+    assert [event[0] for event in events] == ["tool_execution", "tool_execution"]
+    assert all(event[1]["name"] == "task" for event in events)
+
+    final = AIMessage(
+        content=[{"type": "thinking", "thinking": "plan"}, {"type": "text", "text": "done"}],
+        id="final-message",
+    )
+    assert list(_update_events({"agent": {"messages": [final]}})) == [
+        ("assistant_message", {"message_id": "final-message", "thinking": "plan", "text": "done"})
+    ]
 
 
 if __name__ == "__main__":

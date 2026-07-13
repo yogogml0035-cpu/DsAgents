@@ -8,15 +8,13 @@ from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
-from tecan_import import (
+from dsagents.integrations.artifacts import read_json_artifact, resolve_artifact_path
+from dsagents.skills.tecanimport.scripts.tools import (
     _validate_extraction,
-    build_tecan_canonical,
-    generate_tecan_documents,
+    generate_tecan_import,
     normalize_pn,
-    save_tecan_adjudication,
     save_tecan_extraction,
 )
-from workflow_artifacts import read_json_artifact, resolve_artifact_path
 
 
 def run() -> None:
@@ -34,13 +32,14 @@ def run() -> None:
         _information_fixture(uploads / "设备信息.xlsx")
         _conflicting_information_fixture(uploads / "配件信息.xlsx")
 
-        with patch("workflow_artifacts.artifacts_root", return_value=artifacts):
+        with patch("dsagents.integrations.artifacts.artifacts_root", return_value=artifacts):
             base = _extraction()
             a = _save(base, "tecan-extractor-a")
             b = _save(base, "tecan-extractor-b")
 
-            consistent = _build([a, b])
-            assert consistent["status"] == "canonical"
+            # A/B consistent -> one-shot generate.
+            consistent = _generate([a, b])
+            assert consistent["status"] == "generated"
             canonical = read_json_artifact(consistent["canonical_artifact"])
             assert canonical["currency"] == "USD"
             assert canonical["logistics"] == {"pieces": 2, "gross_weight": 12.5, "net_weight": 5}
@@ -49,74 +48,75 @@ def run() -> None:
             assert sum(item["gross_weight"] for item in canonical["items"]) == 12.5
             assert any(check["field"] == "items.P200.source_sheet" for check in canonical["manual_checks"])
 
-            assert _build([a, "/artifacts/downloads/missing.json"])["status"] == "needs_c"
+            # Only one A/B extractor -> needs C.
+            one_failed = _generate([a, "/artifacts/downloads/missing.json"])
+            assert one_failed["code"] == "input_problems"
+            assert any("extractor C" in p["issue"] for p in one_failed["problems"])
 
+            # A/B conflict on gross_weight -> needs C.
             conflict = copy.deepcopy(base)
             conflict["logistics"]["gross_weight"] = _field(13)
             conflict_b = _save(conflict, "tecan-extractor-b")
-            assert _build([a, conflict_b])["status"] == "needs_c"
-            premature = save_tecan_adjudication(
+            conflict_result = _generate([a, conflict_b])
+            assert conflict_result["code"] == "input_problems"
+            assert any("extractor C" in p["issue"] for p in conflict_result["problems"])
+
+            # Premature decisions on A/B conflict -> input_problems.
+            premature = _generate(
                 [a, conflict_b],
-                [{"conflict_id": "logistics.gross_weight", "value": 12.5, "reason": "回查"}],
-            )["artifact_path"]
-            try:
-                _build([a, conflict_b], adjudication_artifact=premature)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("A/B conflict must require extractor C before adjudication")
+                decisions=[{"conflict_id": "logistics.gross_weight", "value": 12.5, "reason": "回查"}],
+            )
+            assert premature["code"] == "input_problems"
+            assert any("C 抽取尚未完成" in p["issue"] for p in premature["problems"])
 
-            assert _build(
+            # All extractions missing -> input_problems.
+            all_missing = _generate(
                 ["/artifacts/downloads/missing-a.json", "/artifacts/downloads/missing-b.json"]
-            )["status"] == "needs_input"
+            )
+            assert all_missing["code"] == "input_problems"
 
+            # C alone (consistent) -> generate.
             c = _save(base, "tecan-extractor-c")
-            assert _build([c])["status"] == "canonical"
+            assert _generate([c])["status"] == "generated"
 
+            # A/B/C majority on pieces -> generate with pieces=2.
             vote_b = copy.deepcopy(base)
             vote_b["logistics"]["pieces"] = _field(3)
             vote_b_path = _save(vote_b, "tecan-extractor-b")
             vote_c = copy.deepcopy(base)
             vote_c["logistics"]["pieces"] = _field(2)
             vote_c_path = _save(vote_c, "tecan-extractor-c")
-            majority = _build([a, vote_b_path, vote_c_path])
-            assert majority["status"] == "canonical"
+            majority = _generate([a, vote_b_path, vote_c_path])
+            assert majority["status"] == "generated"
             assert read_json_artifact(majority["canonical_artifact"])["logistics"]["pieces"] == 2
 
+            # A/B/C conflict on pieces with no decision -> input_problems on that field.
             vote_c["logistics"]["pieces"] = _field(4)
             no_majority_c = _save(vote_c, "tecan-extractor-c")
-            unresolved = _build([a, vote_b_path, no_majority_c])
-            assert unresolved["status"] == "needs_adjudication"
-            assert unresolved["conflicts"] == [
-                {
-                    "conflict_id": "logistics.pieces",
-                    "field": "logistics.pieces",
-                    "values": [
-                        {"extractor": "tecan-extractor-a", "value": 2},
-                        {"extractor": "tecan-extractor-b", "value": 3},
-                        {"extractor": "tecan-extractor-c", "value": 4},
-                    ],
-                }
-            ]
-            adjudication = save_tecan_adjudication(
-                [a, vote_b_path, no_majority_c],
-                [{"conflict_id": "logistics.pieces", "value": 2, "reason": "回查确认"}],
-            )["artifact_path"]
-            resolved = _build(
-                [a, vote_b_path, no_majority_c],
-                adjudication_artifact=adjudication,
+            unresolved = _generate([a, vote_b_path, no_majority_c])
+            assert unresolved["code"] == "input_problems"
+            assert any(
+                p["location"] == "logistics.pieces" and "不一致" in p["issue"] for p in unresolved["problems"]
             )
-            assert resolved["status"] == "canonical"
 
+            # Same A/B/C conflict resolved by an inline decision -> generate.
+            resolved = _generate(
+                [a, vote_b_path, no_majority_c],
+                decisions=[{"conflict_id": "logistics.pieces", "value": 2, "reason": "回查确认"}],
+            )
+            assert resolved["status"] == "generated"
+
+            # All extractors jointly missing gross_weight -> input_problems.
             missing = copy.deepcopy(base)
             missing["logistics"]["gross_weight"] = _field(None, "low")
             missing_a = _save(missing, "tecan-extractor-a")
             missing_b = _save(missing, "tecan-extractor-b")
-            assert _build([missing_a, missing_b])["status"] == "needs_c"
             missing_c = _save(missing, "tecan-extractor-c")
-            required = _build([missing_a, missing_b, missing_c])
-            assert required == {"status": "needs_input", "missing": ["logistics.gross_weight"]}
+            required = _generate([missing_a, missing_b, missing_c])
+            assert required["code"] == "input_problems"
+            assert any(p["location"] == "logistics.gross_weight" for p in required["problems"])
 
+            # Old extraction contract is rejected.
             try:
                 _validate_extraction(
                     {
@@ -131,37 +131,26 @@ def run() -> None:
             else:
                 raise AssertionError("old Tecan extraction contract must be rejected")
 
-            mixed = _build([a, b], order="/artifacts/uploads/mixed-currency.xlsx")
-            assert mixed["status"] == "needs_input"
-            assert mixed["reason"] == "order_mixed_currency"
+            # Mixed currency order -> input_problems.
+            mixed = _generate([a, b], order="/artifacts/uploads/mixed-currency.xlsx")
+            assert mixed["code"] == "input_problems"
+            assert any("币种" in p["issue"] for p in mixed["problems"])
 
+            # Conflicting information records for a PN -> input_problems (no more
+            # info_source_preference / pn_info_source_overrides).
             information = [
                 "/artifacts/uploads/设备信息.xlsx",
                 "/artifacts/uploads/配件信息.xlsx",
             ]
-            info_conflict = _build([a, b], information=information)
-            assert info_conflict["status"] == "needs_input"
-            assert info_conflict["reason"] == "information_conflict"
-            assert info_conflict["conflicts"][0]["pn"] == "P100"
-
-            selected = _build(
-                [a, b],
-                information=information,
-                pn_info_source_overrides={"P100": "配件"},
+            info_conflict = _generate([a, b], information=information)
+            assert info_conflict["code"] == "input_problems"
+            assert any(
+                p["location"] == "information.P100" and "不一致" in p["issue"]
+                for p in info_conflict["problems"]
             )
-            assert selected["status"] == "canonical"
-            selected_canonical = read_json_artifact(selected["canonical_artifact"])
-            assert selected_canonical["items"][0]["description"] == "Accessory P100"
-            assert selected_canonical["source_artifacts"]["information"] == information
 
-            equipment = _build([a, b], information=information, info_source_preference="equipment")
-            assert equipment["status"] == "canonical"
-            assert read_json_artifact(equipment["canonical_artifact"])["items"][0]["description"] == "Device P100"
-
-            generated = generate_tecan_documents(consistent["canonical_artifact"])
-            assert generated["status"] == "generated"
-            assert len(generated["artifacts"]) == 1
-            _check_workbook(generated["artifacts"][0])
+            # Generated workbook carries the expected cell values.
+            _check_workbook(consistent["artifacts"][0])
 
 
 def _field(value: object, confidence: str = "high") -> dict[str, object]:
@@ -184,17 +173,17 @@ def _save(payload: dict[str, object], extractor: str) -> str:
     )["artifact_path"]
 
 
-def _build(
+def _generate(
     paths: list[str],
     *,
     order: str = "/artifacts/uploads/order.xlsx",
     information: list[str] | None = None,
     **kwargs: object,
 ) -> dict[str, object]:
-    return build_tecan_canonical(
-        paths,
-        order,
-        information or ["/artifacts/uploads/设备信息.xlsx"],
+    return generate_tecan_import(
+        extraction_artifacts=paths,
+        order_artifact=order,
+        information_artifacts=information or ["/artifacts/uploads/设备信息.xlsx"],
         **kwargs,
     )
 

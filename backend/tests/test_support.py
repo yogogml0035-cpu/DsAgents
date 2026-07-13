@@ -17,6 +17,11 @@ class StreamControl:
 
 
 class FakeBrain:
+    """Mock langgraph brain. Yields a scripted v2 stream with stream_mode
+    ["messages", "custom", "updates"] and subgraphs=True, exercising the new
+    event pipeline: model_usage, thinking, text_delta, tool_execution,
+    tool_progress, assistant_message."""
+
     def __init__(
         self,
         threads: dict[str, list[str]],
@@ -30,8 +35,9 @@ class FakeBrain:
     def stream(self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: object):
         assert isinstance(payload["messages"], list)
         assert payload["messages"]
-        assert kwargs["stream_mode"] == ["messages", "custom", "values"]
+        assert kwargs["stream_mode"] == ["messages", "custom", "updates"]
         assert kwargs["version"] == "v2"
+        assert kwargs.get("subgraphs") is True
         assert config is not None
         thread_id = config["configurable"]["thread_id"]
         messages = deepcopy(payload["messages"])
@@ -41,12 +47,7 @@ class FakeBrain:
         text = _message_text(messages[-1]["content"])
         history = self.threads.setdefault(thread_id, [])
         history.append(text)
-        yield {
-            "type": "values",
-            "ns": (),
-            "data": {"messages": messages},
-            "interrupts": (),
-        }
+        # 1. thinking chunk (main agent)
         yield {
             "type": "messages",
             "ns": (),
@@ -58,6 +59,7 @@ class FakeBrain:
                 {"langgraph_node": "model"},
             ),
         }
+        # 2. subagent message chunk (usage captured, text filtered out)
         yield {
             "type": "messages",
             "ns": ("task",),
@@ -86,34 +88,40 @@ class FakeBrain:
             "name": "read_file",
             "args": {"file_path": "/artifacts/uploads/demo.jpg"},
         }
+        # 3. main-agent text delta
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo["), {"langgraph_node": "model"})}
+        # 4. update chunk carrying the assistant tool-call request -> tool_execution
         yield {
-            "type": "values",
+            "type": "updates",
             "ns": (),
             "data": {
-                "messages": [
-                    AIMessage(content="", id=f"assistant-tool-{thread_id}-{len(history)}", tool_calls=[tool_call])
-                ]
+                "agent": {
+                    "messages": [
+                        AIMessage(content="", id=f"assistant-tool-{thread_id}-{len(history)}", tool_calls=[tool_call])
+                    ]
+                }
             },
-            "interrupts": (),
         }
+        # 5. custom chunk: parse_documents progress -> tool_progress
         yield {"type": "custom", "ns": (), "data": {"name": "parse_documents", "status": "started"}}
+        # 6. update chunk carrying the tool result (ToolMessage, role=tool -> not mapped)
         yield {
-            "type": "values",
+            "type": "updates",
             "ns": (),
             "data": {
-                "messages": [
-                    AIMessage(content="", id=f"assistant-tool-{thread_id}-{len(history)}", tool_calls=[tool_call]),
-                    ToolMessage(
-                        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}],
-                        id=f"tool-result-{thread_id}-{len(history)}",
-                        tool_call_id=tool_call["id"],
-                        name="read_file",
-                    ),
-                ]
+                "tools": {
+                    "messages": [
+                        ToolMessage(
+                            content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}],
+                            id=f"tool-result-{thread_id}-{len(history)}",
+                            tool_call_id=tool_call["id"],
+                            name="read_file",
+                        )
+                    ]
+                }
             },
-            "interrupts": (),
         }
+        # 7. main-agent terminal chunk with usage_metadata -> model_usage + text_delta
         yield {
             "type": "messages",
             "ns": (),
@@ -135,22 +143,24 @@ class FakeBrain:
                 {"langgraph_node": "model"},
             ),
         }
+        # 8. update chunk carrying the final assistant message -> assistant_message
         yield {
-            "type": "values",
+            "type": "updates",
             "ns": (),
             "data": {
-                "messages": [
-                    AIMessage(
-                        content=[
-                            {"type": "thinking", "thinking": "plan: "},
-                            {"type": "text", "text": reply},
-                        ],
-                        id=f"assistant-final-{thread_id}-{len(history)}",
-                        response_metadata={"model_provider": "anthropic"},
-                    )
-                ]
+                "agent": {
+                    "messages": [
+                        AIMessage(
+                            content=[
+                                {"type": "thinking", "thinking": "plan: "},
+                                {"type": "text", "text": reply},
+                            ],
+                            id=f"assistant-final-{thread_id}-{len(history)}",
+                            response_metadata={"model_provider": "anthropic"},
+                        )
+                    ]
+                }
             },
-            "interrupts": (),
         }
 
 

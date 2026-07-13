@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
+import re
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-from api import INTERRUPTED_RUN_ERROR
-from resources import AgentResources, ResourceConfig
-from run_ledger import SqliteRunLedger
+from dsagents.api import INTERRUPTED_RUN_ERROR
+from dsagents.runtime.resources import AgentResources, ResourceConfig
+from dsagents.runtime.runs import SqliteRunLedger
 from tests.test_support import messages_json, text_block, user_message
 
 
@@ -47,18 +46,19 @@ def _check_resources_and_ledger(tmp: str) -> None:
             "run-1",
             "assistant_message",
             {"message_id": "msg-1", "text": "draft"},
-            raw={"type": "values", "data": {"messages": [{"id": "msg-1", "type": "ai", "content": "draft"}]}},
+            raw={"type": "updates", "data": {"messages": [{"id": "msg-1", "type": "ai", "content": "draft"}]}},
         )
         resources.runs.emit_run_status("run-1", "succeeded", reply="ok")
         snapshot = resources.runs.get_run("run-1")
         assert snapshot.status == "succeeded"
         assert snapshot.reply == "ok"
-        _assert_second_precision_timestamp(snapshot.created_at)
-        _assert_second_precision_timestamp(snapshot.updated_at)
+        # Fresh schema: UTC ISO-8601 millisecond timestamps.
+        assert _is_utc_iso_millisecond(snapshot.created_at)
+        assert _is_utc_iso_millisecond(snapshot.updated_at)
         run_events = resources.runs.get_run_events("run-1")
         assert [event.event_type for event in run_events] == ["status", "status", "assistant_message", "status"]
-        assert all(_is_second_precision_timestamp(event.created_at) for event in run_events)
-        assert run_events[2].raw["type"] == "values"
+        assert all(_is_utc_iso_millisecond(event.created_at) for event in run_events)
+        assert run_events[2].raw["type"] == "updates"
         latest_content = resources.runs.get_latest_content_event("run-1")
         assert latest_content is not None
         assert latest_content.event_id == run_events[2].event_id
@@ -68,7 +68,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
         resources.runs.emit_run_event("run-2", "thinking", {"content": "plan"}, raw={"type": "messages"})
         resources.runs.emit_run_event(
             "run-2",
-            "tool_status",
+            "tool_execution",
             {"name": "demo", "status": "started"},
             raw={"type": "custom", "data": {"name": "demo", "status": "started"}},
         )
@@ -99,7 +99,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
         "big-run",
         "assistant_message",
         {"message_id": "big-msg", "text": "x" * 100},
-        raw={"type": "values", "data": {"messages": [{"id": "big-msg", "type": "ai", "content": "x" * 100}]}},
+        raw={"type": "updates", "data": {"messages": [{"id": "big-msg", "type": "ai", "content": "x" * 100}]}},
     )
     large_event = oversized.get_run_events("big-run")[-1]
     assert large_event.payload["text"] == "x" * 100
@@ -111,36 +111,8 @@ def _check_resources_and_ledger(tmp: str) -> None:
     assert any(oversized_run_events_dir.glob("*.json"))
     assert not (data_dir / "artifacts" / "run-events").exists()
 
-    legacy_db = data_dir / "legacy.db"
-    legacy = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
-    legacy.create_run("legacy-run", "legacy-session", messages_json([user_message(text_block("legacy"))]))
-    with sqlite3.connect(legacy_db) as conn:
-        conn.execute(
-            """
-            update runs
-            set created_at = ?, updated_at = ?
-            where run_id = ?
-            """,
-            ("2026-07-07T08:18:59.740303+00:00", "2026-07-07 09:42:01", "legacy-run"),
-        )
-        conn.execute(
-            """
-            update run_events
-            set created_at = ?
-            where run_id = ?
-            """,
-            ("2026-07-07 09:40:16", "legacy-run"),
-        )
-        conn.execute("pragma user_version = 0")
-        conn.commit()
-    normalized = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
-    normalized_run = normalized.get_run("legacy-run")
-    assert normalized_run.created_at == _local_expected_from_utc_iso("2026-07-07T08:18:59.740303+00:00")
-    assert normalized_run.updated_at == _local_expected_from_utc_naive("2026-07-07 09:42:01")
-    assert normalized.get_run_events("legacy-run")[0].created_at == _local_expected_from_utc_naive("2026-07-07 09:40:16")
-    normalized_again = SqliteRunLedger(legacy_db, data_dir / "internal" / "run-events")
-    assert normalized_again.get_run("legacy-run").updated_at == normalized_run.updated_at
-    assert normalized_again.get_run_events("legacy-run")[0].created_at == normalized.get_run_events("legacy-run")[0].created_at
+    # Reopening the same DB is idempotent: no migration, fresh schema stable.
+    SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "internal" / "run-events")
 
 
 def _check_model_usage_aggregation(tmp: str) -> None:
@@ -209,31 +181,11 @@ def _check_model_usage_aggregation(tmp: str) -> None:
         assert latest_after is None
 
 
-def _assert_second_precision_timestamp(value: str) -> None:
-    assert _is_second_precision_timestamp(value)
+_UTC_ISO_MS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
 
-def _is_second_precision_timestamp(value: str) -> bool:
-    if "T" in value or "." in value or len(value) != 19:
-        return False
-    try:
-        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return False
-    return True
-
-
-def _local_expected_from_utc_iso(value: str) -> str:
-    return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _local_expected_from_utc_naive(value: str) -> str:
-    return (
-        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        .replace(tzinfo=timezone.utc)
-        .astimezone()
-        .strftime("%Y-%m-%d %H:%M:%S")
-    )
+def _is_utc_iso_millisecond(value: str) -> bool:
+    return _UTC_ISO_MS.match(value) is not None
 
 
 if __name__ == "__main__":

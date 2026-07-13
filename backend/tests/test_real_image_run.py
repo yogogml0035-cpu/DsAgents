@@ -141,6 +141,8 @@ def _wait_for_run(
             return run["reply"] or last_latest_text
         if run["status"] == "failed":
             raise AssertionError(f"run failed: {run.get('error')}")
+        if run["status"] == "cancelled":
+            raise AssertionError(f"run cancelled: {run.get('error')}")
 
         time.sleep(poll_seconds)
 

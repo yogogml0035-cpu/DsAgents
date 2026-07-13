@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-RUN_STATUSES = {"queued", "running", "succeeded", "failed"}
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
-RUN_LEDGER_SCHEMA_VERSION = 1
+# run 是唯一执行/查询单位。queued → running → succeeded|failed|cancelled；
+# 取消路径 queued → cancelled、running → cancelling → cancelled。
+RUN_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled", "cancelling"}
 
 
 @dataclass(frozen=True)
@@ -107,43 +107,29 @@ class SqliteRunLedger:
 
     def get_run_events(self, run_id: str, after_event_id: int | None = None) -> list[RunEvent]:
         self.get_run(run_id)
+        params: tuple[Any, ...] = (run_id,)
+        where = "where run_id = ?"
+        if after_event_id is not None:
+            where = "where run_id = ? and event_id > ?"
+            params = (run_id, after_event_id)
         with closing(sqlite3.connect(self.db_path)) as conn:
-            if after_event_id is None:
-                rows = conn.execute(
-                    """
-                    select
-                        event_id,
-                        run_id,
-                        type,
-                        created_at,
-                        payload_json,
-                        payload_artifact_path,
-                        raw_json,
-                        raw_artifact_path
-                    from run_events
-                    where run_id = ?
-                    order by event_id
-                    """,
-                    (run_id,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    select
-                        event_id,
-                        run_id,
-                        type,
-                        created_at,
-                        payload_json,
-                        payload_artifact_path,
-                        raw_json,
-                        raw_artifact_path
-                    from run_events
-                    where run_id = ? and event_id > ?
-                    order by event_id
-                    """,
-                    (run_id, after_event_id),
-                ).fetchall()
+            rows = conn.execute(
+                f"""
+                select
+                    event_id,
+                    run_id,
+                    type,
+                    created_at,
+                    payload_json,
+                    payload_artifact_path,
+                    raw_json,
+                    raw_artifact_path
+                from run_events
+                {where}
+                order by event_id
+                """,
+                params,
+            ).fetchall()
         return [self._read_run_event(row) for row in rows]
 
     def get_latest_content_event(self, run_id: str) -> RunEvent | None:
@@ -267,7 +253,7 @@ class SqliteRunLedger:
                     status,
                     created_at,
                     reply if status == "succeeded" else None,
-                    error if status == "failed" else None,
+                    error if status in {"failed", "cancelled"} else None,
                     run_id,
                 ),
             )
@@ -291,7 +277,7 @@ class SqliteRunLedger:
                 """
                 select run_id
                 from runs
-                where status in ('queued', 'running')
+                where status in ('queued', 'running', 'cancelling')
                 order by created_at
                 """
             ).fetchall()
@@ -420,64 +406,7 @@ class SqliteRunLedger:
                 on run_events(run_id, event_id)
                 """
             )
-            self._migrate(conn)
             conn.commit()
-
-    def _migrate(self, conn: sqlite3.Connection) -> None:
-        current_version = int(conn.execute("pragma user_version").fetchone()[0])
-        if current_version < 1:
-            self._normalize_existing_timestamps(conn, assume_naive_utc=True)
-            conn.execute(f"pragma user_version = {RUN_LEDGER_SCHEMA_VERSION}")
-
-    def _normalize_existing_timestamps(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        assume_naive_utc: bool,
-    ) -> None:
-        run_updates: list[tuple[str, str, str]] = []
-        for run_id, created_at, updated_at in conn.execute(
-            "select run_id, created_at, updated_at from runs"
-        ).fetchall():
-            normalized_created_at = _normalize_timestamp_text(
-                created_at,
-                assume_naive_utc=assume_naive_utc,
-            )
-            normalized_updated_at = _normalize_timestamp_text(
-                updated_at,
-                assume_naive_utc=assume_naive_utc,
-            )
-            if normalized_created_at != created_at or normalized_updated_at != updated_at:
-                run_updates.append((normalized_created_at, normalized_updated_at, run_id))
-        if run_updates:
-            conn.executemany(
-                """
-                update runs
-                set created_at = ?, updated_at = ?
-                where run_id = ?
-                """,
-                run_updates,
-            )
-
-        event_updates: list[tuple[str, int]] = []
-        for event_id, created_at in conn.execute(
-            "select event_id, created_at from run_events"
-        ).fetchall():
-            normalized_created_at = _normalize_timestamp_text(
-                created_at,
-                assume_naive_utc=assume_naive_utc,
-            )
-            if normalized_created_at != created_at:
-                event_updates.append((normalized_created_at, event_id))
-        if event_updates:
-            conn.executemany(
-                """
-                update run_events
-                set created_at = ?
-                where event_id = ?
-                """,
-                event_updates,
-            )
 
 
 def _safe(value: Any) -> Any:
@@ -515,16 +444,6 @@ def _usage_int(value: Any) -> int:
 
 
 def _now_text() -> str:
-    return datetime.now().astimezone().strftime(TIMESTAMP_FORMAT)
-
-
-def _normalize_timestamp_text(value: str, *, assume_naive_utc: bool) -> str:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    if parsed.tzinfo is None:
-        if not assume_naive_utc:
-            return parsed.strftime(TIMESTAMP_FORMAT)
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime(TIMESTAMP_FORMAT)
+    # UTC ISO-8601 毫秒时间（fresh schema，无迁移、无本地时区转换）。
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"

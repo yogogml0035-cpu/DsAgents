@@ -184,6 +184,8 @@ def _wait_for_run(
             return payload
         if run["status"] == "failed":
             raise AssertionError(f"run failed: {run.get('error')}")
+        if run["status"] == "cancelled":
+            raise AssertionError(f"run cancelled: {run.get('error')}")
 
         time.sleep(poll_seconds)
 
@@ -194,7 +196,7 @@ def _assert_parse_documents_called(payload: dict[str, Any], uploaded_files: list
     calls = [
         event.get("payload", {})
         for event in payload.get("events", [])
-        if event.get("type") == "tool_call" and event.get("payload", {}).get("name") == "parse_documents"
+        if event.get("type") == "tool_execution" and event.get("payload", {}).get("name") == "parse_documents"
     ]
     expected_paths = [file_info["file_path"] for file_info in uploaded_files]
     if not calls:

@@ -1,23 +1,28 @@
+"""Philips 外高桥进境业务：抽取保存 + 一站式 canonical/匹配/计算/生成。
+
+只暴露两个 Tool：
+- save_philips_wgq_extraction：规范化并保存一次 A/B/C 抽取结果。
+- generate_philips_wgq_import：接收抽取结果与裁决 decisions，一次完成完整
+  校验、canonical 构建、tracking/Oracle 规则、三个 Excel 写入和输出复核。
+
+业务问题统一以 {"code": "input_problems", "problems": [...]} 返回，run 结束。
+"""
 from __future__ import annotations
 
-import copy
 import os
 import re
-from datetime import datetime, time
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from openpyxl import load_workbook
-from openpyxl.formula.translate import Translator
 
-from workflow_artifacts import (
+from dsagents.integrations.artifacts import (
     read_json_artifact,
     resolve_artifact_path,
-    to_virtual_artifact_path,
-    unique_download_path,
     write_json_artifact,
 )
+from dsagents.skills.philipswgqimport.scripts import documents as docs
 
 
 WORKFLOW = "philips-wgq-import"
@@ -92,8 +97,7 @@ CANONICAL_ITEM_KEYS = frozenset(
         "declaration",
     }
 )
-_INVOICE_TEMPLATE = Path(__file__).resolve().parent / "skills" / WORKFLOW / "assets" / "invoice,packing进境.xlsx"
-_BONDED_TEMPLATE = Path(__file__).resolve().parent / "skills" / WORKFLOW / "assets" / "核注清单导入模板.xlsx"
+
 _ORACLE_SQL = """
 select c.jldw, u1.unit_name, u2.unit_name
 from od.chda c
@@ -127,64 +131,141 @@ def save_philips_wgq_extraction(
     return {"extractor": extractor, "artifact_path": path}
 
 
-def save_philips_wgq_adjudication(
-    source_artifacts: list[str],
-    decisions: list[dict[str, Any]],
-) -> dict[str, str]:
-    """Save only explicit conflict decisions; canonical validation happens later."""
-    if not source_artifacts:
-        raise ValueError("source_artifacts must not be empty")
-    for path in source_artifacts:
-        if not resolve_artifact_path(path).is_file():
-            raise ValueError(f"source_artifact not found: {path}")
-    normalized = _validate_decisions(decisions)
-    path = write_json_artifact(
-        "philips_wgq_adjudication",
-        {"workflow": WORKFLOW, "source_artifacts": source_artifacts, "decisions": normalized},
-    )
-    return {"artifact_path": path}
-
-
-def build_philips_wgq_canonical(
+def generate_philips_wgq_import(
     extraction_artifacts: list[str],
     tracking_artifact: str,
     international_forwarder: str | None = None,
     customs_mode: str = "普货",
-    adjudication_artifact: str | None = None,
+    decisions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Reconcile explicit A/B/C artifacts and write one strict canonical artifact."""
+    """One-shot: reconcile A/B/C extractions + decisions → canonical → 3 Excel.
+
+    Returns one of:
+      {"status": "generated", "canonical_artifact", "artifacts", "manual_checks"}
+      {"code": "input_problems", "problems": [{source, location, issue, action}]}
+    """
+    built = _build_canonical(
+        extraction_artifacts=extraction_artifacts,
+        tracking_artifact=tracking_artifact,
+        international_forwarder=international_forwarder,
+        customs_mode=customs_mode,
+        decisions=_validate_decisions(decisions or []),
+    )
+    if built.get("code") == "input_problems":
+        return built
+    canonical = built["canonical"]
+    units, oracle_checks = _oracle_units(canonical["items"])
+    outputs = [
+        docs.generate_tracking(canonical),
+        docs.generate_invoice_packing(canonical),
+        docs.generate_bonded_checklist(canonical, units),
+    ]
+    return {
+        "status": "generated",
+        "canonical_artifact": built["canonical_artifact"],
+        "artifacts": outputs,
+        "manual_checks": [*canonical["manual_checks"], *oracle_checks],
+    }
+
+
+# ---------- canonical 构建（把旧 needs_c / needs_adjudication / needs_input 全部转成 problems） ----------
+
+
+def _build_canonical(
+    *,
+    extraction_artifacts: list[str],
+    tracking_artifact: str,
+    international_forwarder: str | None,
+    customs_mode: str,
+    decisions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    problems: list[dict[str, Any]] = []
+
     forwarder = _normalize_forwarder(international_forwarder)
     if forwarder is None:
-        return {"status": "needs_input", "missing": ["international_forwarder"]}
+        problems.append(
+            _problem(
+                source=tracking_artifact,
+                location="international_forwarder",
+                issue="货代缺失或不在允许集合内",
+                action="用户明确提供 DHL / DSV / FEDEX / UPS / 康捷空 之一",
+            )
+        )
     mode = "快件" if "快件" in str(customs_mode) else "普货"
-    tracking_path = resolve_artifact_path(tracking_artifact)
-    if tracking_path.suffix.lower() not in {".xlsx", ".xlsm"} or not tracking_path.is_file():
-        return {"status": "needs_input", "missing": ["tracking_artifact"]}
+
+    try:
+        tracking_path = resolve_artifact_path(tracking_artifact)
+    except ValueError as exc:
+        problems.append(_problem(tracking_artifact, "tracking_artifact", str(exc), "提供正确的 tracking artifact 路径"))
+        tracking_path = None
+    if tracking_path is not None and (
+        tracking_path.suffix.lower() not in {".xlsx", ".xlsm"} or not tracking_path.is_file()
+    ):
+        problems.append(
+            _problem(tracking_artifact, "tracking_artifact", "tracking 必须是 .xlsx/.xlsm 文件", "提供正确的 tracking Excel")
+        )
+        tracking_path = None
 
     payloads, invalid = _load_extractions(extraction_artifacts)
-    if not payloads:
-        return {"status": "needs_input", "missing": ["valid_extraction"]}
-    extractor_ids = {payload["extractor"] for payload in payloads}
-    if len(extractor_ids) != len(payloads):
-        raise ValueError("Duplicate extractor artifacts are not allowed")
-    source_artifacts = {payload["source_artifact"] for payload in payloads}
-    if len(source_artifacts) != 1:
-        raise ValueError("All extraction artifacts must reference the same source_artifact")
-    source_artifact = next(iter(source_artifacts))
+    for reason in invalid:
+        problems.append(_problem(extraction_artifacts, "extraction", reason, "重新保存合法抽取结果"))
 
-    initial_ab = extractor_ids <= {"philips-wgq-extractor-a", "philips-wgq-extractor-b"}
-    if initial_ab and adjudication_artifact is not None:
-        raise ValueError("Extractor C is required before adjudication")
-    if initial_ab and len(payloads) < 2:
-        return _needs_c(source_artifact, ["only_one_extractor_succeeded", *invalid])
+    # 校验抽出物唯一性 / 同源
+    if payloads:
+        extractor_ids = [payload["extractor"] for payload in payloads]
+        if len(set(extractor_ids)) != len(extractor_ids):
+            problems.append(
+                _problem(
+                    extraction_artifacts,
+                    "extraction",
+                    "存在重复 extractor",
+                    action="每个 extractor 只保留一份抽取 artifact",
+                )
+            )
+            return _problems(problems)
+        source_artifacts = {payload["source_artifact"] for payload in payloads}
+        if len(source_artifacts) != 1:
+            problems.append(
+                _problem(
+                    extraction_artifacts,
+                    "extraction",
+                    "抽取 artifact 必须指向同一 source_artifact",
+                    action="确认所有 extractor 针对同一 PDF 结果",
+                )
+            )
+            return _problems(problems)
+    source_artifact = next(iter({payload["source_artifact"] for payload in payloads}), None)
 
-    decision_payload = _load_adjudication(adjudication_artifact) if adjudication_artifact else None
-    if decision_payload and decision_payload["source_artifacts"] != extraction_artifacts:
-        raise ValueError("Adjudication source_artifacts do not match extraction_artifacts")
-    decisions = {
-        item["conflict_id"]: item["value"]
-        for item in (decision_payload or {}).get("decisions", [])
-    }
+    decision_map = {item["conflict_id"]: item["value"] for item in decisions}
+    if payloads:
+        # A/B 一致性裁决：仅 A/B 时若存在冲突/缺失，需要 C；C 到齐后仍有冲突需要 decisions。
+        initial_ab = set(extractor_ids) <= {"philips-wgq-extractor-a", "philips-wgq-extractor-b"}
+        if initial_ab and decision_map:
+            problems.append(
+                _problem(
+                    extraction_artifacts,
+                    "decisions",
+                    "C 抽取尚未完成就提供裁决",
+                    action="先补 extractor C，再处理冲突",
+                )
+            )
+            return _problems(problems)
+        if initial_ab and len(payloads) < 2:
+            problems.append(
+                _problem(
+                    source_artifact or extraction_artifacts,
+                    "extraction",
+                    "仅一个 A/B extractor 成功，需要第三个 extractor C",
+                    action="主智能体补跑 extractor C",
+                )
+            )
+            return _problems(problems)
+
+    if problems or not payloads:
+        return _problems(problems) if problems else _problems(
+            [_problem(extraction_artifacts, "extraction", "没有可用的抽取 artifact", "重新发起抽取")]
+        )
+
     manual_checks: list[dict[str, Any]] = []
     conflicts: list[dict[str, Any]] = []
     used_decisions: set[str] = set()
@@ -196,7 +277,7 @@ def build_philips_wgq_canonical(
             f"logistics.{field_name}",
             field_name,
             [(payload["extractor"], payload["logistics"][field_name]) for payload in payloads],
-            decisions,
+            decision_map,
             used_decisions,
             conflicts,
             manual_checks,
@@ -213,7 +294,7 @@ def build_philips_wgq_canonical(
                 f"items.{row_key}.{field_name}",
                 field_name,
                 row_fields[field_name],
-                decisions,
+                decision_map,
                 used_decisions,
                 conflicts,
                 manual_checks,
@@ -225,30 +306,84 @@ def build_philips_wgq_canonical(
         if row["product_id_raw"] is not None and _positive_decimal(row["quantity"]) is not None:
             resolved_rows.append(row)
 
+    # A/B 阶段：任何冲突、联合缺失或无可用行都先要求 extractor C，而不是直接裁决。
     if initial_ab and (conflicts or jointly_missing or not resolved_rows):
-        reasons = [item["field"] for item in conflicts] + jointly_missing
-        if not resolved_rows:
-            reasons.append("valid_items")
-        return _needs_c(source_artifact, reasons)
+        problems.append(
+            _problem(
+                source_artifact or extraction_artifacts,
+                "extraction",
+                "A/B 抽取存在冲突或缺失，需要第三个 extractor C",
+                action="主智能体补跑 extractor C 后再调用 generate_philips_wgq_import",
+            )
+        )
+        return _problems(problems)
+
     if conflicts:
-        unknown = sorted(set(decisions) - used_decisions)
+        unknown = sorted(set(decision_map) - used_decisions)
         if unknown:
-            raise ValueError("Unknown conflict_id: " + ", ".join(unknown))
-        return {
-            "status": "needs_adjudication",
-            "source_artifact": source_artifact,
-            "conflicts": conflicts,
-        }
-    if set(decisions) - used_decisions:
-        raise ValueError("Adjudication contains conflict_id values that are not present")
+            problems.append(
+                _problem(
+                    extraction_artifacts,
+                    "decisions",
+                    f"未知 conflict_id: {', '.join(unknown)}",
+                    action="只对实际冲突提交裁决",
+                )
+            )
+            return _problems(problems)
+        for conflict in conflicts:
+            problems.append(
+                _problem(
+                    source_artifact or extraction_artifacts,
+                    conflict["conflict_id"],
+                    "抽取器对字段取值不一致",
+                    action="回查 PDF，提交 conflict_id/value/reason 裁决",
+                )
+            )
+        return _problems(problems)
+    if set(decision_map) - used_decisions:
+        problems.append(
+            _problem(
+                extraction_artifacts,
+                "decisions",
+                "裁决包含不存在的 conflict_id",
+                action="只对实际冲突提交裁决",
+            )
+        )
+        return _problems(problems)
     if jointly_missing:
-        return {"status": "needs_input", "missing": jointly_missing}
+        for missing in jointly_missing:
+            problems.append(
+                _problem(
+                    source_artifact or extraction_artifacts,
+                    missing,
+                    "所有抽取器均缺失该字段",
+                    action="用户补正材料后重新发起",
+                )
+            )
+        return _problems(problems)
     if not resolved_rows:
-        return {"status": "needs_input", "missing": ["valid_items"]}
+        problems.append(
+            _problem(
+                source_artifact or extraction_artifacts,
+                "items",
+                "没有可用商品行",
+                action="用户补正材料后重新发起",
+            )
+        )
+        return _problems(problems)
 
     items, merge_error = _merge_items(resolved_rows, manual_checks)
     if merge_error:
-        return {"status": "needs_input", **merge_error}
+        problems.append(
+            _problem(
+                source_artifact or extraction_artifacts,
+                merge_error.get("missing", ["items"])[0],
+                merge_error.get("reason", "合并失败"),
+                action="核对料号/单价一致性后重新发起",
+            )
+        )
+        return _problems(problems)
+
     tracking = _tracking_context(tracking_path, [item["normalized_product_id"] for item in items])
     _apply_weight_history(items, logistics["gross_weight"], tracking, manual_checks)
     for item in items:
@@ -275,7 +410,7 @@ def build_philips_wgq_canonical(
             "extractions": extraction_artifacts,
             "mineru": source_artifact,
             "tracking": tracking_artifact,
-            "adjudication": adjudication_artifact,
+            "adjudication": None,
         },
         "logistics": logistics,
         "items": items,
@@ -285,24 +420,31 @@ def build_philips_wgq_canonical(
     }
     _validate_canonical(canonical)
     path = write_json_artifact("philips_wgq_canonical", canonical)
-    return {"status": "canonical", "canonical_artifact": path, "manual_checks": manual_checks}
+    return {"canonical": canonical, "canonical_artifact": path, "manual_checks": manual_checks}
 
 
-def generate_philips_wgq_documents(canonical_artifact: str) -> dict[str, Any]:
-    """Generate the three Philips workbooks from one canonical artifact path."""
-    canonical = _validate_canonical(read_json_artifact(canonical_artifact))
-    units, oracle_checks = _oracle_units(canonical["items"])
-    outputs = [
-        _generate_tracking(canonical),
-        _generate_invoice_packing(canonical),
-        _generate_bonded_checklist(canonical, units),
-    ]
+def _problem(source: Any, location: str, issue: str, action: str) -> dict[str, Any]:
     return {
-        "status": "generated",
-        "canonical_artifact": canonical_artifact,
-        "artifacts": outputs,
-        "manual_checks": [*canonical["manual_checks"], *oracle_checks],
+        "source": _source_text(source),
+        "location": location,
+        "issue": issue,
+        "action": action,
     }
+
+
+def _source_text(source: Any) -> str:
+    if isinstance(source, str):
+        return source
+    if isinstance(source, (list, tuple)) and source:
+        return ", ".join(str(item) for item in source)
+    return str(source)
+
+
+def _problems(problems: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"code": "input_problems", "problems": problems}
+
+
+# ---------- 抽取/合同校验 ----------
 
 
 def _validate_extraction(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -358,18 +500,9 @@ def _load_extractions(paths: Sequence[str]) -> tuple[list[dict[str, Any]], list[
     return payloads, invalid
 
 
-def _load_adjudication(path: str) -> dict[str, Any]:
-    payload = read_json_artifact(path)
-    if set(payload) != {"workflow", "source_artifacts", "decisions"} or payload.get("workflow") != WORKFLOW:
-        raise ValueError("Invalid Philips adjudication artifact")
-    if not isinstance(payload.get("source_artifacts"), list):
-        raise ValueError("adjudication source_artifacts must be a list")
-    return {**payload, "decisions": _validate_decisions(payload.get("decisions"))}
-
-
 def _validate_decisions(decisions: Any) -> list[dict[str, Any]]:
     if not isinstance(decisions, list):
-        raise ValueError("decisions must be a list")
+        return []
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for decision in decisions:
@@ -384,6 +517,34 @@ def _validate_decisions(decisions: Any) -> list[dict[str, Any]]:
         seen.add(conflict_id)
         result.append({"conflict_id": conflict_id, "value": decision.get("value"), "reason": reason.strip()})
     return result
+
+
+def _validate_canonical(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if set(payload) != CANONICAL_KEYS or payload.get("workflow") != WORKFLOW:
+        raise ValueError("Invalid Philips canonical contract")
+    source = payload.get("source_artifacts")
+    if not isinstance(source, Mapping) or set(source) != {"extractions", "mineru", "tracking", "adjudication"}:
+        raise ValueError("Invalid Philips canonical source_artifacts")
+    logistics = payload.get("logistics")
+    if not isinstance(logistics, Mapping) or set(logistics) != {
+        "hawb_number", "pieces", "gross_weight", "shipper_country", "shipper_country_name", "net_weight"
+    }:
+        raise ValueError("Invalid Philips canonical logistics")
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise ValueError("Philips canonical items must not be empty")
+    for item in items:
+        if not isinstance(item, Mapping) or set(item) != CANONICAL_ITEM_KEYS:
+            raise ValueError("Invalid Philips canonical item")
+        declaration = item.get("declaration")
+        if not isinstance(declaration, Mapping) or set(declaration) != set(DECLARATION_FIELDS):
+            raise ValueError("Invalid Philips canonical declaration")
+    if not isinstance(payload.get("manual_checks"), list):
+        raise ValueError("manual_checks must be a list")
+    return dict(payload)
+
+
+# ---------- 投票/合并/规则（确定性逻辑，原样保留） ----------
 
 
 def _aligned_items(payloads: Sequence[dict[str, Any]]) -> list[tuple[str, dict[str, list[tuple[str, dict[str, Any]]]]]]:
@@ -503,13 +664,13 @@ def _tracking_context(path: Path, product_ids: Sequence[str]) -> dict[str, dict[
         if "进口" not in workbook.sheetnames:
             return {}
         sheet = workbook["进口"]
-        headers = _headers(sheet)
-        product_column = _optional_column(headers, ("料号", "飞利浦料号", "Product ID"))
-        quantity_column = _optional_column(headers, ("数量",))
-        gross_column = _optional_column(headers, ("毛重",))
-        net_column = _optional_column(headers, ("净重",))
+        headers = docs.header_columns(sheet)
+        product_column = docs.optional_column(headers, ("料号", "飞利浦料号", "Product ID"))
+        quantity_column = docs.optional_column(headers, ("数量",))
+        gross_column = docs.optional_column(headers, ("毛重",))
+        net_column = docs.optional_column(headers, ("净重",))
         declarations = _declaration_records(workbook)
-        fallback_row = max(2, _last_data_row(sheet))
+        fallback_row = max(2, docs.last_data_row(sheet))
         result: dict[str, dict[str, Any]] = {}
         for product_id in product_ids:
             rows = [] if product_column is None else [
@@ -543,12 +704,12 @@ def _declaration_records(workbook: Any) -> dict[str, dict[str, Any]]:
         if sheet_name not in workbook.sheetnames:
             continue
         sheet = workbook[sheet_name]
-        headers = _headers(sheet)
-        product_column = _optional_column(headers, ("飞利浦料号", "料号", "Product ID"))
+        headers = docs.header_columns(sheet)
+        product_column = docs.optional_column(headers, ("飞利浦料号", "料号", "Product ID"))
         if product_column is None:
             continue
         columns = {
-            field: _optional_column(headers, aliases)
+            field: docs.optional_column(headers, aliases)
             for field, aliases in DECLARATION_HEADER_ALIASES.items()
         }
         for row in range(2, sheet.max_row + 1):
@@ -583,7 +744,7 @@ def _apply_weight_history(
             weights.append(history["gross"] * quantity / history["quantity"])
         else:
             weights.append(quantity)
-    allocations = _allocate_total(gross_total, weights)
+    allocations = docs.allocate_total(gross_total, weights)
     for item, gross in zip(items, allocations, strict=True):
         item["gross_weight"] = _number(gross)
         history = tracking.get(item["normalized_product_id"], {}).get("history")
@@ -595,178 +756,7 @@ def _apply_weight_history(
         item["net_weight"] = int(max(Decimal("0"), net))
 
 
-def _allocate_total(total: Decimal, weights: Sequence[Decimal]) -> list[Decimal]:
-    if not weights:
-        return []
-    weight_total = sum(weights, Decimal("0"))
-    if weight_total <= 0:
-        weights = [Decimal("1") for _ in weights]
-        weight_total = Decimal(len(weights))
-    quant = Decimal(1).scaleb(min(total.as_tuple().exponent, 0))
-    remaining = total
-    result: list[Decimal] = []
-    for index, weight in enumerate(weights):
-        share = remaining if index == len(weights) - 1 else (total * weight / weight_total).quantize(quant, rounding=ROUND_CEILING)
-        share = min(max(share, Decimal("0")), remaining)
-        result.append(share)
-        remaining -= share
-    return result
-
-
-def _validate_canonical(payload: Mapping[str, Any]) -> dict[str, Any]:
-    if set(payload) != CANONICAL_KEYS or payload.get("workflow") != WORKFLOW:
-        raise ValueError("Invalid Philips canonical contract")
-    source = payload.get("source_artifacts")
-    if not isinstance(source, Mapping) or set(source) != {"extractions", "mineru", "tracking", "adjudication"}:
-        raise ValueError("Invalid Philips canonical source_artifacts")
-    logistics = payload.get("logistics")
-    if not isinstance(logistics, Mapping) or set(logistics) != {
-        "hawb_number", "pieces", "gross_weight", "shipper_country", "shipper_country_name", "net_weight"
-    }:
-        raise ValueError("Invalid Philips canonical logistics")
-    items = payload.get("items")
-    if not isinstance(items, list) or not items:
-        raise ValueError("Philips canonical items must not be empty")
-    for item in items:
-        if not isinstance(item, Mapping) or set(item) != CANONICAL_ITEM_KEYS:
-            raise ValueError("Invalid Philips canonical item")
-        declaration = item.get("declaration")
-        if not isinstance(declaration, Mapping) or set(declaration) != set(DECLARATION_FIELDS):
-            raise ValueError("Invalid Philips canonical declaration")
-    if not isinstance(payload.get("manual_checks"), list):
-        raise ValueError("manual_checks must be a list")
-    return dict(payload)
-
-
-def _generate_tracking(canonical: Mapping[str, Any]) -> str:
-    source = resolve_artifact_path(canonical["source_artifacts"]["tracking"])
-    workbook = load_workbook(source, data_only=False, read_only=False, keep_vba=source.suffix.lower() == ".xlsm")
-    if "进口" not in workbook.sheetnames:
-        raise ValueError("tracking workbook is missing 进口 sheet")
-    sheet = workbook["进口"]
-    headers = _headers(sheet)
-    required = {
-        "product_id": ("料号",), "quantity": ("数量",), "description": ("型号",),
-        "currency": ("币种",), "unit_price": ("备案单价USD", "备案单价"),
-        "total_price": ("备案总价USD", "备案总价"), "origin_country": ("原产国",),
-        "hawb": ("运单号",), "forwarder": ("国际货代",), "po": ("进境STO(PO)", "进境STO"),
-        "pieces": ("件数",), "net": ("净重",), "gross": ("毛重",),
-        "date": ("Figo提供完整申报要素日期",),
-    }
-    columns = {name: _required_column(headers, aliases, name) for name, aliases in required.items()}
-    remark_column = _optional_column(headers, ("进境备注",))
-    declaration_columns = {
-        field: _optional_column(headers, aliases)
-        for field, aliases in DECLARATION_HEADER_ALIASES.items()
-    }
-    last_row = _last_data_row(sheet)
-    max_column = max(sheet.max_column, max(columns.values()))
-    declaration_date = datetime.combine(datetime.now().date(), time.min)
-    for index, item in enumerate(canonical["items"], start=1):
-        source_row = item.get("tracking_source_row") or last_row
-        output_row = last_row + index
-        _copy_sheet_row(sheet, source_row, output_row, max_column)
-        values = {
-            "product_id": item["normalized_product_id"], "quantity": item["quantity"],
-            "description": item["description"], "currency": item["currency"],
-            "unit_price": item["unit_price"], "total_price": item["total_price"],
-            "origin_country": item["origin_country"], "hawb": canonical["logistics"]["hawb_number"],
-            "forwarder": canonical["international_forwarder"], "po": item["po_number"],
-            "pieces": item["quantity"], "net": item["net_weight"], "gross": item["gross_weight"],
-            "date": declaration_date,
-        }
-        for field, value in values.items():
-            sheet.cell(output_row, columns[field]).value = value
-        sheet.cell(output_row, 1).value = None
-        if remark_column:
-            sheet.cell(output_row, remark_column).value = "进境"
-        for field_name, column in declaration_columns.items():
-            if column:
-                sheet.cell(output_row, column).value = item["declaration"][field_name]
-    target = unique_download_path(f"{source.stem}_进境更新", source.suffix)
-    workbook.save(target)
-    workbook.close()
-    return to_virtual_artifact_path(target)
-
-
-def _generate_invoice_packing(canonical: Mapping[str, Any]) -> str:
-    workbook = load_workbook(_INVOICE_TEMPLATE, data_only=False)
-    customs = workbook["Customs invoice"]
-    packing = workbook["Packing List"]
-    now = datetime.now()
-    customs["F2"] = now.date()
-    packing["F3"] = now.date()
-    customs_total = _prepare_detail_rows(customs, 32, 39, len(canonical["items"]), 11)
-    packing_total = _prepare_detail_rows(packing, 37, 44, len(canonical["items"]), 11)
-    currency = canonical["items"][0]["currency"] or "需确认"
-    total_amount = Decimal("0")
-    for index, item in enumerate(canonical["items"]):
-        row = 32 + index
-        customs.cell(row, 1).value = index + 1
-        customs.cell(row, 2).value = item["normalized_product_id"]
-        customs.cell(row, 3).value = item["description"] or "需确认：描述"
-        customs.cell(row, 6).value = item["quantity"]
-        customs.cell(row, 8).value = item["raw_country"] or "需确认：原产国"
-        customs.cell(row, 9).value = item["unit_price"]
-        customs.cell(row, 11).value = item["total_price"]
-        total_amount += _decimal(item["total_price"]) or Decimal("0")
-
-        row = 37 + index
-        packing.cell(row, 1).value = index + 1
-        packing.cell(row, 2).value = item["normalized_product_id"]
-        packing.cell(row, 3).value = item["description"] or "需确认：描述"
-        packing.cell(row, 6).value = item["quantity"]
-        packing.cell(row, 7).value = item["net_weight"]
-        packing.cell(row, 10).value = item["gross_weight"]
-    customs.cell(25, 9).value = f"( {currency})"
-    customs.cell(25, 11).value = f"({currency})"
-    customs.cell(customs_total, 4).value = "Total Amount:"
-    customs.cell(customs_total, 9).value = currency
-    customs.cell(customs_total, 11).value = _number(total_amount)
-    packing.cell(packing_total, 4).value = "TOTAL PCS:"
-    packing.cell(packing_total, 6).value = _number(_sum_decimal(item["quantity"] for item in canonical["items"]))
-    packing.cell(packing_total + 1, 4).value = "TOTAL NET WEIGHT:"
-    packing.cell(packing_total + 1, 6).value = canonical["logistics"]["net_weight"]
-    packing.cell(packing_total + 2, 4).value = "TOTAL GROSS WEIGHT: "
-    packing.cell(packing_total + 2, 6).value = canonical["logistics"]["gross_weight"]
-    target = unique_download_path("invoice_packing进境", ".xlsx")
-    workbook.save(target)
-    workbook.close()
-    return to_virtual_artifact_path(target)
-
-
-def _generate_bonded_checklist(
-    canonical: Mapping[str, Any],
-    units: Mapping[str, tuple[str, str, str]],
-) -> str:
-    workbook = load_workbook(_BONDED_TEMPLATE, data_only=False)
-    header = workbook["表头"]
-    body = workbook["表体"]
-    header["M2"] = f"{datetime.now():%Y%m%d}"
-    header["S2"] = canonical["logistics"]["shipper_country_name"]
-    header["T2"] = "2244" if canonical["customs_mode"] == "快件" else "2233"
-    _prepare_bonded_rows(body, len(canonical["items"]))
-    currency_names = {"USD": "美元", "CNY": "人民币", "RMB": "人民币", "EUR": "欧元"}
-    for index, item in enumerate(canonical["items"]):
-        row = 2 + index
-        declaration = item["declaration"]
-        declaration_unit, legal_unit, legal_second = units[item["normalized_product_id"]]
-        values = {
-            2: index + 1, 4: index + 1, 6: item["normalized_product_id"],
-            7: declaration["hs_code"], 8: declaration["chinese_name"], 9: item["description"],
-            10: declaration_unit, 11: item["quantity"], 12: legal_unit, 13: item["quantity"],
-            14: legal_second, 15: item["net_weight"], 16: item["unit_price"],
-            17: item["total_price"], 18: item["origin_country"],
-            19: currency_names.get(item["currency"], item["currency"]),
-            20: item["gross_weight"], 21: item["net_weight"],
-            32: "1" if item["raw_country"] == "US" else "2",
-        }
-        for column, value in values.items():
-            body.cell(row, column).value = value
-    target = unique_download_path("核注清单导入模板_进境", ".xlsx")
-    workbook.save(target)
-    workbook.close()
-    return to_virtual_artifact_path(target)
+# ---------- Oracle 法定单位查询（缺失则降级为人工校验） ----------
 
 
 def _oracle_units(items: Sequence[Mapping[str, Any]]) -> tuple[dict[str, tuple[str, str, str]], list[dict[str, Any]]]:
@@ -819,94 +809,16 @@ def _unit_candidates(item: Mapping[str, Any]) -> list[str]:
     return result
 
 
-def _prepare_detail_rows(sheet: Any, start: int, total: int, count: int, max_column: int) -> int:
-    if count <= 1:
-        return total
-    sheet.insert_rows(start + 1, amount=count - 1)
-    for row in range(start + 1, start + count):
-        _copy_style_row(sheet, start, row, max_column, copy_values=False)
-    return total + count - 1
-
-
-def _prepare_bonded_rows(sheet: Any, count: int) -> None:
-    if count <= 1:
-        return
-    sheet.insert_rows(3, amount=count - 1)
-    for row in range(3, 2 + count):
-        _copy_style_row(sheet, 2, row, 32, copy_values=True)
-
-
-def _copy_sheet_row(sheet: Any, source_row: int, target_row: int, max_column: int) -> None:
-    source_row = max(2, min(source_row, sheet.max_row))
-    for column in range(1, max_column + 1):
-        source = sheet.cell(source_row, column)
-        target = sheet.cell(target_row, column)
-        value = source.value
-        if isinstance(value, str) and value.startswith("="):
-            try:
-                value = Translator(value, origin=source.coordinate).translate_formula(target.coordinate)
-            except Exception:
-                pass
-        target.value = value
-        _copy_cell_style(source, target)
-
-
-def _copy_style_row(sheet: Any, source_row: int, target_row: int, max_column: int, *, copy_values: bool) -> None:
-    sheet.row_dimensions[target_row].height = sheet.row_dimensions[source_row].height
-    for column in range(1, max_column + 1):
-        source = sheet.cell(source_row, column)
-        target = sheet.cell(target_row, column)
-        target.value = source.value if copy_values else None
-        _copy_cell_style(source, target)
-
-
-def _copy_cell_style(source: Any, target: Any) -> None:
-    if source.has_style:
-        target.font = copy.copy(source.font)
-        target.fill = copy.copy(source.fill)
-        target.border = copy.copy(source.border)
-        target.alignment = copy.copy(source.alignment)
-        target.protection = copy.copy(source.protection)
-    target.number_format = source.number_format
-
-
-def _headers(sheet: Any) -> dict[str, int]:
-    result: dict[str, int] = {}
-    for column in range(1, sheet.max_column + 1):
-        header = re.sub(r"\s+", "", str(sheet.cell(1, column).value or "")).lower()
-        if header and header not in result:
-            result[header] = column
-    return result
-
-
-def _optional_column(headers: Mapping[str, int], aliases: Sequence[str]) -> int | None:
-    for alias in aliases:
-        column = headers.get(re.sub(r"\s+", "", alias).lower())
-        if column:
-            return column
-    return None
-
-
-def _required_column(headers: Mapping[str, int], aliases: Sequence[str], field: str) -> int:
-    column = _optional_column(headers, aliases)
-    if column is None:
-        raise ValueError(f"tracking workbook missing required column: {field}")
-    return column
-
-
-def _last_data_row(sheet: Any) -> int:
-    for row in range(sheet.max_row, 1, -1):
-        if any(sheet.cell(row, column).value not in (None, "") for column in range(1, sheet.max_column + 1)):
-            return row
-    return 2
+# ---------- 规范化 / 数值 helper ----------
 
 
 def _empty_declaration() -> dict[str, Any]:
     return {field: f"需确认：{field}" for field in DECLARATION_FIELDS}
 
 
-def _needs_c(source_artifact: str, reasons: Sequence[str]) -> dict[str, Any]:
-    return {"status": "needs_c", "source_artifact": source_artifact, "reasons": list(reasons)}
+def _manual(checks: list[dict[str, Any]], field: str, reason: str) -> None:
+    if not any(check.get("field") == field and check.get("reason") == reason for check in checks):
+        checks.append({"field": field, "reason": reason})
 
 
 def _normalize_forwarder(value: Any) -> str | None:
@@ -1004,7 +916,7 @@ def _number(value: Decimal | None) -> int | float | None:
     return int(value) if value == value.to_integral_value() else float(value)
 
 
-def _sum_decimal(values: Sequence[Any] | Any, *, allow_missing: bool = False) -> Decimal | None:
+def _sum_decimal(values: Any, *, allow_missing: bool = False) -> Decimal | None:
     result = Decimal("0")
     found = False
     for value in values:
@@ -1045,8 +957,3 @@ def _po_numbers(values: Any) -> str | None:
             if candidate and candidate not in result:
                 result.append(candidate)
     return "/".join(result) or None
-
-
-def _manual(checks: list[dict[str, Any]], field: str, reason: str) -> None:
-    if not any(check.get("field") == field and check.get("reason") == reason for check in checks):
-        checks.append({"field": field, "reason": reason})

@@ -6,7 +6,6 @@ import os
 import time
 import zipfile
 from contextlib import ExitStack
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable, Sequence
 from urllib.parse import urljoin
@@ -15,33 +14,17 @@ import requests
 from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
 
-from artifact_names import make_unique_name
-from philips_wgq_import import (
-    build_philips_wgq_canonical,
-    generate_philips_wgq_documents,
-    save_philips_wgq_adjudication,
-    save_philips_wgq_extraction,
+from dsagents.integrations.artifacts import (
+    artifacts_root,
+    make_unique_name,
+    resolve_artifact_path,
+    to_virtual_artifact_path,
 )
-from tecan_import import (
-    build_tecan_canonical,
-    generate_tecan_documents,
-    save_tecan_adjudication,
-    save_tecan_extraction,
-)
-from workflow_artifacts import artifacts_root, resolve_artifact_path, to_virtual_artifact_path
 
-load_dotenv(Path(__file__).with_name(".env"))
+
+load_dotenv(Path(__file__).resolve().parents[2].with_name(".env"))
 
 MINERU_POLL_INTERVAL_SECONDS = 30.0
-ToolHandler = Callable[..., Any]
-
-
-@dataclass(frozen=True)
-class ToolCatalog:
-    handlers: tuple[ToolHandler, ...]
-
-    def as_list(self) -> list[ToolHandler]:
-        return list(self.handlers)
 
 
 def parse_documents(
@@ -237,7 +220,7 @@ def extract_archives(zip_paths: list[str]) -> dict[str, Any]:
 
 
 def _extract_zip(source: Path) -> tuple[str, list[str]]:
-    downloads_dir = _artifacts_root() / "downloads"
+    downloads_dir = artifacts_root() / "downloads"
     output_dir_virtual = f"/artifacts/downloads/{source.stem}"
     output_dir = downloads_dir / source.stem
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,11 +236,8 @@ def _extract_zip(source: Path) -> tuple[str, list[str]]:
     return output_dir_virtual, files
 
 
-def _archive_filename(
-    sources: Sequence[Path],
-    batch_timestamp: str,
-) -> str:
-    downloads_dir = _artifacts_root() / "downloads"
+def _archive_filename(sources: Sequence[Path], batch_timestamp: str) -> str:
+    downloads_dir = artifacts_root() / "downloads"
     if len(sources) == 1:
         stem = sources[0].stem
     else:
@@ -265,11 +245,8 @@ def _archive_filename(
     return make_unique_name(downloads_dir, f"{stem}.zip")
 
 
-def _result_filename(
-    sources: Sequence[Path],
-    batch_timestamp: str,
-) -> str:
-    downloads_dir = _artifacts_root() / "downloads"
+def _result_filename(sources: Sequence[Path], batch_timestamp: str) -> str:
+    downloads_dir = artifacts_root() / "downloads"
     if len(sources) == 1:
         stem = sources[0].stem
     else:
@@ -278,7 +255,7 @@ def _result_filename(
 
 
 def _download_mineru_zip(result_url: str, *, archive_filename: str, timeout_seconds: int) -> str:
-    downloads_dir = _artifacts_root() / "downloads"
+    downloads_dir = artifacts_root() / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
     target = downloads_dir / archive_filename
     with requests.get(result_url, timeout=timeout_seconds, stream=True) as response:
@@ -291,7 +268,7 @@ def _download_mineru_zip(result_url: str, *, archive_filename: str, timeout_seco
 
 
 def _download_mineru_json(result_url: str, *, result_filename: str, timeout_seconds: int) -> str:
-    downloads_dir = _artifacts_root() / "downloads"
+    downloads_dir = artifacts_root() / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
     target = downloads_dir / result_filename
     response = requests.get(result_url, timeout=timeout_seconds)
@@ -304,18 +281,14 @@ def _download_mineru_json(result_url: str, *, result_filename: str, timeout_seco
 
 
 def _resolve_document_path(raw_path: str | None) -> Path:
-    return resolve_artifact_path(raw_path, root=_artifacts_root(), allow_local=True)
+    return resolve_artifact_path(raw_path, root=artifacts_root(), allow_local=True)
 
 
 def _to_virtual_path(resolved: Path) -> str:
     try:
-        return to_virtual_artifact_path(resolved, root=_artifacts_root())
+        return to_virtual_artifact_path(resolved, root=artifacts_root())
     except ValueError:
         return str(resolved)
-
-
-def _artifacts_root() -> Path:
-    return artifacts_root()
 
 
 def _required_env(name: str) -> str:
@@ -502,20 +475,3 @@ def _emit_parse_documents_status(
 def _error_text(exc: Exception) -> str:
     text = str(exc).strip()
     return text or exc.__class__.__name__
-
-
-def default_tool_catalog() -> ToolCatalog:
-    return ToolCatalog(
-        (
-            parse_documents,
-            extract_archives,
-            save_philips_wgq_extraction,
-            build_philips_wgq_canonical,
-            save_philips_wgq_adjudication,
-            generate_philips_wgq_documents,
-            save_tecan_extraction,
-            build_tecan_canonical,
-            save_tecan_adjudication,
-            generate_tecan_documents,
-        )
-    )

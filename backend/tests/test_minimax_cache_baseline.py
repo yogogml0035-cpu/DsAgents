@@ -14,7 +14,7 @@ Run it explicitly, pointing at a live server with real MINIMAX_* env set:
 
     cd backend
     # terminal 1: start the real server
-    uvicorn api:app --port 8000
+    uvicorn dsagents.api:app --port 8000
     # terminal 2:
     python -m tests.test_minimax_cache_baseline
 
@@ -70,7 +70,7 @@ def _poll(run_id: str, deadline_s: float = 300.0) -> dict:
     while time.time() - start < deadline_s:
         payload = _get_json(f"{BASE_URL}/runs/{run_id}")
         status = payload["run"]["status"]
-        if status in {"succeeded", "failed"}:
+        if status in {"succeeded", "failed", "cancelled"}:
             return payload
         time.sleep(1.0)
     raise TimeoutError(f"run {run_id} never finished within {deadline_s}s")
@@ -157,5 +157,5 @@ if __name__ == "__main__":
     except (urllib.error.URLError, ConnectionError) as exc:
         sys.exit(
             f"Could not reach {BASE_URL} — start the real server first "
-            f"(e.g. `uvicorn api:app --port 8000`). Underlying error: {exc}"
+            f"(e.g. `uvicorn dsagents.api:app --port 8000`). Underlying error: {exc}"
         )

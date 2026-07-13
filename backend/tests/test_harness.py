@@ -9,27 +9,34 @@ from unittest.mock import patch
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from hands import ToolStatusHands, ToolStatusMiddleware
-from harness import (
-    ARTIFACT_REFERENCE_HINT,
+from dsagents.runtime.agent import (
     DeepAgentsBrainFactory,
-    HarnessRuntime,
-    _assistant_message_payload,
-    _is_subagent_message,
-    _model_usage,
-    _thinking_delta,
+    ToolTelemetry,
 )
-from resources import AgentResources, ResourceConfig
-from tests.test_support import FakeBrainFactory, artifact_block, messages_json, text_block, user_message
-from tools import ToolCatalog
+from dsagents.runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from dsagents.runtime.observability import (
+    assistant_message_payload,
+    is_subagent_message,
+    model_usage,
+    thinking_delta,
+)
+from dsagents.runtime.resources import AgentResources, ResourceConfig
+from dsagents.runtime.tools import ToolCatalog
+from tests.test_support import (
+    FakeBrainFactory,
+    artifact_block,
+    messages_json,
+    text_block,
+    user_message,
+)
 
 
 def run() -> None:
-    assert _is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
-    assert not _is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
-    assert _thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
+    assert is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
+    assert not is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
+    assert thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
     _check_model_usage_helper()
-    assert _assistant_message_payload(
+    assert assistant_message_payload(
         AIMessage(
             content=[
                 {"type": "thinking", "thinking": "old", "index": 0},
@@ -47,7 +54,7 @@ def run() -> None:
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
-        _check_tool_status_middleware()
+        _check_tool_telemetry_middleware()
         _check_harness(tmp)
 
 
@@ -69,42 +76,46 @@ def _check_model_env_loading(tmp: str) -> None:
         assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
 
 
-def _check_tool_status_middleware() -> None:
-    middleware = ToolStatusMiddleware()
-    emitted: list[dict[str, str]] = []
-    with patch("hands.get_stream_writer", return_value=emitted.append):
-        result = middleware.wrap_tool_call(
-            SimpleNamespace(tool_call={"name": "demo", "args": {"value": 1}}),
-            lambda _request: {"ok": True},
-        )
+def _check_tool_telemetry_middleware() -> None:
+    middleware = ToolTelemetry()
+    emitted: list[dict[str, object]] = []
+    request = SimpleNamespace(
+        tool_call={"name": "demo", "args": {"value": 1}},
+        runtime=SimpleNamespace(config={"metadata": {"langgraph_node": "agent"}}),
+    )
+    with patch("dsagents.runtime.agent.get_stream_writer", return_value=emitted.append):
+        result = middleware.wrap_tool_call(request, lambda _request: {"ok": True})
     assert result == {"ok": True}
-    assert emitted == [
-        {"name": "demo", "status": "started"},
-        {"name": "demo", "status": "completed"},
-    ]
+    statuses = [event["status"] for event in emitted]
+    assert statuses == ["started", "completed"]
+    assert emitted[0]["name"] == "demo"
+    assert emitted[0]["agent_name"] == "agent"
+    assert emitted[0]["args"] == {"value": 1}
+    assert "duration_ms" in emitted[1]
+    assert "result" in emitted[1]
 
     emitted = []
-    with patch("hands.get_stream_writer", return_value=emitted.append):
+    with patch("dsagents.runtime.agent.get_stream_writer", return_value=emitted.append):
         try:
             middleware.wrap_tool_call(
-                SimpleNamespace(tool_call={"name": "demo", "args": {}}),
+                SimpleNamespace(
+                    tool_call={"name": "demo", "args": {}},
+                    runtime=SimpleNamespace(config={"metadata": {"langgraph_node": "agent"}}),
+                ),
                 lambda _request: (_ for _ in ()).throw(RuntimeError("boom")),
             )
         except RuntimeError:
             pass
         else:
             raise AssertionError("tool errors must be passed through")
-    assert emitted == [
-        {"name": "demo", "status": "started"},
-        {"name": "demo", "status": "error"},
-    ]
+    assert [event["status"] for event in emitted] == ["started", "error"]
 
 
 def _check_model_usage_helper() -> None:
     # No usage_metadata => nothing to record.
-    assert _model_usage((AIMessageChunk(content="x"), {"langgraph_node": "model"})) is None
+    assert model_usage((AIMessageChunk(content="x"), {"langgraph_node": "model"})) is None
     # Main agent call: input_token_details optional, cache fields default to 0.
-    main_usage = _model_usage(
+    main_usage = model_usage(
         (
             AIMessageChunk(
                 content="x",
@@ -124,7 +135,7 @@ def _check_model_usage_helper() -> None:
     }
     # Subagent call: scope/agent_name come from the same chunk metadata, and
     # cache_creation sums the generic + 5m + 1h detail fields.
-    sub_usage = _model_usage(
+    sub_usage = model_usage(
         (
             AIMessageChunk(
                 content="x",
@@ -160,7 +171,6 @@ def _check_harness(tmp: str) -> None:
     with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
         harness = HarnessRuntime(
             resources=resources,
-            hands=ToolStatusHands(),
             tools=ToolCatalog(()),
             brain_factory=factory,
         )
@@ -172,9 +182,8 @@ def _check_harness(tmp: str) -> None:
             "thinking",
             "model_usage",
             "text_delta",
-            "tool_call",
-            "tool_status",
-            "tool_result",
+            "tool_execution",
+            "tool_progress",
             "model_usage",
             "text_delta",
             "assistant_message",
@@ -184,24 +193,16 @@ def _check_harness(tmp: str) -> None:
         raw_events = resources.runs.get_run_events("run-h1")
         thinking_event = [event for event in raw_events if event.event_type == "thinking"][0]
         assert thinking_event.raw["type"] == "messages"
-        tool_call_event = [event for event in raw_events if event.event_type == "tool_call"][0]
-        assert tool_call_event.payload == {
+        tool_execution_event = [event for event in raw_events if event.event_type == "tool_execution"][0]
+        assert tool_execution_event.payload == {
             "message_id": "assistant-tool-thread-a-1",
             "tool_call_id": "call-thread-a-1",
             "name": "read_file",
             "args": {"file_path": "/artifacts/uploads/demo.jpg"},
         }
-        tool_result_event = [event for event in raw_events if event.event_type == "tool_result"][0]
-        assert tool_result_event.payload == {
-            "message_id": "tool-result-thread-a-1",
-            "tool_call_id": "call-thread-a-1",
-            "name": "read_file",
-            "status": "success",
-            "content_type": "image",
-            "mime_type": "image/jpeg",
-            "text": None,
-            "preview": None,
-        }
+        tool_progress_event = [event for event in raw_events if event.event_type == "tool_progress"][0]
+        assert tool_progress_event.payload == {"name": "parse_documents", "status": "started"}
+        assert tool_progress_event.raw["type"] == "custom"
         assistant_event = [event for event in raw_events if event.event_type == "assistant_message"][0]
         assert assistant_event.payload == {
             "message_id": "assistant-final-thread-a-1",

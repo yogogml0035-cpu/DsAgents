@@ -16,9 +16,9 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from artifact_names import clean_filename, make_timestamped_name
-from harness import HarnessRuntime, create_harness
-from resources import AgentResources, ResourceConfig
+from dsagents.integrations.artifacts import clean_filename, make_timestamped_name
+from dsagents.runtime.execution import HarnessRuntime, create_harness
+from dsagents.runtime.resources import AgentResources, ResourceConfig
 
 
 INTERRUPTED_RUN_ERROR = "执行已中断，请重试"
@@ -137,6 +137,42 @@ def create_app(
             "usage": usage,
         }
 
+    @app.post("/runs/{run_id}/cancel")
+    def cancel_run(run_id: str):
+        runs = app.state.resources.runs
+        try:
+            run = runs.get_run(run_id)
+        except KeyError:
+            return JSONResponse(status_code=404, content={"error": f"Unknown run: {run_id}"})
+        status = run.status
+        if status in {"succeeded", "failed"}:
+            return JSONResponse(
+                status_code=409,
+                content={"error": f"Run already terminal: {status}", "status": status},
+            )
+        if status in {"cancelling", "cancelled"}:
+            return JSONResponse(
+                status_code=200,
+                content={"status": status},
+            )
+        # 活跃 run（queued/running）：投影 cancelling 并协作 drain。
+        runs.emit_run_status(
+            run_id,
+            "cancelling",
+            raw={"status": "cancelling"},
+        )
+        harness: HarnessRuntime = app.state.harness
+        drained = harness.request_cancel(run_id)
+        if not drained:
+            # queued 或尚未进入 execute_run 的 run：直接置为 cancelled。
+            runs.emit_run_status(
+                run_id,
+                "cancelled",
+                error="run cancelled",
+                raw={"status": "cancelled"},
+            )
+        return JSONResponse(status_code=202, content={"status": "cancelling"})
+
     @app.post("/upload")
     def post_upload(files: list[UploadFile] = File(...)) -> dict[str, list[dict[str, Any]]]:
         batch_timestamp = time.strftime("%Y%m%d%H%M%S")
@@ -193,7 +229,7 @@ def _ensure_failed_run(app: FastAPI, run_id: str, exc: Exception):
         run = app.state.resources.runs.get_run(run_id)
     except KeyError:
         return None
-    if run.status in {"succeeded", "failed"}:
+    if run.status in {"succeeded", "failed", "cancelled"}:
         return None
     return app.state.resources.runs.emit_run_status(
         run_id,

@@ -24,8 +24,16 @@ dependencies = [
     "httpx2>=2.5.0",
 ]
 
-# 扁平顶层模块：backend/ 内的 .py 直接作为顶层模块安装，
-# 这样模块内部 `from hands import ...` 等绝对导入在安装后同样可用。
+# backend/ 作为安装根；dsagents 是一个 Python 包（含 runtime / integrations /
+# skills 子包，以及两个内置 Skill 包 philipswgqimport、tecanimport，各自带
+# SKILL.md / references / assets，必须随 wheel 一起打包）。
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["api", "artifact_names", "hands", "harness", "philips_wgq_import", "resources", "run_ledger", "subagents", "tecan_import", "tools", "workflow_artifacts"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dsagents*"]
+
+[tool.setuptools.package-data]
+"dsagents.skills.philipswgqimport" = ["SKILL.md", "references/*.md", "assets/*"]
+"dsagents.skills.tecanimport" = ["SKILL.md", "references/*.md", "assets/*"]

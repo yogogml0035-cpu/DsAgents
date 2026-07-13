@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from api import INTERRUPTED_RUN_ERROR, create_app
-from harness import ARTIFACT_REFERENCE_HINT, HarnessRuntime
-from hands import ToolStatusHands
-from resources import AgentResources, ResourceConfig
-from run_ledger import SqliteRunLedger
+from dsagents.api import INTERRUPTED_RUN_ERROR, create_app
+from dsagents.runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from dsagents.runtime.resources import AgentResources, ResourceConfig
+from dsagents.runtime.runs import SqliteRunLedger
+from dsagents.runtime.tools import ToolCatalog
 from tests.test_support import (
     FakeBrainFactory,
     StreamControl,
@@ -20,14 +20,63 @@ from tests.test_support import (
     user_message,
     wait_for_run,
 )
-from tools import ToolCatalog
 
 
 def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_api(tmp)
+        _check_cancel(tmp)
         _check_startup_recovery(tmp)
         _check_usage_pricing(tmp)
+
+
+def _check_cancel(tmp: str) -> None:
+    cancel_data_dir = Path(tmp) / "cancel-data"
+    hold_control = StreamControl()
+    factory = FakeBrainFactory(control=hold_control)
+
+    def fake_harness(resources: AgentResources) -> HarnessRuntime:
+        return HarnessRuntime(
+            resources=resources,
+            tools=ToolCatalog(()),
+            brain_factory=factory,
+        )
+
+    app = create_app(
+        resource_config=ResourceConfig(data_dir=cancel_data_dir),
+        harness_factory=fake_harness,
+    )
+    with TestClient(app) as client:
+        # Unknown run => 404.
+        assert client.post("/runs/missing/cancel").status_code == 404
+
+        # Cancel an already-terminal (succeeded) run => 409.
+        done = client.post(
+            "/runs", json={"messages": [user_message(text_block("done"))], "session_id": "c-done"}
+        ).json()
+        wait_for_run(client, done["run_id"], "succeeded")
+        terminal_cancel = client.post(f"/runs/{done['run_id']}/cancel")
+        assert terminal_cancel.status_code == 409
+
+        # Cancel an active (running) run: drain via RunControl → cancelled.
+        hold = client.post(
+            "/runs", json={"messages": [user_message(text_block("hold"))], "session_id": "c-hold"}
+        ).json()
+        assert hold_control.started.wait(timeout=5)
+        running_snapshot = client.get(f"/runs/{hold['run_id']}").json()["run"]
+        assert running_snapshot["status"] == "running"
+        active_cancel = client.post(f"/runs/{hold['run_id']}/cancel")
+        assert active_cancel.status_code == 202
+        # Cancelling again while draining => 200 (idempotent).
+        second_cancel = client.post(f"/runs/{hold['run_id']}/cancel")
+        assert second_cancel.status_code == 200
+        # Release the held generator so it resumes; the cooperative drain check
+        # then surfaces GraphDrained before more events are emitted.
+        hold_control.release.set()
+        cancelled_run = wait_for_run(client, hold["run_id"], "cancelled")
+        assert cancelled_run["status"] == "cancelled"
+        # No succeeded reply leaked on a cancelled run.
+        assert cancelled_run["reply"] is None
 
 
 def _check_api(tmp: str) -> None:
@@ -40,7 +89,6 @@ def _check_api(tmp: str) -> None:
         harness_creations["count"] += 1
         return HarnessRuntime(
             resources=resources,
-            hands=ToolStatusHands(),
             tools=ToolCatalog(()),
             brain_factory=factory,
         )
@@ -53,7 +101,7 @@ def _check_api(tmp: str) -> None:
         old_request = client.post("/runs", json={"message": "hello", "session_id": None})
         assert old_request.status_code == 422
 
-        with patch("api.time.strftime", return_value="20260708010203"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010203"):
             single_upload = client.post(
                 "/upload",
                 files=[("files", ("../photo.png", b"img", "image/png"))],
@@ -70,7 +118,7 @@ def _check_api(tmp: str) -> None:
         assert first_upload_name == "photo_20260708010203.png"
         assert (api_data_dir / "artifacts" / "uploads" / first_upload_name).read_bytes() == b"img"
 
-        with patch("api.time.strftime", return_value="20260708010204"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010204"):
             normalized_upload = client.post(
                 "/upload",
                 files=[("files", ("Shipping\u00a0documents\u00a0T_CHINA\u00a015.06.2026.pdf", b"pdf", "application/pdf"))],
@@ -82,7 +130,7 @@ def _check_api(tmp: str) -> None:
         assert normalized_upload_name == "Shipping documents T_CHINA 15.06.2026_20260708010204.pdf"
         assert (api_data_dir / "artifacts" / "uploads" / normalized_upload_name).read_bytes() == b"pdf"
 
-        with patch("api.time.strftime", return_value="20260708010205"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010205"):
             multi_upload = client.post(
                 "/upload",
                 files=[
@@ -101,7 +149,7 @@ def _check_api(tmp: str) -> None:
             "notes_20260708010205.txt",
         ]
 
-        with patch("api.time.strftime", return_value="20260708010206"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010206"):
             duplicate_upload = client.post(
                 "/upload",
                 files=[
@@ -118,7 +166,7 @@ def _check_api(tmp: str) -> None:
             "report_20260708010206_2.pdf",
         ]
 
-        with patch("api.time.strftime", return_value="20260708010206"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010206"):
             conflict_upload = client.post(
                 "/upload",
                 files=[("files", ("report.pdf", b"c", "application/pdf"))],
@@ -126,7 +174,7 @@ def _check_api(tmp: str) -> None:
         assert conflict_upload.status_code == 200
         assert Path(conflict_upload.json()["files"][0]["file_path"]).name == "report_20260708010206_3.pdf"
 
-        with patch("api.time.strftime", return_value="20260708010207"):
+        with patch("dsagents.api.time.strftime", return_value="20260708010207"):
             mixed_upload = client.post(
                 "/upload",
                 files=[
@@ -175,33 +223,22 @@ def _check_api(tmp: str) -> None:
             "thinking",
             "model_usage",
             "text_delta",
-            "tool_call",
-            "tool_status",
-            "tool_result",
+            "tool_execution",
+            "tool_progress",
             "model_usage",
             "text_delta",
             "assistant_message",
             "status",
         ]
-        tool_call_event = [event for event in run_payload["events"] if event["type"] == "tool_call"][0]
-        assert tool_call_event["payload"] == {
+        tool_execution_event = [event for event in run_payload["events"] if event["type"] == "tool_execution"][0]
+        assert tool_execution_event["payload"] == {
             "message_id": "assistant-tool-" + session_id + "-2",
             "tool_call_id": "call-" + session_id + "-2",
             "name": "read_file",
             "args": {"file_path": "/artifacts/uploads/demo.jpg"},
         }
-        tool_result_event = [event for event in run_payload["events"] if event["type"] == "tool_result"][0]
-        assert tool_result_event["payload"] == {
-            "message_id": "tool-result-" + session_id + "-2",
-            "tool_call_id": "call-" + session_id + "-2",
-            "name": "read_file",
-            "status": "success",
-            "content_type": "image",
-            "mime_type": "image/jpeg",
-            "text": None,
-            "preview": None,
-        }
-        assert "base64" not in json.dumps(tool_result_event["payload"], ensure_ascii=False)
+        tool_progress_event = [event for event in run_payload["events"] if event["type"] == "tool_progress"][0]
+        assert tool_progress_event["payload"] == {"name": "parse_documents", "status": "started"}
         latest_content_event = run_payload["latest_content_event"]
         assert latest_content_event is not None
         assert latest_content_event["type"] == "assistant_message"
@@ -314,7 +351,6 @@ def _check_startup_recovery(tmp: str) -> None:
         cleanup_factory_count["count"] += 1
         return HarnessRuntime(
             resources=resources,
-            hands=ToolStatusHands(),
             tools=ToolCatalog(()),
             brain_factory=FakeBrainFactory(),
         )
@@ -419,7 +455,6 @@ def _check_usage_pricing(tmp: str) -> None:
         factory_count["count"] += 1
         return HarnessRuntime(
             resources=resources,
-            hands=ToolStatusHands(),
             tools=ToolCatalog(()),
             brain_factory=FakeBrainFactory(),
         )

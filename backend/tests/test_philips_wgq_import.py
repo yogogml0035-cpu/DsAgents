@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -9,14 +8,12 @@ from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
-from philips_wgq_import import (
-    build_philips_wgq_canonical,
-    generate_philips_wgq_documents,
-    save_philips_wgq_adjudication,
-    save_philips_wgq_extraction,
+from dsagents.integrations.artifacts import read_json_artifact, resolve_artifact_path
+from dsagents.skills.philipswgqimport.scripts.tools import (
     _validate_extraction,
+    generate_philips_wgq_import,
+    save_philips_wgq_extraction,
 )
-from workflow_artifacts import read_json_artifact, resolve_artifact_path
 
 
 def run() -> None:
@@ -29,13 +26,14 @@ def run() -> None:
         tracking.parent.mkdir(parents=True)
         _tracking_fixture(tracking)
 
-        with patch("workflow_artifacts.artifacts_root", return_value=artifacts):
+        with patch("dsagents.integrations.artifacts.artifacts_root", return_value=artifacts):
             base = _extraction()
             a = _save(base, "philips-wgq-extractor-a")
             b = _save(base, "philips-wgq-extractor-b")
 
-            consistent = _build([a, b])
-            assert consistent["status"] == "canonical"
+            # A/B consistent -> one-shot generate produces 3 Excel.
+            consistent = _generate([a, b])
+            assert consistent["status"] == "generated"
             canonical = read_json_artifact(consistent["canonical_artifact"])
             item = canonical["items"][0]
             assert item["product_id"] == "10989000085103"
@@ -48,101 +46,97 @@ def run() -> None:
             assert canonical["logistics"]["gross_weight"] == 13.5
             assert canonical["international_forwarder"] == "DHL"
 
-            one_failed = _build([a, "/artifacts/downloads/missing.json"])
-            assert one_failed["status"] == "needs_c"
+            # Only one A/B extractor -> needs C, surfaced as input_problems.
+            one_failed = _generate([a, "/artifacts/downloads/missing.json"])
+            assert one_failed["code"] == "input_problems"
+            assert any("extractor C" in p["issue"] for p in one_failed["problems"])
 
+            # A/B conflict on a field -> needs C, surfaced as input_problems.
             conflict_payload = copy.deepcopy(base)
             conflict_payload["items"][0]["description"] = _field("different")
             conflict_b = _save(conflict_payload, "philips-wgq-extractor-b")
-            assert _build([a, conflict_b])["status"] == "needs_c"
-            premature = save_philips_wgq_adjudication(
+            conflict_result = _generate([a, conflict_b])
+            assert conflict_result["code"] == "input_problems"
+            assert any("extractor C" in p["issue"] for p in conflict_result["problems"])
+
+            # Premature decisions on A/B conflict -> input_problems (C required first).
+            premature = _generate(
                 [a, conflict_b],
-                [{"conflict_id": "items.row-1.description", "value": "Medical part", "reason": "回查"}],
-            )["artifact_path"]
-            try:
-                _build([a, conflict_b], adjudication_artifact=premature)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("A/B conflict must require extractor C before adjudication")
+                decisions=[{"conflict_id": "items.row-1.description", "value": "Medical part", "reason": "回查"}],
+            )
+            assert premature["code"] == "input_problems"
+            assert any("C 抽取尚未完成" in p["issue"] for p in premature["problems"])
 
-            product_conflict = copy.deepcopy(base)
-            product_conflict["items"][0]["product_id_raw"] = _field("DIFFERENT-PN")
-            product_conflict_b = _save(product_conflict, "philips-wgq-extractor-b")
-            assert _build([a, product_conflict_b])["status"] == "needs_c"
-
-            assert _build([
-                "/artifacts/downloads/missing-a.json",
-                "/artifacts/downloads/missing-b.json",
-            ])["status"] == "needs_input"
-
+            # C alone (consistent with the original source) -> generate.
             c = _save(base, "philips-wgq-extractor-c")
-            assert _build([c])["status"] == "canonical"
+            assert _generate([c])["status"] == "generated"
 
+            # A/B/C majority on a logistics field -> generate.
             majority_b = copy.deepcopy(base)
             majority_b["logistics"]["hawb_number"] = _field("B-H")
             majority_b_path = _save(majority_b, "philips-wgq-extractor-b")
             majority_c = copy.deepcopy(base)
             majority_c["logistics"]["hawb_number"] = _field("J180317")
             majority_c_path = _save(majority_c, "philips-wgq-extractor-c")
-            assert _build([a, majority_b_path, majority_c_path])["status"] == "canonical"
+            assert _generate([a, majority_b_path, majority_c_path])["status"] == "generated"
 
+            # A/B/C conflict with no decision -> input_problems listing the conflict.
             no_majority_c = copy.deepcopy(base)
             no_majority_c["logistics"]["hawb_number"] = _field("C-H")
             no_majority_c_path = _save(no_majority_c, "philips-wgq-extractor-c")
-            unresolved = _build([a, majority_b_path, no_majority_c_path])
-            assert unresolved["status"] == "needs_adjudication"
-            assert unresolved["conflicts"] == [
-                {
-                    "conflict_id": "logistics.hawb_number",
-                    "field": "logistics.hawb_number",
-                    "values": [
-                        {"extractor": "philips-wgq-extractor-a", "value": "J180317"},
-                        {"extractor": "philips-wgq-extractor-b", "value": "B-H"},
-                        {"extractor": "philips-wgq-extractor-c", "value": "C-H"},
-                    ],
-                }
-            ]
-            adjudication = save_philips_wgq_adjudication(
-                [a, majority_b_path, no_majority_c_path],
-                [
-                    {
-                        "conflict_id": "logistics.hawb_number",
-                        "value": "J180317",
-                        "reason": "回查确认",
-                    }
-                ],
-            )["artifact_path"]
-            assert _build(
-                [a, majority_b_path, no_majority_c_path],
-                adjudication_artifact=adjudication,
-            )["status"] == "canonical"
+            unresolved = _generate([a, majority_b_path, no_majority_c_path])
+            assert unresolved["code"] == "input_problems"
+            assert any(
+                p["location"] == "logistics.hawb_number" and "不一致" in p["issue"]
+                for p in unresolved["problems"]
+            )
 
+            # Same A/B/C conflict resolved by an inline decision -> generate.
+            resolved = _generate(
+                [a, majority_b_path, no_majority_c_path],
+                decisions=[
+                    {"conflict_id": "logistics.hawb_number", "value": "J180317", "reason": "回查确认"}
+                ],
+            )
+            assert resolved["status"] == "generated"
+
+            # Decisions reference a non-existent conflict_id -> input_problems.
+            bad_decision = _generate(
+                [a, majority_b_path, majority_c_path],
+                decisions=[{"conflict_id": "items.row-1.description", "value": "x", "reason": "nope"}],
+            )
+            assert bad_decision["code"] == "input_problems"
+            assert any(p["location"] == "decisions" for p in bad_decision["problems"])
+
+            # All extractors jointly missing a logistics field -> input_problems.
             missing = copy.deepcopy(base)
             missing["logistics"]["gross_weight"] = _field(None, "low")
             missing_a = _save(missing, "philips-wgq-extractor-a")
             missing_b = _save(missing, "philips-wgq-extractor-b")
-            assert _build([missing_a, missing_b])["status"] == "needs_c"
             missing_c = _save(missing, "philips-wgq-extractor-c")
-            required = _build([missing_a, missing_b, missing_c])
-            assert required["status"] == "needs_input"
-            assert "logistics.gross_weight" in required["missing"]
+            required = _generate([missing_a, missing_b, missing_c])
+            assert required["code"] == "input_problems"
+            assert any(p["location"] == "logistics.gross_weight" for p in required["problems"])
 
+            # No valid items -> input_problems.
             empty = {"logistics": base["logistics"], "items": []}
             empty_a = _save(empty, "philips-wgq-extractor-a")
             empty_b = _save(empty, "philips-wgq-extractor-b")
-            assert _build([empty_a, empty_b])["status"] == "needs_c"
             empty_c = _save(empty, "philips-wgq-extractor-c")
-            assert _build([empty_a, empty_b, empty_c]) == {
-                "status": "needs_input",
-                "missing": ["valid_items"],
-            }
+            empty_result = _generate([empty_a, empty_b, empty_c])
+            assert empty_result["code"] == "input_problems"
+            assert any("商品行" in p["issue"] for p in empty_result["problems"])
 
-            assert build_philips_wgq_canonical(
-                [a, b],
-                "/artifacts/uploads/tracking.xlsx",
-            ) == {"status": "needs_input", "missing": ["international_forwarder"]}
+            # Missing forwarder -> input_problems.
+            no_forwarder = generate_philips_wgq_import(
+                extraction_artifacts=[a, b],
+                tracking_artifact="/artifacts/uploads/tracking.xlsx",
+                international_forwarder=None,
+            )
+            assert no_forwarder["code"] == "input_problems"
+            assert any(p["location"] == "international_forwarder" for p in no_forwarder["problems"])
 
+            # Old extraction contract is rejected.
             try:
                 _validate_extraction(
                     {
@@ -157,12 +151,11 @@ def run() -> None:
             else:
                 raise AssertionError("old Philips extraction contract must be rejected")
 
+            # Generated workbooks carry the expected fields (Oracle config absent
+            # => manual check for oracle_units is present).
             with patch.dict(os.environ, {}, clear=True):
-                generated = generate_philips_wgq_documents(consistent["canonical_artifact"])
-            assert generated["status"] == "generated"
-            assert len(generated["artifacts"]) == 3
-            assert any(check["field"] == "oracle_units" for check in generated["manual_checks"])
-            _check_workbooks(generated["artifacts"])
+                _check_workbooks(consistent["artifacts"])
+            assert any(check["field"] == "oracle_units" for check in consistent["manual_checks"])
 
 
 def _field(value: object, confidence: str = "high") -> dict[str, object]:
@@ -202,12 +195,12 @@ def _save(payload: dict[str, object], extractor: str) -> str:
     )["artifact_path"]
 
 
-def _build(paths: list[str], **kwargs: object) -> dict[str, object]:
-    return build_philips_wgq_canonical(
-        paths,
-        "/artifacts/uploads/tracking.xlsx",
-        "DHL",
-        "普货",
+def _generate(paths: list[str], **kwargs: object) -> dict[str, object]:
+    return generate_philips_wgq_import(
+        extraction_artifacts=paths,
+        tracking_artifact="/artifacts/uploads/tracking.xlsx",
+        international_forwarder="DHL",
+        customs_mode="普货",
         **kwargs,
     )
 
@@ -217,56 +210,17 @@ def _tracking_fixture(path: Path) -> None:
     sheet = workbook.active
     sheet.title = "进口"
     headers = [
-        "状态",
-        "料号",
-        "数量",
-        "型号",
-        "币种",
-        "备案单价USD",
-        "备案总价USD",
-        "原产国",
-        "运单号",
-        "国际货代",
-        "进境STO(PO)",
-        "件数",
-        "净重",
-        "毛重",
-        "Figo提供完整申报要素日期",
-        "HS编码",
-        "中文品名",
-        "法定第一单位",
-        "Modality",
-        "监管条件",
-        "监管条件详解",
-        "海关税则书所列商品名称",
-        "进境备注",
+        "状态", "料号", "数量", "型号", "币种", "备案单价USD", "备案总价USD", "原产国",
+        "运单号", "国际货代", "进境STO(PO)", "件数", "净重", "毛重",
+        "Figo提供完整申报要素日期", "HS编码", "中文品名", "法定第一单位", "Modality",
+        "监管条件", "监管条件详解", "海关税则书所列商品名称", "进境备注",
     ]
     sheet.append(headers)
     sheet.append(
         [
-            "已出",
-            "989000085103",
-            2,
-            "old",
-            "USD",
-            10,
-            20,
-            "美国",
-            "OLD",
-            "DHL",
-            "OLDPO",
-            2,
-            8,
-            10,
-            None,
-            "901890",
-            "医疗部件",
-            "个",
-            "CT",
-            "A",
-            "detail",
-            "medical device",
-            "进口",
+            "已出", "989000085103", 2, "old", "USD", 10, 20, "美国",
+            "OLD", "DHL", "OLDPO", 2, 8, 10, None,
+            "901890", "医疗部件", "个", "CT", "A", "detail", "medical device", "进口",
         ]
     )
     declaration = workbook.create_sheet("申报要素")
