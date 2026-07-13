@@ -127,7 +127,7 @@ running → cancelling → cancelled
 
 ## 5. 测试位置
 
-`backend/tests/` 是测试源码目录，断言分布：
+`backend/tests/` 是测试源码目录，当前包含 10 个 `test_*.py`（其中 3 个显式真实集成脚本）和共享 `test_support.py`，断言分布：
 
 - `test_tools.py`：MinerU/解压行为及六个默认工具注册。
 - `test_run_ledger.py`：`input_messages_json`、事件投影、大 payload 外溢、启动恢复、`model_usage` 聚合与 `get_latest_content_event` 排除、UTC ISO-8601 毫秒时间戳。

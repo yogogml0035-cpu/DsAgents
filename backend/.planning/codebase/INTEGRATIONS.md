@@ -3,6 +3,8 @@
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
 > 本轮刷新（2026-07-13）已逐文件核对当前工作树：`dsagents/api.py`、`dsagents/runtime/`、`dsagents/integrations/`、两个内置 Skill 包；HTTP/run ledger/MinerU/上传/artifacts 边界、DeepAgents Skills/SubAgents、Oracle 与 Excel 模板链均与代码一致。
 
+`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部仍允许测试或程序内调用传入本地路径，业务 Skill 的 generator 只接受显式 `/artifacts/...` JSON/Excel 路径。
+
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
 入口模块：`dsagents/api.py`。`create_app(*, resource_config: ResourceConfig | None = None, harness_factory: Callable[[AgentResources], HarnessRuntime] = create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块底部 `app = create_app()`，预期由 `uv run uvicorn dsagents.api:app` 拉起（uvicorn 作为依赖声明存在，但 `api.py` 未直接 import；测试用 `harness_factory` 注入 `FakeBrainFactory`）。

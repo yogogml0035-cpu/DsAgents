@@ -21,7 +21,7 @@ python -m tests.test_api
 
 ## 2. 测试目录与模块分工（已确认）
 
-`backend/tests/` 当前文件（`__init__.py` + 9 个 `test_*.py` + 1 个 `test_support.py` + `tests_file/` 资源目录）：
+`backend/tests/` 当前文件（`__init__.py` + 10 个 `test_*.py`，其中 3 个显式真实集成脚本 + `test_support.py` + 资源目录）：
 
 | 文件 | 入口 | 作用 |
 | --- | --- | --- |

@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-13）已对齐 backend 全部事实文档（同日刷新）：旧扁平顶层模块（`backend/*.py`）与旧带连字符 `skills/` 目录已删除，整个产品收口进 Python 包 `backend/dsagents/`（子包 `runtime/` / `integrations/` / `skills/`），Philips/Tecan 业务代码归属各自内置 Skill 包；run-first HTTP/ledger、四个声明式 SubAgent、两个 middleware、新事件 schema（7 类）、run 状态机 + cancel、Oracle/Excel 边界均按当前源码重述。
+> 本轮刷新（2026-07-13）已对齐 backend 全部事实文档（同日刷新）：旧扁平顶层模块（`backend/*.py`）与旧带连字符 `skills/` 目录已删除，整个产品收口进 Python 包 `backend/dsagents/`（子包 `runtime/` / `integrations/` / `skills/`），Philips/Tecan 业务代码归属各自内置 Skill 包；run-first HTTP/ledger、四个声明式 SubAgent、两个 middleware、新事件 schema（7 类）、run 状态机 + cancel、Oracle/Excel 边界均按当前源码重述。模型由 `BrainFactory` 注入，存储由 `AgentResources` 装配，二者边界保持分离。
 
 ## 1. 系统定位
 

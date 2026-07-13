@@ -10,7 +10,7 @@
 - **Brain 可插拔**：`Brain` / `BrainFactory` 是 `Protocol`（`dsagents/runtime/agent.py`），任何实现 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic 客户端）模型。
 - **工具静态注册**：`ToolCatalog`（`dsagents/runtime/tools.py`）是一组普通 `Callable[..., Any]`，不是 `Protocol`；`default_tool_catalog()` 静态注册 6 个工具（2 个 MinerU 通用 + 每个 Skill 2 个业务），主 Agent 装配时直接 import，不自动扫描、无插件平台、无动态加载器。
 - **业务能力按 Skill 打包**：两个内置 Skill 包 `dsagents/skills/philipswgqimport/` 与 `dsagents/skills/tecanimport/`（目录名同时满足 Agent Skill 命名与 Python 包标识符规则，故无需动态 loader）；每个含 `SKILL.md` + `references/` + `assets/` + `scripts/{tools.py, documents.py}`。`workflow_subagents()`（`dsagents/runtime/agent.py`）注册 4 个声明式 extractor SubAgent（A/B 各两个），每个 SubAgent 自装自己的 middleware。
-- 模型 / 后端存储 / 持久化通道全部收口在 `AgentResources`（`dsagents/runtime/resources.py`），由调用方注入。
+- 存储与持久化通道收口在 `AgentResources`（`dsagents/runtime/resources.py`），由调用方注入；模型由 `BrainFactory` 创建并注入运行时，二者边界不混合。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。
 

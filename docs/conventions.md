@@ -5,8 +5,8 @@
 ## 核心原则（全局人工约束）
 
 - **能力可插拔**：Brain（如 DeepAgents）、执行器、工具做成可插拔；项目自身拥有 run、事件、资源、工具路由与运行时状态，不被硬编码到某个 runner、容器、模型或工作流。
-- **Protocol 不泛化**：`typing.Protocol` 只用于运行时注入的能力边界（当前 `Brain` / `BrainFactory` / `Hands`）。工具用普通 callable + `ToolCatalog`，资源 / ledger 用具体类；除非出现真实替换点，不为单实现代码新增 Protocol/ABC。读默认实现时从 `create_harness(...)` 进入。
-- **run 是事件源**：`run_events` 表 append-only 存完整规范化事件与 raw chunk；`runs` 表是事件投影出的快照。`values` snapshot 只保留在 raw 中，外部消费规范化事件；最终 `assistant_message.payload` 可携带最后一个 `thinking` 文本和最终 `text`。短期上下文不再自建回放，统一交给 LangGraph `checkpointer` + `thread_id=session_id`。（旧 `session` 模块/表/事件回放已在 commit `8890292` 移除。）
+- **Protocol 不泛化**：`typing.Protocol` 只用于运行时注入的能力边界（当前 `Brain` / `BrainFactory`）。工具用普通 callable + `ToolCatalog`，资源 / ledger 用具体类；除非出现真实替换点，不为单实现代码新增 Protocol/ABC。读默认实现时从 `create_harness(...)` 进入。
+- **run 是事件源**：`run_events` 表 append-only 存完整规范化事件与 raw chunk；`runs` 表是事件投影出的快照。外部消费规范化事件；最终 `assistant_message.payload` 可携带最后一个 `thinking` 文本和最终 `text`。短期上下文不再自建回放，统一交给 LangGraph `checkpointer` + `thread_id=session_id`。
 - **保持运行时薄**：提交 run、驱动 Brain、规范化 stream chunk、写回 run 事件。在真实 caller 需要前，不增加服务层、策略框架、工作流引擎、容器或宽泛的安全/配置系统。
 - **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
 - **简单性约束**：优先删减范围而非增加旋钮。

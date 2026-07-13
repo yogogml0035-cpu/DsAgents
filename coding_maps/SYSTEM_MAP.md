@@ -136,6 +136,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - 业务 extraction / canonical / Excel 同样写到 `downloads/`，每次生成唯一新文件（`unique_download_path` / `write_json_artifact`，不覆盖旧文件）；输入路径必须显式给出，上传原件和模板不被编辑。
 - `/skills/` 映射源码 `dsagents/skills/`（两个内置 Skill 包）；主 agent 与 extractor 的文件权限阻止写入 `/skills/**`。
 - `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
+- API 请求只接受显式 `/artifacts/...` 路径；`parse_documents` 为便于测试和程序内调用另外保留本地路径入口，业务 Skill 的 generator 仍只消费显式 artifact JSON/Excel 路径。
 
 ### 4.5 业务工具 / Skill 边界
 
@@ -188,7 +189,7 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - **并发语义**：单飞锁仅进程内 `threading.Lock`；多 worker（`uvicorn --workers N`）部署同 `session_id` 可跨进程并发，锁失效。`dsagents_runs.db` 每次操作短连接。`run_controls: dict[run_id → RunControl]` 是进程内字典，仅用于 cancel；多进程部署时跨进程无法协作 drain。
 - **Oracle thick client 部署依赖**：`oracledb` thick mode 需要 `ORACLE_CLIENT_LIB_DIR` 指向 Oracle instant client 目录；该 instant client 已从仓库删除（见 [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §3/§8），生产部署需外部提供。缺失或初始化失败时 `generate_philips_wgq_import` 优雅降级，生成的核注清单将缺法定单位字段并返回人工校验项。Tecan Skill 不消费任何 Oracle 键。
 - **运行时数据留存**：`run_events` 只增不删，raw chunk 长期留存（含模型输出与错误细节）；无 TTL/归档/压缩。
-- **测试覆盖**：本地 assert 脚本（`cd backend && python -m tests.<name>`，**非 pytest**，无总控 runner/CI/lint gate）覆盖 Skills/Subagents 配置、新事件序列（`tool_execution`/`tool_progress`）、A/B/C 与 Excel 关键单元格、`POST /runs/{id}/cancel`、prompt-cache usage 观测（`model_usage` 事件、`GET /runs` 顶层 `usage`、tier 计价、failed run 保留）。真实模型/MinerU/Oracle 集成脚本（`test_real_image_run.py` / `test_real_multi_pdf_run.py` / `test_minimax_cache_baseline.py`）默认不运行、env 守卫，仍需独立验证。
+- **测试覆盖**：backend 当前有 10 个 `test_*.py` 脚本，其中 3 个显式真实集成脚本；本地 assert 脚本（`cd backend && python -m tests.<name>`，**非 pytest**，无总控 runner/CI/lint gate）覆盖 Skills/Subagents 配置、新事件序列（`tool_execution`/`tool_progress`）、A/B/C 与 Excel 关键单元格、`POST /runs/{id}/cancel`、prompt-cache usage 观测（`model_usage` 事件、`GET /runs` 顶层 `usage`、tier 计价、failed run 保留）。真实模型/MinerU/Oracle 集成脚本（`test_real_image_run.py` / `test_real_multi_pdf_run.py` / `test_minimax_cache_baseline.py`）默认不运行、env 守卫，仍需独立验证。
 
 **验证入口**：
 

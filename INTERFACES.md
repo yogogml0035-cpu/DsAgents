@@ -3,6 +3,8 @@
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
 > 本轮刷新（2026-07-13）已对齐 backend 全部事实文档（同日刷新）：旧扁平顶层模块已删除，HTTP 改为四端点（含 `POST /runs/{run_id}/cancel`），事件 schema 改为 7 类（`tool_call`/`tool_status`/`tool_result` 删除），Brain/BrainFactory 仍是 Protocol，`ToolTelemetry`/`NoProgressMiddleware` 取代旧 Hands，业务 Tool 收敛为每 Skill 2 个，`info_source_preference` 删除。
 
+HTTP 和业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`parse_documents` 的程序内调用为测试便利保留本地路径兼容，不改变对外 API 契约。
+
 ## 1. HTTP API 边界
 
 四个端点（入口模块 `dsagents/api.py`，`create_app(*, resource_config=None, harness_factory=create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块级 `app = create_app()`；预期 `uv run uvicorn dsagents.api:app` 拉起，默认 `--host 0.0.0.0 --port 8500`）。**当前无 SSE / `StreamingResponse` / `text/event-stream`**，事件获取靠轮询。
