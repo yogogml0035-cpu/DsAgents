@@ -24,16 +24,18 @@ dependencies = [
     "httpx2>=2.5.0",
 ]
 
-# backend/ 作为安装根；dsagents 是一个 Python 包（含 runtime / integrations /
-# skills 子包，以及两个内置 Skill 包 philipswgqimport、tecanimport，各自带
-# SKILL.md / references / assets，必须随 wheel 一起打包）。
+# backend/ 作为安装根；发行名保持 dsagents，但源码顶层入口拆成 api.py 与
+# runtime/、integrations/、skills/ 三个包。两个内置 Skill 包
+# philipswgqimport、tecanimport 的 SKILL.md / references / assets 必须随
+# wheel 一起打包。
 [tool.setuptools]
 package-dir = {"" = "."}
+py-modules = ["api"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dsagents*"]
+include = ["runtime*", "integrations*", "skills*"]
 
 [tool.setuptools.package-data]
-"dsagents.skills.philipswgqimport" = ["SKILL.md", "references/*.md", "assets/*"]
-"dsagents.skills.tecanimport" = ["SKILL.md", "references/*.md", "assets/*"]
+"skills.philipswgqimport" = ["SKILL.md", "references/*.md", "assets/*"]
+"skills.tecanimport" = ["SKILL.md", "references/*.md", "assets/*"]

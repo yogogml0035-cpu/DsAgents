@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
-from dsagents.integrations.artifacts import read_json_artifact, resolve_artifact_path
-from dsagents.skills.philipswgqimport.scripts.tools import (
+from integrations.artifacts import read_json_artifact, resolve_artifact_path
+from skills.philipswgqimport.scripts.tools import (
     _validate_extraction,
     generate_philips_wgq_import,
     save_philips_wgq_extraction,
@@ -26,7 +26,7 @@ def run() -> None:
         tracking.parent.mkdir(parents=True)
         _tracking_fixture(tracking)
 
-        with patch("dsagents.integrations.artifacts.artifacts_root", return_value=artifacts):
+        with patch("integrations.artifacts.artifacts_root", return_value=artifacts):
             base = _extraction()
             a = _save(base, "philips-wgq-extractor-a")
             b = _save(base, "philips-wgq-extractor-b")

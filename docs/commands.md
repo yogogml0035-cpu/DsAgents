@@ -6,7 +6,6 @@
 cd backend
 uv sync
 ```
-
 ## 测试脚本
 
 ```powershell
@@ -24,7 +23,7 @@ backend 测试统一放在 `backend/tests/test_*.py`。业务工作流改动运�
 
 ```powershell
 cd backend
-uv run uvicorn dsagents.api:app --host 0.0.0.0 --port 8500
+uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
 
 或直接运行根级脚本 `scripts/start-backend.bat`（等价命令，会自动切到 `backend/` 再启动）。
@@ -66,7 +65,7 @@ curl -X POST http://127.0.0.1:8500/runs/<run_id>/cancel
 如需程序内调用，用：
 
 ```python
-from dsagents.runtime import AgentResources, ResourceConfig, create_harness
+from runtime import AgentResources, ResourceConfig, create_harness
 ```
 
 然后显式创建 `messages`、写入 run、执行 `execute_run(...)`、再从 `resources.runs.get_run(run_id)` 读取结果。例如：
@@ -74,7 +73,7 @@ from dsagents.runtime import AgentResources, ResourceConfig, create_harness
 ```python
 import json
 
-from dsagents.runtime import AgentResources, ResourceConfig, create_harness
+from runtime import AgentResources, ResourceConfig, create_harness
 
 messages = [
     {

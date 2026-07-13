@@ -1,13 +1,13 @@
 # INTEGRATIONS
 
 > 外部集成与依赖边界。事实基于当前代码核对，区分「已确认」与「需确认」。
-> 本轮刷新（2026-07-13）已逐文件核对当前工作树：`dsagents/api.py`、`dsagents/runtime/`、`dsagents/integrations/`、两个内置 Skill 包；HTTP/run ledger/MinerU/上传/artifacts 边界、DeepAgents Skills/SubAgents、Oracle 与 Excel 模板链均与代码一致。
+> 本轮刷新（2026-07-13）已逐文件核对当前工作树：`api.py`、`runtime/`、`integrations/`、两个内置 Skill 包；HTTP/run ledger/MinerU/上传/artifacts 边界、DeepAgents Skills/SubAgents、Oracle 与 Excel 模板链均与代码一致。
 
 `POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部仍允许测试或程序内调用传入本地路径，业务 Skill 的 generator 只接受显式 `/artifacts/...` JSON/Excel 路径。
 
 ## 1. HTTP 框架（FastAPI + uvicorn）
 
-入口模块：`dsagents/api.py`。`create_app(*, resource_config: ResourceConfig | None = None, harness_factory: Callable[[AgentResources], HarnessRuntime] = create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块底部 `app = create_app()`，预期由 `uv run uvicorn dsagents.api:app` 拉起（uvicorn 作为依赖声明存在，但 `api.py` 未直接 import；测试用 `harness_factory` 注入 `FakeBrainFactory`）。
+入口模块：`api.py`。`create_app(*, resource_config: ResourceConfig | None = None, harness_factory: Callable[[AgentResources], HarnessRuntime] = create_harness)` 返回 `FastAPI(lifespan=lifespan)`，模块底部 `app = create_app()`，预期由 `uv run uvicorn api:app --host 0.0.0.0 --port 8500` 拉起（uvicorn 作为依赖声明存在，但 `api.py` 未直接 import；测试用 `harness_factory` 注入 `FakeBrainFactory`）。
 
 ### 端点契约
 
@@ -25,7 +25,7 @@
 
 ### 取消流（`POST /runs/{run_id}/cancel`）
 
-`dsagents/api.py` 的 `cancel_run`：
+`api.py` 的 `cancel_run`：
 
 - 未知 run → `404 {"error":"Unknown run: <run_id>"}`。
 - 终态（`succeeded`/`failed`）→ `409 {"error":"Run already terminal: <status>","status":<status>}`。
@@ -34,9 +34,9 @@
 
 取消不回滚已生成文件，不实现多进程强杀。
 
-### `usage` 出口结构（`dsagents/api.py _usage_summary`）
+### `usage` 出口结构（`api.py _usage_summary`）
 
-基于 `dsagents/runtime/runs.py aggregate_model_usage(run_id)` 的原始 token 总量，叠加 cache hit rate 与 tier-aware CNY 估算（`PRICING_AS_OF = "2026-07-12"`，MiniMax-M3 standard 定价）：
+基于 `runtime/runs.py aggregate_model_usage(run_id)` 的原始 token 总量，叠加 cache hit rate 与 tier-aware CNY 估算（`PRICING_AS_OF = "2026-07-12"`，MiniMax-M3 standard 定价）：
 
 - `model_calls`、`input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`、`cache_hit_rate`（无输入为 `null`）。
 - `estimated_cost_cny` / `estimated_savings_cny`：按**每个模型调用自身 input ≤/> 512k tokens** 分 tier（standard / long_context）后汇总；cache creation 按非 cache-read input 计价，savings 为 cache-read 相对 standard input 的折扣。任意一次调用的模型不在可计价集合（`_PRICEABLE_MODELS = {"MiniMax-M3"}`）内时，两个金额均为 `null`，token 计数仍完整。
@@ -46,7 +46,7 @@
 ### artifact block 与上传能力
 
 - `artifact` block 是**项目 API 语义**，不是直接发给 LangChain 的标准多模态 block。
-- `HarnessRuntime.execute_run(...)`（`dsagents/runtime/execution.py`）把 `artifact` block 转成文本提示 `ARTIFACT_REFERENCE_HINT`（`Uploaded artifact: {path}. Use read_file ... or parse_documents ...`），再把归一化后的 `messages[]`（全部转成 `{"type":"text","text":...}`）发给 Brain。
+- `HarnessRuntime.execute_run(...)`（`runtime/execution.py`）把 `artifact` block 转成文本提示 `ARTIFACT_REFERENCE_HINT`（`Uploaded artifact: {path}. Use read_file ... or parse_documents ...`），再把归一化后的 `messages[]`（全部转成 `{"type":"text","text":...}`）发给 Brain。
 - 常见办公文件和任意图片都可以通过 `POST /upload` 保存；能否被解析或理解取决于 DeepAgents `read_file`、`parse_documents`、MinerU 和模型多模态能力。
 
 ### lifespan
@@ -58,22 +58,22 @@
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", ...)` → `ChatAnthropic`；`create_deep_agent(...)` 同时注入 `skills=["/skills/"]`、四个 SubAgents、`/skills/**` 写禁令、主 Agent middleware 与主 agent 名（`MAIN_AGENT_NAME = "dsagents-main"`） | `dsagents/runtime/agent.py` |
+| 生产 brain | `DeepAgentsBrainFactory`：`init_chat_model("anthropic:<MODEL>", ...)` → `ChatAnthropic`；`create_deep_agent(...)` 同时注入 `skills=["/skills/"]`、四个 SubAgents、`/skills/**` 写禁令、主 Agent middleware 与主 agent 名（`MAIN_AGENT_NAME = "dsagents-main"`） | `runtime/agent.py` |
 | 本地测试 brain | `FakeBrain` / `FakeBrainFactory`（模拟 v2 stream chunk，`updates`+`subgraphs`，不触达真实 provider） | `backend/tests/test_support.py` |
-| 系统 prompt | `DEFAULT_SYSTEM_PROMPT` 引导文件工具，并明确只有用户清晰要求业务结果时才使用业务 Skill；普通 PDF 请求不触发业务流程 | `dsagents/runtime/agent.py` |
-| prompt-cache 中间件 | **不新增自定义 cache middleware**。`create_deep_agent` 已在尾栈自动挂 `AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")`（`deepagents/graph.py`），给 system 末块与末个 tool 打 `cache_control={"type":"ephemeral","ttl":"5m"}`；因为 MiniMax 走 `ChatAnthropic`，该中间件对 MiniMax-M3 生效。固定前缀 = `DEFAULT_SYSTEM_PROMPT` + `default_tool_catalog()` tool schema + SDK 默认 deep-agent prompt，**不要**向其注入时间/run_id 等动态内容 | `dsagents/runtime/agent.py` + `langchain_anthropic/middleware/prompt_caching.py`（库源） |
-| usage 观测出口 | usage 不实现为 Agent middleware，而是复用 `execute_run` 的统一 `messages` 流出口：在 subagent 文本过滤之前从终态 chunk 的 `usage_metadata` 提取（`dsagents/runtime/observability.py model_usage`），每个模型调用仅在非空时写一次 `model_usage` 事件（含 subagent 调用）；不写入 AgentState/checkpointer/store，不新增表 | `dsagents/runtime/{execution,observability,runs}.py` + `api._usage_summary` |
+| 系统 prompt | `DEFAULT_SYSTEM_PROMPT` 引导文件工具，并明确只有用户清晰要求业务结果时才使用业务 Skill；普通 PDF 请求不触发业务流程 | `runtime/agent.py` |
+| prompt-cache 中间件 | **不新增自定义 cache middleware**。`create_deep_agent` 已在尾栈自动挂 `AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")`（`deepagents/graph.py`），给 system 末块与末个 tool 打 `cache_control={"type":"ephemeral","ttl":"5m"}`；因为 MiniMax 走 `ChatAnthropic`，该中间件对 MiniMax-M3 生效。固定前缀 = `DEFAULT_SYSTEM_PROMPT` + `default_tool_catalog()` tool schema + SDK 默认 deep-agent prompt，**不要**向其注入时间/run_id 等动态内容 | `runtime/agent.py` + `langchain_anthropic/middleware/prompt_caching.py`（库源） |
+| usage 观测出口 | usage 不实现为 Agent middleware，而是复用 `execute_run` 的统一 `messages` 流出口：在 subagent 文本过滤之前从终态 chunk 的 `usage_metadata` 提取（`runtime/observability.py model_usage`），每个模型调用仅在非空时写一次 `model_usage` 事件（含 subagent 调用）；不写入 AgentState/checkpointer/store，不新增表 | `runtime/{execution,observability,runs}.py` + `api._usage_summary` |
 
 ### Brain / BrainFactory 边界（模块归属）
 
-- `Brain` / `BrainFactory` 是 `dsagents/runtime/agent.py` 内定义的 `Protocol`（`stream(payload, config, **kwargs)` / `create(*, resources, middleware, tools)`）；`DeepAgentsBrainFactory` 是其生产实现，`HarnessRuntime`（`dsagents/runtime/execution.py`）持有并驱动它。
-- `create_harness`（`dsagents/runtime/execution.py`）装配：`tools=default_tool_catalog()`、`brain_factory=DeepAgentsBrainFactory()`；`execute_run` 把 `runtime_middlewares()` 与 `tools.as_list()` 一起传给 `brain_factory.create(...)`。
+- `Brain` / `BrainFactory` 是 `runtime/agent.py` 内定义的 `Protocol`（`stream(payload, config, **kwargs)` / `create(*, resources, middleware, tools)`）；`DeepAgentsBrainFactory` 是其生产实现，`HarnessRuntime`（`runtime/execution.py`）持有并驱动它。
+- `create_harness`（`runtime/execution.py`）装配：`tools=default_tool_catalog()`、`brain_factory=DeepAgentsBrainFactory()`；`execute_run` 把 `runtime_middlewares()` 与 `tools.as_list()` 一起传给 `brain_factory.create(...)`。
 - 旧的 `Hands` Protocol / `ToolStatusHands` / `ToolStatusMiddleware` 已删除；工具遥测改由 `ToolTelemetry`（`wrap_tool_call`）实现。
 
 ### Skills / Subagents 边界
 
-- `/skills/` 映射到 `dsagents/skills/`（两个内置 Skill 包：`philipswgqimport`、`tecanimport`，各含 `SKILL.md` + `references/` + `assets/` 模板 + `scripts/`）；字段/规则只下沉一层 `references/`，模板位于各 Skill 的 `assets/`。
-- `philips-wgq-extractor-a/b` 与 `tecan-extractor-a/b` 是创建 DeepAgent 时一次性注册的声明式 SubAgent（`workflow_subagents()`，`dsagents/runtime/agent.py`）；每个只获得对应 extraction 保存工具，内置文件写入被 `_READ_ONLY_FILES`（`FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")`）拒绝；每个 SubAgent 通过 `_extractor(...)` **显式注入** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）。
+- `/skills/` 映射到 `skills/`（两个内置 Skill 包：`philipswgqimport`、`tecanimport`，各含 `SKILL.md` + `references/` + `assets/` 模板 + `scripts/`）；字段/规则只下沉一层 `references/`，模板位于各 Skill 的 `assets/`。
+- `philips-wgq-extractor-a/b` 与 `tecan-extractor-a/b` 是创建 DeepAgent 时一次性注册的声明式 SubAgent（`workflow_subagents()`，`runtime/agent.py`）；每个只获得对应 extraction 保存工具，内置文件写入被 `_READ_ONLY_FILES`（`FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")`）拒绝；每个 SubAgent 通过 `_extractor(...)` **显式注入** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）。
 - A/B 并行、C 回查和裁决由 Skill 指令驱动；业务模块不扫描 session、上传历史或最近文件，所有 `generate_*_import` 只消费显式 artifact 路径。
 - `execute_run` 按 stream metadata 的 `lc_agent_name` 丢弃 subagent thinking/text token（`observability.is_subagent_message` / `chunk_agent`），只对外暴露主 agent 模型 token；usage 提取在过滤之前完成，故 subagent 模型成本仍计入。
 - 锁定的 `deepagents==0.6.12` 没有官方新文档中的 `harness_profile` 构造参数；代码用该版本公开的 profile 注册 API（`register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))`）禁用默认 general-purpose subagent。
@@ -82,13 +82,13 @@
 
 | 键 | 用途 | 消费者 |
 |---|---|---|
-| `MINIMAX_MODEL` | 传给 `init_chat_model` 的模型名（`anthropic:` 前缀）；`.env.example` 默认 `MiniMax-M3` | `dsagents/runtime/agent.py` |
-| `MINIMAX_API_KEY` | Anthropic 兼容客户端 API key | `dsagents/runtime/agent.py` |
-| `MINIMAX_BASE_URL` | Anthropic 兼容端点 base URL（实际可指向 MiniMax） | `dsagents/runtime/agent.py` |
+| `MINIMAX_MODEL` | 传给 `init_chat_model` 的模型名（`anthropic:` 前缀）；`.env.example` 默认 `MiniMax-M3` | `runtime/agent.py` |
+| `MINIMAX_API_KEY` | Anthropic 兼容客户端 API key | `runtime/agent.py` |
+| `MINIMAX_BASE_URL` | Anthropic 兼容端点 base URL（实际可指向 MiniMax） | `runtime/agent.py` |
 
 ## 3. LangGraph checkpointer / store 持久化边界
 
-`AgentResources.__enter__` 装配（`dsagents/runtime/resources.py`）：
+`AgentResources.__enter__` 装配（`runtime/resources.py`）：
 
 | 组件 | 来源 | DB 路径 | setup |
 |---|---|---|---|
@@ -107,7 +107,7 @@
 | `/skills/` | `FilesystemBackend(root_dir=skills_dir.resolve(), virtual_mode=True)` | Skill/参考文档/模板读取；agent 权限禁止写入 |
 | 其它（含 `/conversation_history/`、`/logs/`） | `StateBackend()` | 同 `thread_id` 图状态；不进入跨 session store |
 
-LangGraph 调用约定（`dsagents/runtime/execution.py execute_run`）：
+LangGraph 调用约定（`runtime/execution.py execute_run`）：
 
 ```python
 brain.stream(
@@ -132,14 +132,14 @@ brain.stream(
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| multipart 解析 | `python-multipart`（依赖）+ FastAPI `UploadFile = File(...)` | `dsagents/api.py` |
-| 物理落点 | `<artifacts_dir>/uploads/<cleaned-stem>_<upload-ts>(_n).ext`，`target.parent.mkdir(parents=True, exist_ok=True)` | `dsagents/api.py _store_upload` |
-| 文件名清洗 | `clean_filename`：只取 basename、把所有空白归一成普通空格、strip，空则 `"upload"` | `dsagents/integrations/artifacts.py`、`dsagents/api.py` |
-| 命名冲突 | `make_timestamped_name(dir, name, batch_timestamp, reserved_names)`：同请求共用一个 batch 时间戳；只在物理路径已存在时追加 `_2`/`_3` | `dsagents/integrations/artifacts.py`、`dsagents/api.py` |
-| artifacts 根 | `ResourceConfig.artifacts_dir = data_dir / "artifacts"` | `dsagents/runtime/resources.py` |
-| 虚拟路径解析 | `resolve_artifact_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权（`Invalid /artifacts path`）；`to_virtual_artifact_path` 反向生成虚拟路径 | `dsagents/integrations/artifacts.py` |
-| 唯一下载名 | `unique_download_path(stem, suffix)` = `downloads/<stem>_<timestamp>(_n).suffix`，`make_unique_name` 保证 exclusive create | `dsagents/integrations/artifacts.py` |
-| immutable JSON | `write_json_artifact(stem, payload)` / `read_json_artifact(raw_path)`：写入用 `unique_download_path`，永不覆盖 | `dsagents/integrations/artifacts.py` |
+| multipart 解析 | `python-multipart`（依赖）+ FastAPI `UploadFile = File(...)` | `api.py` |
+| 物理落点 | `<artifacts_dir>/uploads/<cleaned-stem>_<upload-ts>(_n).ext`，`target.parent.mkdir(parents=True, exist_ok=True)` | `api.py _store_upload` |
+| 文件名清洗 | `clean_filename`：只取 basename、把所有空白归一成普通空格、strip，空则 `"upload"` | `integrations/artifacts.py`、`api.py` |
+| 命名冲突 | `make_timestamped_name(dir, name, batch_timestamp, reserved_names)`：同请求共用一个 batch 时间戳；只在物理路径已存在时追加 `_2`/`_3` | `integrations/artifacts.py`、`api.py` |
+| artifacts 根 | `ResourceConfig.artifacts_dir = data_dir / "artifacts"` | `runtime/resources.py` |
+| 虚拟路径解析 | `resolve_artifact_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权（`Invalid /artifacts path`）；`to_virtual_artifact_path` 反向生成虚拟路径 | `integrations/artifacts.py` |
+| 唯一下载名 | `unique_download_path(stem, suffix)` = `downloads/<stem>_<timestamp>(_n).suffix`，`make_unique_name` 保证 exclusive create | `integrations/artifacts.py` |
+| immutable JSON | `write_json_artifact(stem, payload)` / `read_json_artifact(raw_path)`：写入用 `unique_download_path`，永不覆盖 | `integrations/artifacts.py` |
 
 ### artifact 目录拆分规则（上传源 vs 解析产物）
 
@@ -147,19 +147,19 @@ brain.stream(
 
 | 物理子目录 | 虚拟前缀 | 写入者 | 命名规则 | 证据 |
 |---|---|---|---|---|
-| `uploads/` | `/artifacts/uploads/` | HTTP `POST /upload`（`dsagents/api.py`） | `<cleaned-stem>_<upload-ts>(_n).ext`，`make_timestamped_name` + 同请求共用时间戳；`clean_filename` 清洗 | `dsagents/api.py`、`dsagents/integrations/artifacts.py` |
-| `downloads/` | `/artifacts/downloads/` | MinerU/解压产物；Philips/Tecan extraction、canonical JSON 与 Excel | MinerU 沿用源 stem；业务 JSON/Excel 使用时间戳 + `make_unique_name` / `unique_download_path`，以 exclusive create / 新工作簿保存，不覆盖旧文件 | `dsagents/integrations/mineru.py`、两个 Skill 的 `scripts/tools.py` |
+| `uploads/` | `/artifacts/uploads/` | HTTP `POST /upload`（`api.py`） | `<cleaned-stem>_<upload-ts>(_n).ext`，`make_timestamped_name` + 同请求共用时间戳；`clean_filename` 清洗 | `api.py`、`integrations/artifacts.py` |
+| `downloads/` | `/artifacts/downloads/` | MinerU/解压产物；Philips/Tecan extraction、canonical JSON 与 Excel | MinerU 沿用源 stem；业务 JSON/Excel 使用时间戳 + `make_unique_name` / `unique_download_path`，以 exclusive create / 新工作簿保存，不覆盖旧文件 | `integrations/mineru.py`、两个 Skill 的 `scripts/tools.py` |
 
 - 上传源只进 `uploads/`，工具产物只进 `downloads/`；两路命名互不污染、互不重名（`make_timestamped_name` vs `make_unique_name`）。
 - `resolve_artifact_path` 对 `/artifacts/...` 与绝对路径（`allow_local=True` 时）一视同仁，工具层不关心产物来自上传还是解析。
-- `downloads/` 由 `dsagents/integrations/mineru.py` 与 `unique_download_path` 在落盘/解压前 lazy `mkdir(parents=True, exist_ok=True)`；`uploads/` 由 `dsagents/api.py` 同样 lazy mkdir。
+- `downloads/` 由 `integrations/mineru.py` 与 `unique_download_path` 在落盘/解压前 lazy `mkdir(parents=True, exist_ok=True)`；`uploads/` 由 `api.py` 同样 lazy mkdir。
 
 ## 5. 环境变量集成（python-dotenv）
 
-加载点（导入时 `load_dotenv(...)`）：
+加载点（导入时从 `backend/.env` 执行 `load_dotenv(...)`）：
 
-- `dsagents/runtime/agent.py`
-- `dsagents/integrations/mineru.py`
+- `runtime/agent.py`
+- `integrations/mineru.py`
 
 文档只记录**键名、用途与代码消费者**，不重复本地 `.env` 中的真实值或任何敏感示例。`.env.example` 提供的是示例占位，不应被当成运行时事实来源。
 
@@ -167,17 +167,17 @@ brain.stream(
 
 | 键 | backend 代码消费者 | 状态 |
 |---|---|---|
-| `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `dsagents/runtime/agent.py` | 已确认 |
-| `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` | `dsagents/integrations/mineru.py`（缺失即 `RuntimeError`） | 已确认 |
-| `MINERU_EFFORT` | `dsagents/integrations/mineru.py`（`os.getenv(...) or ""`，可省略或留空） | 已确认 |
-| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` | `dsagents/skills/philipswgqimport/scripts/tools.py` | 可选；三者齐备 + client 初始化成功才查询 Philips 单位 |
-| `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | `dsagents/skills/philipswgqimport/scripts/tools.py` | 可选 thick client 目录与连接/调用超时；默认 30 秒 |
+| `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL` | `runtime/agent.py` | 已确认 |
+| `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` | `integrations/mineru.py`（缺失即 `RuntimeError`） | 已确认 |
+| `MINERU_EFFORT` | `integrations/mineru.py`（`os.getenv(...) or ""`，可省略或留空） | 已确认 |
+| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` | `skills/philipswgqimport/scripts/tools.py` | 可选；三者齐备 + client 初始化成功才查询 Philips 单位 |
+| `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | `skills/philipswgqimport/scripts/tools.py` | 可选 thick client 目录与连接/调用超时；默认 30 秒 |
 
 > 交叉引用：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` 三者齐备且 `ORACLE_CLIENT_LIB_DIR` 指向有效 instant client 才会发起查询，否则**优雅降级**（跳过法定单位查询，单位字段填「需确认」并返回人工校验项）；`ORACLE_CLIENT_LIB_DIR` 是 thick mode 部署依赖（详见 `CONCERNS.md` §8）。Tecan Skill 不消费任何 Oracle 键。
 
 ## 6. 外部 HTTP 调用（requests）
 
-仅 `dsagents/integrations/mineru.py`，对接 MinerU 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_download_mineru_json` / `_download_mineru_zip`）。`MINERU_BASE_URL` 来自 `.env`，路径用 `urljoin` 在 base 末尾补 `/` 后拼接 `status_url` / `result_url`。
+仅 `integrations/mineru.py`，对接 MinerU 任务式文档解析接口（`_submit_mineru_task` / `_wait_for_mineru_completion` / `_download_mineru_json` / `_download_mineru_zip`）。`MINERU_BASE_URL` 来自 `.env`，路径用 `urljoin` 在 base 末尾补 `/` 后拼接 `status_url` / `result_url`。
 
 | 调用 | 方法 / URL | 入参 | 说明 |
 |---|---|---|---|
@@ -204,7 +204,7 @@ brain.stream(
 
 `succeeded[].files[]` 列出该 ZIP 解压出的相对路径；`failed[]` 逐 ZIP 记录错误（键名为 `zip_path`）。不新增通用命令/代码执行工具、不引入依赖、不做历史兼容。
 
-`parse_documents` / `extract_archives` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_progress` payload（`parse_documents`：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `archive_path` 或 `result_path` 与 `succeeded_count/failed_count`；`extract_archives`：`completed` + `zip_paths` + 计数），脱离 LangGraph 独立调用时静默跳过这些进度事件。`ToolTelemetry`（`dsagents/runtime/agent.py`）的 `wrap_tool_call` 另发每个工具调用的 `tool_execution`（`started/completed/error` + 计时 + scope），与上述 parse_documents/extract_archives 自发的进度事件是两套独立 custom payload。
+`parse_documents` / `extract_archives` 在 LangGraph 上下文内会通过 `get_stream_writer()` 发 custom `tool_progress` payload（`parse_documents`：`submitted/pending/processing/completed/failed`，附批量 `file_paths`、必要 `archive_path` 或 `result_path` 与 `succeeded_count/failed_count`；`extract_archives`：`completed` + `zip_paths` + 计数），脱离 LangGraph 独立调用时静默跳过这些进度事件。`ToolTelemetry`（`runtime/agent.py`）的 `wrap_tool_call` 另发每个工具调用的 `tool_execution`（`started/completed/error` + 计时 + scope），与上述 parse_documents/extract_archives 自发的进度事件是两套独立 custom payload。
 
 `default_tool_catalog()` 当前静态注册 6 个工具：`parse_documents`、`extract_archives`，以及 Philips/Tecan 各 2 个（extraction 保存 + 一站式生成）。
 
@@ -212,16 +212,16 @@ brain.stream(
 
 | 工具名 | 所属模块 | 关键入参 | 返回 |
 |---|---|---|---|
-| `save_philips_wgq_extraction` | `dsagents/skills/philipswgqimport/scripts/tools.py` | `extractor`, `source_artifact`, `logistics`, `items` | `{extractor, artifact_path}` |
-| `generate_philips_wgq_import` | `dsagents/skills/philipswgqimport/scripts/tools.py` | `extraction_artifacts`, `tracking_artifact`, `international_forwarder?`, `customs_mode?`, `decisions` | 成功 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`；问题 `{"code":"input_problems","problems":[{source,location,issue,action}]}` |
-| `save_tecan_extraction` | `dsagents/skills/tecanimport/scripts/tools.py` | `extractor`, `source_artifact`, `logistics`, `items` | `{extractor, artifact_path}` |
-| `generate_tecan_import` | `dsagents/skills/tecanimport/scripts/tools.py` | `extraction_artifacts`, `decisions`（join 订单 + 信息工作簿） | 成功 `{"status":"generated",...}`；问题 `{"code":"input_problems",...}` |
+| `save_philips_wgq_extraction` | `skills/philipswgqimport/scripts/tools.py` | `extractor`, `source_artifact`, `logistics`, `items` | `{extractor, artifact_path}` |
+| `generate_philips_wgq_import` | `skills/philipswgqimport/scripts/tools.py` | `extraction_artifacts`, `tracking_artifact`, `international_forwarder?`, `customs_mode?`, `decisions` | 成功 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`；问题 `{"code":"input_problems","problems":[{source,location,issue,action}]}` |
+| `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` | `extractor`, `source_artifact`, `logistics`, `items` | `{extractor, artifact_path}` |
+| `generate_tecan_import` | `skills/tecanimport/scripts/tools.py` | `extraction_artifacts`, `decisions`（join 订单 + 信息工作簿） | 成功 `{"status":"generated",...}`；问题 `{"code":"input_problems",...}` |
 
 > `?` 表示可选参数。两个 `generate_*_import` 都是一次性 canonical 构建 + 匹配 + 计算 + 模板写入 + 输出复核；业务问题统一返回 `input_problems` 并结束 run，不再有 `build_*_canonical` / `save_*_adjudication` / `generate_*_documents` / `needs_input` / `needs_c` / `needs_adjudication` 状态机，也不再有 `info_source_preference` / `pn_info_source_overrides`（Tecan 来源冲突一律作为 `input_problems`）。
 
 ## 7. Oracle 与业务工作簿边界
 
-- `openpyxl` 读取 Philips tracking、Tecan 订单/信息表，并从 `dsagents/skills/<skill>/assets/` 下固定模板生成最终工作簿（Philips：`invoice,packing进境.xlsx`、`核注清单导入模板.xlsx`；Tecan：`Tecan_进口_发票箱单_空运.xlsx`）；上传原件和模板均不被编辑。
+- `openpyxl` 读取 Philips tracking、Tecan 订单/信息表，并从 `skills/<skill>/assets/` 下固定模板生成最终工作簿（Philips：`invoice,packing进境.xlsx`、`核注清单导入模板.xlsx`；Tecan：`Tecan_进口_发票箱单_空运.xlsx`）；上传原件和模板均不被编辑。
 - 共享 openpyxl helper 在各 Skill 的 `scripts/documents.py`（Philips：`generate_tracking` / `generate_invoice_packing` / `generate_bonded_checklist` + `header_columns` / `copy_sheet_row` 等；Tecan：`generate_invoice_packing` + `insert_rows`）。
 - Philips 单位查询通过 `oracledb.connect(...)`（thick mode，运行时 `import oracledb`）建立，SQL 只按明确料号候选读取三个单位字段。配置缺失、client 未初始化或查询异常时继续生成，结果使用「需确认」值并返回人工校验项。
 - Tecan 不调用 Oracle；订单和信息表按表头/内容识别，信息来源冲突直接返回 `input_problems`，后续 run 必须重新显式传原路径。

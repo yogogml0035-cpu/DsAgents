@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 
-from dsagents.integrations.artifacts import read_json_artifact, resolve_artifact_path
-from dsagents.skills.tecanimport.scripts.tools import (
+from integrations.artifacts import read_json_artifact, resolve_artifact_path
+from skills.tecanimport.scripts.tools import (
     _validate_extraction,
     generate_tecan_import,
     normalize_pn,
@@ -32,7 +32,7 @@ def run() -> None:
         _information_fixture(uploads / "设备信息.xlsx")
         _conflicting_information_fixture(uploads / "配件信息.xlsx")
 
-        with patch("dsagents.integrations.artifacts.artifacts_root", return_value=artifacts):
+        with patch("integrations.artifacts.artifacts_root", return_value=artifacts):
             base = _extraction()
             a = _save(base, "tecan-extractor-a")
             b = _save(base, "tecan-extractor-b")

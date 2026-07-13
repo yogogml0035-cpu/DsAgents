@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from dsagents.integrations.mineru import extract_archives, parse_documents
-from dsagents.skills.philipswgqimport.scripts.tools import (
+from integrations.mineru import extract_archives, parse_documents
+from skills.philipswgqimport.scripts.tools import (
     generate_philips_wgq_import,
     save_philips_wgq_extraction,
 )
-from dsagents.skills.tecanimport.scripts.tools import (
+from skills.tecanimport.scripts.tools import (
     generate_tecan_import,
     save_tecan_extraction,
 )

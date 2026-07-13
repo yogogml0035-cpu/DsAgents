@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from dsagents.api import INTERRUPTED_RUN_ERROR, create_app
-from dsagents.runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
-from dsagents.runtime.resources import AgentResources, ResourceConfig
-from dsagents.runtime.runs import SqliteRunLedger
-from dsagents.runtime.tools import ToolCatalog
+from api import INTERRUPTED_RUN_ERROR, create_app
+from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from runtime.resources import AgentResources, ResourceConfig
+from runtime.runs import SqliteRunLedger
+from runtime.tools import ToolCatalog
 from tests.test_support import (
     FakeBrainFactory,
     StreamControl,
@@ -101,7 +101,7 @@ def _check_api(tmp: str) -> None:
         old_request = client.post("/runs", json={"message": "hello", "session_id": None})
         assert old_request.status_code == 422
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010203"):
+        with patch("api.time.strftime", return_value="20260708010203"):
             single_upload = client.post(
                 "/upload",
                 files=[("files", ("../photo.png", b"img", "image/png"))],
@@ -118,7 +118,7 @@ def _check_api(tmp: str) -> None:
         assert first_upload_name == "photo_20260708010203.png"
         assert (api_data_dir / "artifacts" / "uploads" / first_upload_name).read_bytes() == b"img"
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010204"):
+        with patch("api.time.strftime", return_value="20260708010204"):
             normalized_upload = client.post(
                 "/upload",
                 files=[("files", ("Shipping\u00a0documents\u00a0T_CHINA\u00a015.06.2026.pdf", b"pdf", "application/pdf"))],
@@ -130,7 +130,7 @@ def _check_api(tmp: str) -> None:
         assert normalized_upload_name == "Shipping documents T_CHINA 15.06.2026_20260708010204.pdf"
         assert (api_data_dir / "artifacts" / "uploads" / normalized_upload_name).read_bytes() == b"pdf"
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010205"):
+        with patch("api.time.strftime", return_value="20260708010205"):
             multi_upload = client.post(
                 "/upload",
                 files=[
@@ -149,7 +149,7 @@ def _check_api(tmp: str) -> None:
             "notes_20260708010205.txt",
         ]
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010206"):
+        with patch("api.time.strftime", return_value="20260708010206"):
             duplicate_upload = client.post(
                 "/upload",
                 files=[
@@ -166,7 +166,7 @@ def _check_api(tmp: str) -> None:
             "report_20260708010206_2.pdf",
         ]
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010206"):
+        with patch("api.time.strftime", return_value="20260708010206"):
             conflict_upload = client.post(
                 "/upload",
                 files=[("files", ("report.pdf", b"c", "application/pdf"))],
@@ -174,7 +174,7 @@ def _check_api(tmp: str) -> None:
         assert conflict_upload.status_code == 200
         assert Path(conflict_upload.json()["files"][0]["file_path"]).name == "report_20260708010206_3.pdf"
 
-        with patch("dsagents.api.time.strftime", return_value="20260708010207"):
+        with patch("api.time.strftime", return_value="20260708010207"):
             mixed_upload = client.post(
                 "/upload",
                 files=[

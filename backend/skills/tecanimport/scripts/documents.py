@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from openpyxl import load_workbook
 
-from dsagents.integrations.artifacts import to_virtual_artifact_path, unique_download_path
+from integrations.artifacts import to_virtual_artifact_path, unique_download_path
 
 
 _TEMPLATE = Path(__file__).resolve().parents[1] / "assets" / "Tecan_进口_发票箱单_空运.xlsx"
@@ -91,7 +91,7 @@ def insert_rows(sheet: Any, count: int) -> None:
 
 
 def to_decimal(value: Any) -> Decimal:
-    from dsagents.skills.tecanimport.scripts.tools import _decimal
+    from skills.tecanimport.scripts.tools import _decimal
 
     return _decimal(value) or Decimal("0")
 

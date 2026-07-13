@@ -7,8 +7,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from dsagents.integrations.mineru import MINERU_POLL_INTERVAL_SECONDS, extract_archives, parse_documents
-from dsagents.runtime.tools import default_tool_catalog
+from integrations.mineru import BACKEND_ENV_PATH, MINERU_POLL_INTERVAL_SECONDS, extract_archives, parse_documents
+from runtime.tools import default_tool_catalog
 
 
 _MINERU_FORM_DATA = {
@@ -76,6 +76,7 @@ def _build_zip(members: dict[str, bytes]) -> bytes:
 
 
 def run() -> None:
+    assert BACKEND_ENV_PATH == Path(__file__).resolve().parents[1] / ".env"
     assert [handler.__name__ for handler in default_tool_catalog().handlers] == [
         "parse_documents",
         "extract_archives",
@@ -99,7 +100,7 @@ def _check_parse_documents_env_guard(tmp: str) -> None:
     source = Path(tmp) / "sample.pdf"
     source.write_text("demo", encoding="utf-8")
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=(Path(tmp) / "artifacts").resolve()),
+        patch("integrations.mineru.artifacts_root", return_value=(Path(tmp) / "artifacts").resolve()),
         patch.dict(os.environ, {}, clear=True),
     ):
         try:
@@ -150,7 +151,7 @@ def _check_single_file_list(tmp: str) -> None:
         return _FakeJsonResponse({"status": "completed"})
 
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=(api_data_dir / "artifacts").resolve()),
+        patch("integrations.mineru.artifacts_root", return_value=(api_data_dir / "artifacts").resolve()),
         patch.dict(
             os.environ,
             {
@@ -161,10 +162,10 @@ def _check_single_file_list(tmp: str) -> None:
             },
             clear=True,
         ),
-        patch("dsagents.integrations.mineru.requests.post", side_effect=fake_post),
-        patch("dsagents.integrations.mineru.requests.get", side_effect=fake_get),
-        patch("dsagents.integrations.mineru.get_stream_writer", return_value=emitted.append),
-        patch("dsagents.integrations.mineru.time.strftime", return_value="20260708010203"),
+        patch("integrations.mineru.requests.post", side_effect=fake_post),
+        patch("integrations.mineru.requests.get", side_effect=fake_get),
+        patch("integrations.mineru.get_stream_writer", return_value=emitted.append),
+        patch("integrations.mineru.time.strftime", return_value="20260708010203"),
     ):
         parsed_payload = parse_documents([str(source)])
 
@@ -252,7 +253,7 @@ def _check_uploaded_sources_reuse_upload_stem(tmp: str) -> None:
         f"/artifacts/uploads/{second.name}",
     ]
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
+        patch("integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
         patch.dict(
             os.environ,
             {
@@ -263,9 +264,9 @@ def _check_uploaded_sources_reuse_upload_stem(tmp: str) -> None:
             },
             clear=True,
         ),
-        patch("dsagents.integrations.mineru.requests.post", side_effect=fake_post),
-        patch("dsagents.integrations.mineru.requests.get", side_effect=fake_get),
-        patch("dsagents.integrations.mineru.time.strftime", return_value="20260708040506"),
+        patch("integrations.mineru.requests.post", side_effect=fake_post),
+        patch("integrations.mineru.requests.get", side_effect=fake_get),
+        patch("integrations.mineru.time.strftime", return_value="20260708040506"),
     ):
         parsed_payload = parse_documents(file_paths, return_md=True)
 
@@ -340,7 +341,7 @@ def _check_multi_file_partial_failures(tmp: str) -> None:
         "/artifacts/uploads/second.pdf",
     ]
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
+        patch("integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
         patch.dict(
             os.environ,
             {
@@ -351,11 +352,11 @@ def _check_multi_file_partial_failures(tmp: str) -> None:
             },
             clear=True,
         ),
-        patch("dsagents.integrations.mineru.requests.post", side_effect=fake_post),
-        patch("dsagents.integrations.mineru.requests.get", side_effect=fake_get),
-        patch("dsagents.integrations.mineru.get_stream_writer", return_value=emitted.append),
-        patch("dsagents.integrations.mineru.time.strftime", return_value="20260708020304"),
-        patch("dsagents.integrations.mineru.time.sleep") as sleep_mock,
+        patch("integrations.mineru.requests.post", side_effect=fake_post),
+        patch("integrations.mineru.requests.get", side_effect=fake_get),
+        patch("integrations.mineru.get_stream_writer", return_value=emitted.append),
+        patch("integrations.mineru.time.strftime", return_value="20260708020304"),
+        patch("integrations.mineru.time.sleep") as sleep_mock,
     ):
         parsed_payload = parse_documents(file_paths, return_images=True)
 
@@ -407,8 +408,8 @@ def _check_all_invalid_inputs(tmp: str) -> None:
     artifacts_dir = (Path(tmp) / "invalid-data" / "artifacts").resolve()
     emitted: list[dict[str, object]] = []
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=artifacts_dir),
-        patch("dsagents.integrations.mineru.get_stream_writer", return_value=emitted.append),
+        patch("integrations.mineru.artifacts_root", return_value=artifacts_dir),
+        patch("integrations.mineru.get_stream_writer", return_value=emitted.append),
     ):
         parsed_payload = parse_documents(
             [
@@ -472,7 +473,7 @@ def _check_failed_status_progress(tmp: str) -> None:
         return _FakeJsonResponse({"status": "failed", "error": "bad pdf"})
 
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=(Path(tmp) / "failed-data" / "artifacts").resolve()),
+        patch("integrations.mineru.artifacts_root", return_value=(Path(tmp) / "failed-data" / "artifacts").resolve()),
         patch.dict(
             os.environ,
             {
@@ -483,10 +484,10 @@ def _check_failed_status_progress(tmp: str) -> None:
             },
             clear=True,
         ),
-        patch("dsagents.integrations.mineru.requests.post", side_effect=fake_post),
-        patch("dsagents.integrations.mineru.requests.get", side_effect=fake_get),
-        patch("dsagents.integrations.mineru.get_stream_writer", return_value=emitted.append),
-        patch("dsagents.integrations.mineru.time.strftime", return_value="20260708030405"),
+        patch("integrations.mineru.requests.post", side_effect=fake_post),
+        patch("integrations.mineru.requests.get", side_effect=fake_get),
+        patch("integrations.mineru.get_stream_writer", return_value=emitted.append),
+        patch("integrations.mineru.time.strftime", return_value="20260708030405"),
     ):
         try:
             parse_documents([str(source)])
@@ -524,8 +525,8 @@ def _check_extract_archives(tmp: str) -> None:
     invalid_virtual = "/artifacts/downloads/missing.zip"
 
     with (
-        patch("dsagents.integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
-        patch("dsagents.integrations.mineru.get_stream_writer", return_value=lambda _payload: None),
+        patch("integrations.mineru.artifacts_root", return_value=artifacts_dir.resolve()),
+        patch("integrations.mineru.get_stream_writer", return_value=lambda _payload: None),
     ):
         payload = extract_archives(["/artifacts/downloads/report.zip", invalid_virtual])
 

@@ -14,7 +14,7 @@ import requests
 from dotenv import load_dotenv
 from langgraph.config import get_stream_writer
 
-from dsagents.integrations.artifacts import (
+from integrations.artifacts import (
     artifacts_root,
     make_unique_name,
     resolve_artifact_path,
@@ -22,7 +22,8 @@ from dsagents.integrations.artifacts import (
 )
 
 
-load_dotenv(Path(__file__).resolve().parents[2].with_name(".env"))
+BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(BACKEND_ENV_PATH)
 
 MINERU_POLL_INTERVAL_SECONDS = 30.0
 

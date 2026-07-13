@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 from openpyxl import load_workbook
 from openpyxl.formula.translate import Translator
 
-from dsagents.integrations.artifacts import (
+from integrations.artifacts import (
     resolve_artifact_path,
     to_virtual_artifact_path,
     unique_download_path,
@@ -249,7 +249,7 @@ def copy_cell_style(source: Any, target: Any) -> None:
 
 
 def declaration_header_columns(headers: Mapping[str, int]) -> dict[str, int | None]:
-    from dsagents.skills.philipswgqimport.scripts.tools import DECLARATION_HEADER_ALIASES
+    from skills.philipswgqimport.scripts.tools import DECLARATION_HEADER_ALIASES
 
     return {
         field: optional_column(headers, aliases)

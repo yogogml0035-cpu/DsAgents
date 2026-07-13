@@ -8,10 +8,10 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StateBacken
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.sqlite import SqliteStore
 
-from dsagents.runtime.runs import SqliteRunLedger
+from runtime.runs import SqliteRunLedger
 
 # 数据目录固定在 backend/ 下，与 CWD 无关。
-_BACKEND_DIR = Path(__file__).resolve().parents[2]
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class ResourceConfig:
 
     @property
     def skills_dir(self) -> Path:
-        return _BACKEND_DIR / "dsagents" / "skills"
+        return _BACKEND_DIR / "skills"
 
 
 class AgentResources:

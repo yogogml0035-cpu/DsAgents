@@ -50,7 +50,7 @@ def make_timestamped_name(
 
 
 def artifacts_root() -> Path:
-    from dsagents.runtime.resources import ResourceConfig
+    from runtime.resources import ResourceConfig
 
     return ResourceConfig().artifacts_dir.resolve()
 

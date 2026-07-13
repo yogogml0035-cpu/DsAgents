@@ -1,6 +1,6 @@
 # AGENTS — DsAgents
 
-DsAgents 是单子项目的 agent 运行时底座：产品代码位于 `backend/` 的 Python 包 `dsagents/`，通过可注入 Brain、执行器、工具和资源承载通用运行与 Philips/Tecan 内置 Skill。
+DsAgents 是单子项目的 agent 运行时底座：产品代码位于 `backend/`，发行名仍为 `dsagents`，源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`，通过可注入 Brain、执行器、工具和资源承载通用运行与 Philips/Tecan 内置 Skill。
 
 ## 关键约定
 

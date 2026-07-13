@@ -1,6 +1,6 @@
 # CONVENTIONS
 
-> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml`；本轮刷新（2026-07-13）已核对当前工作树：`dsagents/` 包（runtime / integrations / skills 子包）、6 个静态注册工具、`Protocol` 边界、run-first HTTP/ledger/cancel 约定均与代码逐一比对。
+> backend 子项目的开发约定。事实来源 = `backend/` 源码 + `pyproject.toml`；本轮刷新（2026-07-13）已核对当前工作树：`backend/` 顶层源码（runtime / integrations / skills 子包）、6 个静态注册工具、`Protocol` 边界、run-first HTTP/ledger/cancel 约定均与代码逐一比对。
 > 区分「已确认」（直接对应代码）与「需确认」（证据不足）。
 
 ## 1. 包管理器（已确认）
@@ -13,21 +13,21 @@
   ```
 
 - 锁文件：`backend/uv.lock`（已确认存在）。
-- 打包后端：setuptools（`pyproject.toml` 中 `[build-system]` 用 `setuptools.build_meta`，`requires = ["setuptools>=68"]`）。`backend/` 作为安装根，`dsagents` 是一个 Python 包，通过 `[tool.setuptools.packages.find]` 的 `include = ["dsagents*"]` 发现子包；`[tool.setuptools.package-data]` 把两个内置 Skill 的 `SKILL.md` / `references/*.md` / `assets/*` 随 wheel 打包。
+- 打包后端：setuptools（`pyproject.toml` 中 `[build-system]` 用 `setuptools.build_meta`，`requires = ["setuptools>=68"]`）。`backend/` 作为安装根，发行名仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]` 打包顶层入口模块，`[tool.setuptools.packages.find] include = ["runtime*", "integrations*", "skills*"]` 发现三个顶层包，`[tool.setuptools.package-data]` 把两个内置 Skill 的 `SKILL.md` / `references/*.md` / `assets/*` 随 wheel 打包。
 - **禁止**用 `pip install -e .` 之类绕过 `uv`（与 `uv.lock` 不一致）。
 - 当前 `requires-python = ">=3.11,<4.0"`；核心运行时依赖（版本下限）见 STACK.md。
 - `pyproject.toml` 当前**没有**任何 `[tool.ruff]` / `[tool.mypy]` / `[tool.black]` / `[tool.pytest...]` / `[tool.coverage]` 段（已确认），即未配置 lint / type-check / pytest 门禁。验证只靠测试脚本（见 TESTING.md）。
 
 ## 2. 模块组织与导入约定（已确认）
 
-- 唯一产品包是 `dsagents/`，子包 `runtime/`、`integrations/`、`skills/`（含两个内置 Skill 包 `philipswgqimport` / `tecanimport`）。旧扁平顶层模块（`api.py`/`harness.py`/`hands.py`/`resources.py`/`run_ledger.py`/`tools.py`/`subagents.py`/`workflow_artifacts.py`/`artifact_names.py`/`philips_wgq_import.py`/`tecan_import.py`）与旧带连字符 `skills/` 目录均已删除。
-- 模块内一律使用**绝对包内导入**，不带 `backend.` 前缀：
+- 源码顶层布局是 `api.py` 与 `runtime/`、`integrations/`、`skills/`；发行名仍为 `dsagents`，其中 `runtime/`、`integrations/`、`skills/` 是三个顶层包（含两个内置 Skill 包 `philipswgqimport` / `tecanimport`）。旧 `backend/dsagents/` 包壳与旧辅助模块（`harness.py`/`hands.py`/`resources.py`/`run_ledger.py`/`tools.py`/`subagents.py`/`workflow_artifacts.py`/`artifact_names.py`/`philips_wgq_import.py`/`tecan_import.py`）均已删除。
+- 模块内一律使用**绝对顶层导入**，不带 `backend.` 前缀：
 
-  - `from dsagents.runtime import AgentResources, create_harness`
-  - `from dsagents.runtime.runs import SqliteRunLedger, RunEvent`
-  - `from dsagents.integrations.artifacts import resolve_artifact_path, write_json_artifact`
-  - `from dsagents.skills.philipswgqimport.scripts.tools import generate_philips_wgq_import`
-  - `from dsagents.skills.tecanimport.scripts.tools import generate_tecan_import`
+  - `from runtime import AgentResources, create_harness`
+  - `from runtime.runs import SqliteRunLedger, RunEvent`
+  - `from integrations.artifacts import resolve_artifact_path, write_json_artifact`
+  - `from skills.philipswgqimport.scripts.tools import generate_philips_wgq_import`
+  - `from skills.tecanimport.scripts.tools import generate_tecan_import`
 
   调用前提是 `backend/` 在 `sys.path`（开发时 `cd backend` 运行；安装后由包提供）。
 - **没有** `backend/__init__.py` / `backend/__main__.py`（已确认不存在）；**没有** `python -m backend.*` 调用方式。
@@ -42,18 +42,18 @@
 | HTTP 提交 run | `POST /runs`（body `{session_id?, messages[]}`），轮询 `GET /runs/{run_id}` |
 | HTTP 取消 run | `POST /runs/{run_id}/cancel`（404 未知 / 409 终态 / 200 已 cancelling/cancelled / 202 活跃 drain） |
 | 测试脚本 / 主要验证 | 按影响范围运行 `cd backend && python -m tests.test_xxx` |
-| 启动 HTTP 服务 | `cd backend && uv run uvicorn dsagents.api:app --host 0.0.0.0 --port 8500` |
+| 启动 HTTP 服务 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500` |
 | 程序内调用 | `AgentResources(config)` + `create_harness(resources).execute_run(messages, session_id, run_id)` |
 
 - Session 概念已收窄：无 session 模块、无 session 表；`session_id` 只作 LangGraph `thread_id` + 单飞锁键。
 
 ## 4. 核心运行时原则（在代码中落地）
 
-- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`dsagents/runtime/agent.py`）；运行时通过依赖注入接收 `brain_factory`、`tools`。`create_harness` 用默认实现，本地测试用 `FakeBrainFactory` 注入。工具保持普通 callable + `ToolCatalog`，**不**为单实现工具新增 Protocol/ABC。
+- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；运行时通过依赖注入接收 `brain_factory`、`tools`。`create_harness` 用默认实现，本地测试用 `FakeBrainFactory` 注入。工具保持普通 callable + `ToolCatalog`，**不**为单实现工具新增 Protocol/ABC。
 - **run 是事件源**：`run_events` 表 append-only；`runs` 表是当前快照。短期上下文靠 LangGraph `thread_id=session_id`（经 `checkpointer` + `store`），不再有 session 层。
 - **保持运行时薄**：`HarnessRuntime.execute_run` 只做「派发 payload → 解析 stream chunk → 写 run event」。业务规则全部下沉到 Skill 的 `scripts/`，不在运行时内引入服务层 / 工作流引擎。
 - **业务状态外置为 artifact**：A/B/C、裁决、canonical 与 Excel 只写唯一新文件；`generate_*_import` 只接受显式 artifact 路径，不扫描 session、历史上传或「最近任务」。无游标、无暂停/恢复、无跨 run 状态。
-- **按业务保留确定性规则**：Philips/Tecan 各自实现 canonical 构建与 Excel 规则，不抽象通用 A/B 引擎、插件注册表或工作流 DSL；共享模块（`dsagents/integrations/artifacts.py`）只做路径和 JSON 读写。
+- **按业务保留确定性规则**：Philips/Tecan 各自实现 canonical 构建与 Excel 规则，不抽象通用 A/B 引擎、插件注册表或工作流 DSL；共享模块（`integrations/artifacts.py`）只做路径和 JSON 读写。
 - **真实错误透传**：见 §5。
 - **优先删减范围**：HTTP 表面只保留 `POST /runs` / `GET /runs/{run_id}` / `POST /runs/{run_id}/cancel` / `POST /upload`。
 
@@ -62,7 +62,7 @@
 - **真实错误透传，不吞**：
   - `HarnessRuntime.execute_run`：捕获 Brain 异常（含 `NoProgressLoop`）→ 发 `failed` run status（带 `error` 与 `raw`），不掩盖。
   - `api._run_background`：未捕获异常 → `_ensure_failed_run` 把 run 标记 `failed`。
-- fail-fast：`parse_documents`（`dsagents/integrations/mineru.py`）在存在可提交文件且缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError`；`MINERU_EFFORT` 可留空。
+- fail-fast：`parse_documents`（`integrations/mineru.py`）在存在可提交文件且缺 `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 时 `raise RuntimeError`；`MINERU_EFFORT` 可留空。
 - run 状态非法值：`SqliteRunLedger.emit_run_status` 对非 `RUN_STATUSES` 抛 `ValueError`。
 - Oracle 是明确例外：`generate_philips_wgq_import` 中 Oracle 单位查询失败 / thick client 缺失必须转成人工校验并继续生成，业务问题统一以 `{"code":"input_problems","problems":[{"source","location","issue","action"}]}` 返回，run 结束（由 `test_philips_wgq_import.py` 断言）。
 
@@ -85,15 +85,15 @@
 
 ## 8. 类型与命名（已确认）
 
-- **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界 —— `Brain`、`BrainFactory`（均在 `dsagents/runtime/agent.py`）。默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory` 与 `default_tool_catalog()`。**不**为单实现小功能新增 Protocol/ABC。
-- 外部框架要求继承时才继承框架基类：如 `ToolTelemetry(AgentMiddleware)`、`NoProgressMiddleware(AgentMiddleware)`（`dsagents/runtime/agent.py`）、`RunRequest(BaseModel)`（`dsagents/api.py`）。
-- 简单值对象用 `@dataclass(frozen=True)`：`RunEvent`、`RunSnapshot`（`dsagents/runtime/runs.py`）、`ResourceConfig`、`ToolCatalog`（`dsagents/runtime/tools.py` / `resources.py`）。工具签名别名为 `ToolHandler = Callable[..., Any]`，不引入工具 ABC。
+- **Protocol 使用边界**：`typing.Protocol` 只用于可注入能力边界 —— `Brain`、`BrainFactory`（均在 `runtime/agent.py`）。默认实现从 `create_harness(...)` 追到 `DeepAgentsBrainFactory` 与 `default_tool_catalog()`。**不**为单实现小功能新增 Protocol/ABC。
+- 外部框架要求继承时才继承框架基类：如 `ToolTelemetry(AgentMiddleware)`、`NoProgressMiddleware(AgentMiddleware)`（`runtime/agent.py`）、`RunRequest(BaseModel)`（`api.py`）。
+- 简单值对象用 `@dataclass(frozen=True)`：`RunEvent`、`RunSnapshot`（`runtime/runs.py`）、`ResourceConfig`、`ToolCatalog`（`runtime/tools.py` / `resources.py`）。工具签名别名为 `ToolHandler = Callable[..., Any]`，不引入工具 ABC。
 - 命名：模块/函数/方法 `snake_case`，类 `PascalCase`，常量 `UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`MINERU_POLL_INTERVAL_SECONDS`、`ARTIFACT_REFERENCE_HINT`）。私有前缀 `_`。
 - 顶层文件统一 `from __future__ import annotations`，类型注解广泛使用 `X | None`、`dict[...]`、`list[...]`、`tuple[...]`、`Sequence[...]`。
 
 ## 9. 运行时 stream 约定（已确认）
 
-- Brain 调用统一走（`dsagents/runtime/execution.py`）：
+- Brain 调用统一走（`runtime/execution.py`）：
 
   ```python
   brain.stream(
@@ -116,8 +116,8 @@
 
 ## 10. 工具与 Skill 约定（已确认）
 
-- `default_tool_catalog()`（`dsagents/runtime/tools.py`）当前**静态注册 6 个工具**，按声明顺序：`parse_documents`、`extract_archives`、`save_philips_wgq_extraction`、`generate_philips_wgq_import`、`save_tecan_extraction`、`generate_tecan_import`（2 个通用 MinerU/解压 + 每个 Skill 2 个业务）。`ToolCatalog` 是 `@dataclass(frozen=True)`，仅靠 `.as_list()` 暴露，**没有**工具 Protocol/ABC，**没有**插件平台，**没有**动态 Skill loader。
-- 四个 SubAgent（`philips-wgq-extractor-a/b`、`tecan-extractor-a/b`）由 `workflow_subagents()`（`dsagents/runtime/agent.py`）装配；每个只挂 1 个业务工具（extraction 保存），写权限全 deny（`FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")`），并**各自显式装** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）。
+- `default_tool_catalog()`（`runtime/tools.py`）当前**静态注册 6 个工具**，按声明顺序：`parse_documents`、`extract_archives`、`save_philips_wgq_extraction`、`generate_philips_wgq_import`、`save_tecan_extraction`、`generate_tecan_import`（2 个通用 MinerU/解压 + 每个 Skill 2 个业务）。`ToolCatalog` 是 `@dataclass(frozen=True)`，仅靠 `.as_list()` 暴露，**没有**工具 Protocol/ABC，**没有**插件平台，**没有**动态 Skill loader。
+- 四个 SubAgent（`philips-wgq-extractor-a/b`、`tecan-extractor-a/b`）由 `workflow_subagents()`（`runtime/agent.py`）装配；每个只挂 1 个业务工具（extraction 保存），写权限全 deny（`FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")`），并**各自显式装** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）。
 - Skill 目录名 = Skill 名 = Python 包标识符（`philipswgqimport` / `tecanimport`，无连字符），故无需动态 loader；每个 Skill 含 `SKILL.md` + `references/` + `assets/` + `scripts/{tools.py, documents.py}`。Skill 通过 `/skills/` 虚拟路由只读挂载，主 agent 写权限对 `/skills/**` deny。
 - 每个 Skill 只暴露两个业务 Tool：extraction 保存（`save_*_extraction`，返回 `{extractor, artifact_path}`）+ 一站式生成（`generate_*_import`，一次完成校验、canonical 构建、匹配、计算、模板写入与输出复核）。业务问题统一返回 `{"code":"input_problems","problems":[{"source","location","issue","action"}]}`；成功返回 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`。
 - 不再有 `build_*_canonical` / `save_*_adjudication` / `generate_*_documents` / `needs_input` / `needs_c` / `needs_adjudication` / `info_source_preference` / `pn_info_source_overrides`。

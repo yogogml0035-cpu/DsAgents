@@ -5,11 +5,11 @@ from typing import Any, Iterator, Sequence
 from langgraph.errors import GraphDrained
 from langgraph.runtime import RunControl
 
-from dsagents.runtime import observability
-from dsagents.runtime.agent import BrainFactory, NoProgressLoop, runtime_middlewares
-from dsagents.runtime.resources import AgentResources
-from dsagents.runtime.runs import RunEvent
-from dsagents.runtime.tools import ToolCatalog
+from runtime import observability
+from runtime.agent import BrainFactory, NoProgressLoop, runtime_middlewares
+from runtime.resources import AgentResources
+from runtime.runs import RunEvent
+from runtime.tools import ToolCatalog
 
 
 ARTIFACT_REFERENCE_HINT = (
@@ -150,8 +150,8 @@ class HarnessRuntime:
 def create_harness(resources: AgentResources) -> HarnessRuntime:
     # Local import to avoid a circular module-load dependency: tools.py imports
     # the skill packages, agent.py imports tools.py.
-    from dsagents.runtime.agent import DeepAgentsBrainFactory
-    from dsagents.runtime.tools import default_tool_catalog
+    from runtime.agent import DeepAgentsBrainFactory
+    from runtime.tools import default_tool_catalog
 
     return HarnessRuntime(
         resources=resources,

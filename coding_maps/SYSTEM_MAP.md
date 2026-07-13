@@ -2,18 +2,18 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-13）已核对当前工作树与全部 backend 事实文档（同日刷新）：旧扁平顶层模块（`backend/*.py`）与旧带连字符 `skills/` 目录已删除，整个产品收口进 Python 包 `backend/dsagents/`（子包 `runtime/` / `integrations/` / `skills/`），Philips/Tecan 业务代码归属各自内置 Skill 包；HTTP 改为四端点（含 cancel），事件 schema 改为 7 类，业务 Tool 收敛为每 Skill 2 个，调用链、provider 边界、按任务阅读指南与集成风险清单均按当前源码重述。
+> 本轮刷新（2026-07-13）已核对当前工作树与全部 backend 事实文档（同日刷新）：旧 `backend/dsagents/` 包壳、旧带连字符 `skills/` 目录与旧顶层辅助模块已删除，源码顶层保留 `api.py` 并改为 `runtime/`、`integrations/`、`skills/` 三个顶层包；Philips/Tecan 业务代码归属各自内置 Skill 包；HTTP 改为四端点（含 cancel），事件 schema 改为 7 类，业务 Tool 收敛为每 Skill 2 个，调用链、provider 边界、按任务阅读指南与集成风险清单均按当前源码重述。
 
 ## 1. 系统目的和仓库形态
 
-DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做成可插拔，而不绑定具体 runner、容器、模型或工作流。整个产品收口在一个 Python 包 `dsagents/`（绝对包内导入 `from dsagents.runtime import ...`）。
+DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做成可插拔，而不绑定具体 runner、容器、模型或工作流。整个产品收口在 `backend/` 顶层源码布局（`api.py`、`runtime/`、`integrations/`、`skills/`；绝对导入 `from runtime import ...`）。
 
-- **形态**：单子项目仓库，唯一产品子项目是 `backend/`（安装 Python 包 `dsagents/`，包管理器 `uv`）。无前端子项目（当前源文档未确认任何前端代码归属本仓库）。
+- **形态**：单子项目仓库，唯一产品子项目是 `backend/`（发行名 `dsagents`，源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`，包管理器 `uv`）。无前端子项目（当前源文档未确认任何前端代码归属本仓库）。
 - **架构**：run-first。run 是唯一的执行单位与查询单位，`run_events` 表 append-only，`runs` 表是事件投影出的快照；不再有 session 模块 / session 持久化层。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`，仓库不再自建 session 事件回放。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
-- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`dsagents/runtime/agent.py`）；工具保持普通 callable + `ToolCatalog`（`dsagents/runtime/tools.py`）。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`），本地测试用 `FakeBrainFactory` 替换。运行时不写死具体模型实现。
+- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；工具保持普通 callable + `ToolCatalog`（`runtime/tools.py`）。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`），本地测试用 `FakeBrainFactory` 替换。运行时不写死具体模型实现。
 - **工具静态注册**：`default_tool_catalog()` 静态注册 6 个工具（2 个 MinerU 通用 + 每个 Skill 2 个业务），通过普通 Python import 拉入 Skill 工具；不自动扫描、无插件平台、无动态模块加载器。
-- **业务能力按 Skill 打包**：两个内置 Skill 包 `dsagents/skills/philipswgqimport/` 与 `dsagents/skills/tecanimport/`，每个仅暴露 2 个业务 Tool。4 个声明式 SubAgent（`workflow_subagents()`）各自装自己的 middleware。
+- **业务能力按 Skill 打包**：两个内置 Skill 包 `skills/philipswgqimport/` 与 `skills/tecanimport/`，每个仅暴露 2 个业务 Tool。4 个声明式 SubAgent（`workflow_subagents()`）各自装自己的 middleware。
 - **入口形态**：HTTP（`POST /runs` 创建 run、立即返回 `queued`；纯轮询获取增量事件，无 SSE；含 cancel）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
 - **业务能力形态**：模型按明确业务目标加载 Skill；A/B/C、裁决、canonical 与 Excel 以显式 artifact 路径串联，不增加业务 HTTP、状态表或恢复接口。
 
@@ -23,7 +23,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 
 | 子项目 | 目录 | 当前职责 | 技术栈要点 | 边界 |
 |--------|------|----------|------------|------|
-| backend | `backend/` | 安装 Python 包 `dsagents/`（子包 `runtime/` / `integrations/` / `skills/`）：run-first runtime + 两个内置 Skill 包 + 4 个声明式 SubAgent + 两个运行时 middleware + 6 个静态注册工具 | Python `>=3.11,<4.0`；`uv`；FastAPI；DeepAgents/LangGraph；SQLite；MinerU（内网 HTTP）；openpyxl；可选 oracledb（thick mode） | 不提供 session/业务状态表、SSE、鉴权/CORS、通用工作流引擎、跨进程队列、沙箱 / 脚本执行、插件平台 |
+| backend | `backend/` | 发行名 `dsagents`，源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`：run-first runtime + 两个内置 Skill 包 + 4 个声明式 SubAgent + 两个运行时 middleware + 6 个静态注册工具 | Python `>=3.11,<4.0`；`uv`；FastAPI；DeepAgents/LangGraph；SQLite；MinerU（内网 HTTP）；openpyxl；可选 oracledb（thick mode） | 不提供 session/业务状态表、SSE、鉴权/CORS、通用工作流引擎、跨进程队列、沙箱 / 脚本执行、插件平台 |
 
 ## 3. 跨子项目调用链和数据流
 
@@ -42,7 +42,7 @@ POST /runs  {messages, session_id?}
   ├─ 起 daemon 线程 → HarnessRuntime.execute_run(messages, session_id, run_id)
   └─ 立即返回 {run_id, session_id, status:"queued"}
 
-HarnessRuntime.execute_run(...)   # dsagents/runtime/execution.py
+HarnessRuntime.execute_run(...)   # runtime/execution.py
   ├─ emit status=running
   ├─ 归一化 content blocks：
   │    ├─ text     → 原样保留
@@ -71,7 +71,7 @@ POST /runs/{run_id}/cancel            → 协作 drain；未知 404 / 终态 409
 业务分支由同一主链中的工具调用完成（流程由对应 `SKILL.md` 指令驱动）：
 
 ```text
-parse_documents (dsagents/integrations/mineru.py)
+parse_documents (integrations/mineru.py)
   → 主 agent 回合并行 A/B 声明式 SubAgent（workflow_subagents()，各自装 middleware）
   → 每个 SubAgent 调 save_*_extraction 保存 extraction artifact（save_philips_wgq_extraction / save_tecan_extraction）
   → 必要时 extractor C 回查；A/B/C 仍冲突则主 agent 形成最小 decisions
@@ -91,11 +91,11 @@ parse_documents (dsagents/integrations/mineru.py)
 
 | 边界 | 用途 | 集成方式 | 证据 |
 |------|------|----------|------|
-| MiniMax via Anthropic adapter（生产） | LLM | `DeepAgentsBrainFactory` 用 `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`，注入 `create_deep_agent(...)`；实际端点指向 MiniMax（OpenAI/Anthropic 兼容） | `dsagents/runtime/agent.py` |
-| MinerU（内网 HTTP） | 文档解析（`parse_documents` 工具）+ ZIP 解压（`extract_archives` 工具） | `dsagents/integrations/mineru.py` 用 `requests` 一次 `POST {MINERU_BASE_URL}/tasks` 提交多文件、轮询 `GET {status_url}`（默认每 `MINERU_POLL_INTERVAL_SECONDS=30.0` 秒）、`GET {result_url}` 取 JSON/ZIP | `dsagents/integrations/mineru.py` |
-| Oracle（可选） | Philips 计量单位查询 | 仅在 `ORACLE_DSN/USERNAME/PASSWORD` 齐备 + `ORACLE_CLIENT_LIB_DIR` 指向有效 instant client 时由 `oracledb` thick mode 查询；缺配置/失败继续生成并标人工校验 | `dsagents/skills/philipswgqimport/scripts/tools.py` |
-| LangGraph savers | checkpointer / store 持久化 | `SqliteSaver`（`thread_id=session_id`）/ `SqliteStore`（`namespace=("dsagents",)`，本地 SQLite） | `dsagents/runtime/resources.py` |
-| DeepAgents / LangGraph runtime | 协作 drain | `langgraph.runtime.RunControl`（per-run，存于 `HarnessRuntime.run_controls: dict[run_id → RunControl]`）；`GraphDrained` → `cancelled` | `dsagents/runtime/execution.py` |
+| MiniMax via Anthropic adapter（生产） | LLM | `DeepAgentsBrainFactory` 用 `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `ChatAnthropic`，注入 `create_deep_agent(...)`；实际端点指向 MiniMax（OpenAI/Anthropic 兼容） | `runtime/agent.py` |
+| MinerU（内网 HTTP） | 文档解析（`parse_documents` 工具）+ ZIP 解压（`extract_archives` 工具） | `integrations/mineru.py` 用 `requests` 一次 `POST {MINERU_BASE_URL}/tasks` 提交多文件、轮询 `GET {status_url}`（默认每 `MINERU_POLL_INTERVAL_SECONDS=30.0` 秒）、`GET {result_url}` 取 JSON/ZIP | `integrations/mineru.py` |
+| Oracle（可选） | Philips 计量单位查询 | 仅在 `ORACLE_DSN/USERNAME/PASSWORD` 齐备 + `ORACLE_CLIENT_LIB_DIR` 指向有效 instant client 时由 `oracledb` thick mode 查询；缺配置/失败继续生成并标人工校验 | `skills/philipswgqimport/scripts/tools.py` |
+| LangGraph savers | checkpointer / store 持久化 | `SqliteSaver`（`thread_id=session_id`）/ `SqliteStore`（`namespace=("dsagents",)`，本地 SQLite） | `runtime/resources.py` |
+| DeepAgents / LangGraph runtime | 协作 drain | `langgraph.runtime.RunControl`（per-run，存于 `HarnessRuntime.run_controls: dict[run_id → RunControl]`）；`GraphDrained` → `cancelled` | `runtime/execution.py` |
 
 provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2/§5/§6 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md) §5。
 
@@ -113,13 +113,13 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 完整契约（请求/响应 JSON 形状、错误码、取消流细节）见 [`INTERFACES.md`](../INTERFACES.md) §1/§2 与 [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1。明确**已删除**的旧 session 接口清单亦见 [`INTERFACES.md`](../INTERFACES.md) §1。
 `after_event_id` 只裁剪 `events[]`，不会影响 `latest_content_event`，也不会影响 `usage`（两者都按 run 全量计算）。
 
-`dsagents/api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。启动命令 `uvicorn dsagents.api:app --host 0.0.0.0 --port 8500`（无 `--reload`）。
+`api.py` 通过 `create_app(*, resource_config=None, harness_factory=create_harness)` 工厂构造 FastAPI 应用，支持注入测试用的 `ResourceConfig` 与 `Brain` 工厂（本地测试用 `FakeBrainFactory`）；模块级 `app = create_app()` 是生产装配。启动命令 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`（无 `--reload`）。
 `assistant_message.payload` 的公开形状可包含最终 `thinking` 与 `text`，来自 `updates` channel 派生的最终 AIMessage；调用方不应直接依赖 LangGraph `values` 事件类型（旧的 values-snapshot 去重已删除）。
 声明式 subagent 的模型文本 token 不形成公开 `thinking`/`text_delta`，但 subagent 的 `model_usage` 仍计入（在过滤之前提取）；`tool_execution` 载荷含 scope 路径以重建「主 Agent → SubAgent → Tool」调用链。
 
 ### 4.2 LLM provider 边界
 
-- 生产 Brain 强耦合 Anthropic 客户端协议与 `thinking={"type":"adaptive"}`（`init_chat_model("anthropic:...")`）；环境变量 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 由 `dsagents/runtime/agent.py` 在导入时 `load_dotenv` 加载。
+- 生产 Brain 强耦合 Anthropic 客户端协议与 `thinking={"type":"adaptive"}`（`init_chat_model("anthropic:...")`）；环境变量 `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` 由 `runtime/agent.py` 在导入时 `load_dotenv` 加载。
 - **不新增自定义 cache middleware**：`create_deep_agent` 尾栈自动挂 `AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore")`，因 MiniMax 走 `ChatAnthropic` 对 MiniMax-M3 生效；固定前缀不可注入动态内容（时间/run_id 等）。
 - 本地测试 Brain `FakeBrain` 不触达真实 provider。
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))` 在进程级全局禁用 DeepAgents 默认 general-purpose subagent，只保留 `workflow_subagents()` 的四个 extractor。锁定的 `deepagents==0.6.12` 不支持构造参数形式的 `harness_profile=...`，需用该 profile 注册 API；升级依赖时需重新核对。
@@ -131,22 +131,22 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 ### 4.4 文件 / artifacts 边界
 
 - 上传：`POST /upload` → `data/artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext`，返回虚拟路径与元数据数组（`make_timestamped_name` 同请求共用 batch 时间戳，只在物理重名时追加序号；`clean_filename` 清洗）。
-- 工具层 `dsagents/integrations/artifacts.py` 的 `resolve_artifact_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权（`Invalid /artifacts path`）；`to_virtual_artifact_path` 反向生成。
+- 工具层 `integrations/artifacts.py` 的 `resolve_artifact_path` 把 `/artifacts/...` 解析回物理路径，并拒绝 `..` 越权（`Invalid /artifacts path`）；`to_virtual_artifact_path` 反向生成。
 - `parse_documents` 默认把 task 级结果 JSON 写到 `data/artifacts/downloads/<stem>.json`（只开 `return_content_list=true`）；用户要 Markdown、图片、原始文件或完整下载包时传五个输出参数全 true，写 ZIP 到 `<stem>.zip`。单文件复用源 stem；多文件为 `<first-stem>_etc_<batch-ts>.json/.zip`（`make_unique_name`）；`extract_archives` 把 ZIP 解压到 `data/artifacts/downloads/<zip-stem>/`。
 - 业务 extraction / canonical / Excel 同样写到 `downloads/`，每次生成唯一新文件（`unique_download_path` / `write_json_artifact`，不覆盖旧文件）；输入路径必须显式给出，上传原件和模板不被编辑。
-- `/skills/` 映射源码 `dsagents/skills/`（两个内置 Skill 包）；主 agent 与 extractor 的文件权限阻止写入 `/skills/**`。
+- `/skills/` 映射源码 `skills/`（两个内置 Skill 包）；主 agent 与 extractor 的文件权限阻止写入 `/skills/**`。
 - `artifact` block 是项目 API 语义；进入 Brain 前会被转成文本路径提示，再由 agent 通过 `read_file` / `parse_documents` 处理。常见办公文件和任意图片都可以上传保存，但能否被解析或理解取决于 DeepAgents、MinerU 与模型能力。
 - API 请求只接受显式 `/artifacts/...` 路径；`parse_documents` 为便于测试和程序内调用另外保留本地路径入口，业务 Skill 的 generator 仍只消费显式 artifact JSON/Excel 路径。
 
 ### 4.5 业务工具 / Skill 边界
 
-- 每个 Skill 暴露 2 个业务 Tool（extraction 保存 + 一站式生成），全部由 `dsagents/runtime/tools.py` 的 `default_tool_catalog()` 静态注册（普通 import，不自动扫描）。
+- 每个 Skill 暴露 2 个业务 Tool（extraction 保存 + 一站式生成），全部由 `runtime/tools.py` 的 `default_tool_catalog()` 静态注册（普通 import，不自动扫描）。
 - 业务错误统一形状：`generate_*_import` 遇业务问题返回 `{"code":"input_problems","problems":[{"source","location","issue","action"}]}`，run 结束；成功返回 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`。
 - 已删除的旧业务工具/状态机：`build_*_canonical` / `save_*_adjudication` / `generate_*_documents` / `needs_input` / `needs_c` / `needs_adjudication` / `info_source_preference` / `pn_info_source_overrides`（Tecan 信息来源冲突一律作 `input_problems`）。
 
 ### 4.6 鉴权 / 跨域边界（已确认缺失）
 
-- `dsagents/api.py` 未注册任何 auth middleware；四个端点全部匿名可调。
+- `api.py` 未注册任何 auth middleware；四个端点全部匿名可调。
 - 代码无 `CORSMiddleware` 注册 → 浏览器跨域实际不会被处理。
 
 ## 5. 依赖和归属规则
@@ -158,19 +158,19 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
   - `docs/*.md` — 详细说明（项目总览、约定、命令、阅读顺序、backend 摘要）。
   - `backend/.planning/codebase/*` — backend 实现细节的事实来源。
 - **包管理**：`uv`（非 pip）；安装 `cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
-- **包布局**：`backend/` 安装根下唯一产品包是 `dsagents/`（`pyproject.toml` 用 `package-dir = {"" = "."}` + `packages.find include=["dsagents*"]`）；模块内一律绝对包内导入（如 `from dsagents.runtime import create_harness`、`from dsagents.skills.<skill>.scripts.tools import ...`）；新增 Skill 需在 `[tool.setuptools.package-data]` 追加该 Skill 的 `SKILL.md`/`references`/`assets`。无 `python -m backend.*`。
+- **包布局**：`backend/` 安装根下源码顶层为 `api.py` 与 `runtime/`、`integrations/`、`skills/`（`pyproject.toml` 用 `package-dir = {"" = "."}`、`py-modules = ["api"]`、`packages.find include=["runtime*", "integrations*", "skills*"]`）；模块内一律绝对顶层导入（如 `from runtime import create_harness`、`from skills.<skill>.scripts.tools import ...`）；新增 Skill 需在 `[tool.setuptools.package-data]` 追加该 Skill 的 `SKILL.md`/`references`/`assets`。无 `python -m backend.*`。
 
 ## 6. 按任务分类的阅读指南
 
 | 任务类型 | 先读 |
 |----------|------|
-| backend 整体 / runtime / 存储修改 | [`docs/conventions.md`](../docs/conventions.md)（改动前必读）→ [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) + [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md) → 目标模块（`dsagents/runtime/execution.py` / `agent.py` / `runs.py` / `resources.py`） |
-| 改 HTTP 契约 / 入口 | [`INTERFACES.md`](../INTERFACES.md) §1/§2 → [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1 → `dsagents/api.py` |
-| 改 run 状态 / 事件 / 持久化 | [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §5/§6/§9 → `dsagents/runtime/runs.py` + `dsagents/runtime/execution.py` |
-| 改模型流式行为 / Brain / middleware | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2 → `dsagents/runtime/agent.py` + `dsagents/runtime/observability.py` |
-| 改 Skill / Philips/Tecan 业务流程 | 对应 `dsagents/skills/<skill>/SKILL.md` + `references/` → `dsagents/skills/<skill>/scripts/tools.py` + `scripts/documents.py` → `backend/tests/test_*_import.py` |
-| 改 MinerU 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §6 → `dsagents/integrations/mineru.py` |
-| 改 Oracle 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §5/§7 + [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §8 → `dsagents/skills/philipswgqimport/scripts/tools.py` |
+| backend 整体 / runtime / 存储修改 | [`docs/conventions.md`](../docs/conventions.md)（改动前必读）→ [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) + [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md) → 目标模块（`runtime/execution.py` / `agent.py` / `runs.py` / `resources.py`） |
+| 改 HTTP 契约 / 入口 | [`INTERFACES.md`](../INTERFACES.md) §1/§2 → [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §1 → `api.py` |
+| 改 run 状态 / 事件 / 持久化 | [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) §5/§6/§9 → `runtime/runs.py` + `runtime/execution.py` |
+| 改模型流式行为 / Brain / middleware | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §2 → `runtime/agent.py` + `runtime/observability.py` |
+| 改 Skill / Philips/Tecan 业务流程 | 对应 `skills/<skill>/SKILL.md` + `references/` → `skills/<skill>/scripts/tools.py` + `scripts/documents.py` → `backend/tests/test_*_import.py` |
+| 改 MinerU 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §6 → `integrations/mineru.py` |
+| 改 Oracle 集成 | [`backend/.planning/codebase/INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) §5/§7 + [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) §8 → `skills/philipswgqimport/scripts/tools.py` |
 | 改测试策略 | [`backend/.planning/codebase/TESTING.md`](../backend/.planning/codebase/TESTING.md) |
 | 跨系统接口修改 | [`INTERFACES.md`](../INTERFACES.md)（provider/存储/artifacts 边界）→ 本文件 §3.2/§4 |
 | 文档维护 | [`AGENTS.md`](../AGENTS.md) 关键约定与末尾维护规则 → [`backend/.planning/codebase/CONVENTIONS.md`](../backend/.planning/codebase/CONVENTIONS.md) |
@@ -216,4 +216,4 @@ provider/集成键名（不含值）见 [`backend/.planning/codebase/INTEGRATION
 - [`backend/.planning/codebase/TESTING.md`](../backend/.planning/codebase/TESTING.md)
 - [`backend/.planning/codebase/CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md)
 
-本轮（2026-07-13）在 backend 7 份事实文档（ARCHITECTURE / STRUCTURE / STACK / INTEGRATIONS / CONVENTIONS / TESTING / CONCERNS）同日刷新后做同步改写：旧扁平顶层模块与旧带连字符 `skills/` 目录已删除，产品收口进 `dsagents/` 包；HTTP 端点、事件 schema、业务 Tool 收敛、调用链、provider 边界、按任务阅读指南与集成风险清单均按当前源码逐项重述，不再保留旧架构描述。
+本轮（2026-07-13）在 backend 7 份事实文档（ARCHITECTURE / STRUCTURE / STACK / INTEGRATIONS / CONVENTIONS / TESTING / CONCERNS）同日刷新后做同步改写：旧 `backend/dsagents/` 包壳、旧带连字符 `skills/` 目录与旧顶层辅助模块已删除，产品收口进 `backend/` 顶层源码；HTTP 端点、事件 schema、业务 Tool 收敛、调用链、provider 边界、按任务阅读指南与集成风险清单均按当前源码逐项重述，不再保留旧架构描述。

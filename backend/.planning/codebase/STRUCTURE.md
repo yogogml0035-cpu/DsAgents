@@ -1,51 +1,49 @@
 # STRUCTURE
 
 > 事实来源：当前 `backend/` 源码（run-first runtime，内置 Skill 模块化）。
-> 本轮刷新（2026-07-13）已逐文件核对工作树：`dsagents/` 包（runtime / integrations / skills 子包，含两个内置 Skill 包）、`tests/`、`data/`、`pyproject.toml`。所有结论以源码为准。
+> 本轮刷新（2026-07-13）已逐文件核对工作树：`backend/` 顶层源码（runtime / integrations / skills 子包，含两个内置 Skill 包）、`tests/`、`data/`、`pyproject.toml`。所有结论以源码为准。
 
 ## 1. 包组织
 
-`backend/` 安装根下唯一产品包是 `dsagents/`（扁平顶层模块已被删除）。结构：
+`backend/` 安装根下源码顶层为 `api.py` 与 `runtime/`、`integrations/`、`skills/`（旧 `backend/dsagents/` 包壳已删除）。结构：
 
 ```text
 backend/
-├── dsagents/
+├── api.py                           # FastAPI run-first HTTP 层
+├── runtime/
+│   ├── __init__.py                  # 对外稳定入口：AgentResources / create_harness / RunLedger
+│   ├── agent.py                     # Brain/BrainFactory、DeepAgentsBrainFactory、SubAgent、两个 middleware
+│   ├── execution.py                 # HarnessRuntime.execute_run：stream chunk → RunEvent；RunControl drain → cancelled
+│   ├── observability.py             # 纯内容/元数据提取器（model_usage/thinking/text/agent scope）
+│   ├── resources.py                 # AgentResources（context manager）与 ResourceConfig；CompositeBackend 装配
+│   ├── runs.py                      # SqliteRunLedger：runs/run_events（UTC ISO-8601 毫秒、fresh schema）
+│   └── tools.py                     # ToolCatalog + default_tool_catalog() 静态注册
+├── integrations/
 │   ├── __init__.py
-│   ├── api.py                      # FastAPI run-first HTTP 层
-│   ├── runtime/
-│   │   ├── __init__.py             # 对外稳定入口：AgentResources / create_harness / RunLedger
-│   │   ├── agent.py                # Brain/BrainFactory、DeepAgentsBrainFactory、SubAgent、两个 middleware
-│   │   ├── execution.py            # HarnessRuntime.execute_run：stream chunk → RunEvent；RunControl drain → cancelled
-│   │   ├── observability.py        # 纯内容/元数据提取器（model_usage/thinking/text/agent scope）
-│   │   ├── resources.py            # AgentResources（context manager）与 ResourceConfig；CompositeBackend 装配
-│   │   ├── runs.py                 # SqliteRunLedger：runs/run_events（UTC ISO-8601 毫秒、fresh schema）
-│   │   └── tools.py                # ToolCatalog + default_tool_catalog() 静态注册
-│   ├── integrations/
-│   │   ├── __init__.py
-│   │   ├── artifacts.py            # /artifacts/ 路径、唯一下载名、immutable JSON helper、上传命名
-│   │   └── mineru.py               # parse_documents / extract_archives 两个 MinerU 通用工具
-│   └── skills/
-│       ├── __init__.py
-│       ├── philipswgqimport/        # Philips 外高桥进境 Skill（目录名同时满足 Skill 名与 Python 包名）
-│       │   ├── __init__.py
-│       │   ├── SKILL.md             # 适用场景/材料识别/A/B/C 流程/裁决条件/失败处理
-│       │   ├── references/{fields.md,rules.md}
-│       │   ├── assets/{invoice,packing进境.xlsx, 核注清单导入模板.xlsx}
-│       │   └── scripts/
-│       │       ├── __init__.py
-│       │       ├── tools.py         # save_philips_wgq_extraction + generate_philips_wgq_import（2 个业务 Tool）
-│       │       └── documents.py     # 三个 Excel 写入器 + 共享 openpyxl helper
-│       └── tecanimport/             # Tecan 帝肯进口 Skill
-│           ├── __init__.py
-│           ├── SKILL.md
-│           ├── references/{fields.md,rules.md}
-│           ├── assets/Tecan_进口_发票箱单_空运.xlsx
-│           └── scripts/
-│               ├── __init__.py
-│               ├── tools.py         # save_tecan_extraction + generate_tecan_import（2 个业务 Tool）
-│               └── documents.py     # 发票箱单写入器 + insert_rows
+│   ├── artifacts.py                 # /artifacts/ 路径、唯一下载名、immutable JSON helper、上传命名
+│   └── mineru.py                    # parse_documents / extract_archives 两个 MinerU 通用工具
+└── skills/
+    ├── __init__.py
+    ├── philipswgqimport/            # Philips 外高桥进境 Skill（目录名同时满足 Skill 名与 Python 包名）
+    │   ├── __init__.py
+    │   ├── SKILL.md                 # 适用场景/材料识别/A/B/C 流程/裁决条件/失败处理
+    │   ├── references/{fields.md,rules.md}
+    │   ├── assets/{invoice,packing进境.xlsx, 核注清单导入模板.xlsx}
+    │   └── scripts/
+    │       ├── __init__.py
+    │       ├── tools.py             # save_philips_wgq_extraction + generate_philips_wgq_import（2 个业务 Tool）
+    │       └── documents.py         # 三个 Excel 写入器 + 共享 openpyxl helper
+    └── tecanimport/                 # Tecan 帝肯进口 Skill
+        ├── __init__.py
+        ├── SKILL.md
+        ├── references/{fields.md,rules.md}
+        ├── assets/Tecan_进口_发票箱单_空运.xlsx
+        └── scripts/
+            ├── __init__.py
+            ├── tools.py             # save_tecan_extraction + generate_tecan_import（2 个业务 Tool）
+            └── documents.py         # 发票箱单写入器 + insert_rows
 ├── tests/                           # 见第 5 节
-├── pyproject.toml                   # package-dir="" + packages.find include=dsagents* + package-data
+├── pyproject.toml                   # package-dir="" + py-modules=["api"] + packages.find include=runtime*/integrations*/skills* + package-data
 ├── uv.lock
 ├── .planning/                       # 子项目级文档事实层
 └── data/                            # 固定数据目录（整体被 gitignore；fresh schema，无迁移）
@@ -64,12 +62,12 @@ backend/
 
 | 工具可调用名 | 所属模块 |
 |---|---|
-| `parse_documents` | `dsagents/integrations/mineru.py` |
-| `extract_archives` | `dsagents/integrations/mineru.py` |
-| `save_philips_wgq_extraction` | `dsagents/skills/philipswgqimport/scripts/tools.py` |
-| `generate_philips_wgq_import` | `dsagents/skills/philipswgqimport/scripts/tools.py` |
-| `save_tecan_extraction` | `dsagents/skills/tecanimport/scripts/tools.py` |
-| `generate_tecan_import` | `dsagents/skills/tecanimport/scripts/tools.py` |
+| `parse_documents` | `integrations/mineru.py` |
+| `extract_archives` | `integrations/mineru.py` |
+| `save_philips_wgq_extraction` | `skills/philipswgqimport/scripts/tools.py` |
+| `generate_philips_wgq_import` | `skills/philipswgqimport/scripts/tools.py` |
+| `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` |
+| `generate_tecan_import` | `skills/tecanimport/scripts/tools.py` |
 
 `generate_*_import` 接收抽取 artifact 路径列表 + 裁决 `decisions`，一次完成完整校验、canonical 构建、匹配、计算、模板写入和输出复核。业务问题统一返回 `{"code":"input_problems","problems":[{"source","location","issue","action"}]}`；成功返回 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`。不再有 `build_*_canonical` / `save_*_adjudication` / `generate_*_documents` / `needs_input` / `needs_c` / `needs_adjudication` / `info_source_preference` / `pn_info_source_overrides`。
 
@@ -87,31 +85,31 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dsagents*"]
+include = ["runtime*", "integrations*", "skills*"]
 
 [tool.setuptools.package-data]
-"dsagents.skills.philipswgqimport" = ["SKILL.md", "references/*.md", "assets/*"]
-"dsagents.skills.tecanimport" = ["SKILL.md", "references/*.md", "assets/*"]
+"skills.philipswgqimport" = ["SKILL.md", "references/*.md", "assets/*"]
+"skills.tecanimport" = ["SKILL.md", "references/*.md", "assets/*"]
 ```
 
-含义：`backend/` 作为安装根，`dsagents` 是一个 Python 包。模块内一律使用**绝对包内导入**：
+含义：`backend/` 作为安装根，发行名仍为 `dsagents`，源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`。模块内一律使用**绝对顶层导入**：
 
-- `from dsagents.runtime import AgentResources, create_harness`
-- `from dsagents.runtime.runs import SqliteRunLedger, RunEvent`
-- `from dsagents.integrations.artifacts import resolve_artifact_path, write_json_artifact`
-- `from dsagents.skills.philipswgqimport.scripts.tools import generate_philips_wgq_import`
-- `from dsagents.skills.tecanimport.scripts.tools import generate_tecan_import`
+- `from runtime import AgentResources, create_harness`
+- `from runtime.runs import SqliteRunLedger, RunEvent`
+- `from integrations.artifacts import resolve_artifact_path, write_json_artifact`
+- `from skills.philipswgqimport.scripts.tools import generate_philips_wgq_import`
+- `from skills.tecanimport.scripts.tools import generate_tecan_import`
 
 调用前提是 `backend/` 在 `sys.path`（开发时 `cd backend` 运行；安装后由包提供）。
 
 ## 3. 运行入口
 
-- **HTTP**（`dsagents/api.py`，`app = create_app()`；`create_app(*, resource_config=None, harness_factory=create_harness)` 可注入测试用的 resource 配置与 Brain 工厂）：
+- **HTTP**（`api.py`，`app = create_app()`；`create_app(*, resource_config=None, harness_factory=create_harness)` 可注入测试用的 resource 配置与 Brain 工厂）：
   - `POST /upload` —— multipart `files[]`，返回 `{files:[{file_path,name,mime_type,size}]}`。
   - `POST /runs` —— body `{messages, session_id?}`，立即返回 `{run_id, session_id, status:"queued"}`。
   - `GET  /runs/{run_id}?after_event_id=N` —— 返回 `{run, events[], latest_content_event, usage}`（`usage` 始终从该 run 全部 `model_usage` 事件汇总；无模型调用时为 `null`），未知 run 返回 `404`。**非 SSE，纯轮询。**
   - `POST /runs/{run_id}/cancel` —— 活跃 run 返回 `202`（协作 drain）；已 cancelling/cancelled 返回 `200`；已 succeeded/failed 返回 `409`；不存在返回 `404`。
-  - 启动：`uvicorn dsagents.api:app --host 0.0.0.0 --port 8500`。
+  - 启动：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`。
 - **测试脚本**：从 `backend/` 目录按影响范围运行对应脚本，例如 `python -m tests.test_api`、`python -m tests.test_harness`。
 - **程序内**：`AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`。
 

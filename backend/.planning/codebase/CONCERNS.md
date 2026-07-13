@@ -1,17 +1,17 @@
 # CONCERNS
 
 > backend 风险、技术债、关注点。每条均带证据（文件 / 配置 / 行为）。状态分 **已确认**（代码或配置可证）与 **需确认**（推断，需人工核实）。
-> 本轮刷新（2026-07-13）已核对当前工作树（`dsagents/` 包、`tests/`、`pyproject.toml`）。结论以源码为准。
+> 本轮刷新（2026-07-13）已核对当前工作树（`backend/` 顶层源码、`tests/`、`pyproject.toml`）。结论以源码为准。
 
 ## 一、技术债
 
 ### 1.1 定价常量硬编码（已确认）
 
-`dsagents/api.py`：`PRICING_AS_OF`（当前 `"2026-07-12"`）、`_TIER_THRESHOLD_INPUT_TOKENS = 512 * 1024`、`_PRICING_TIERS`（standard / long_context 两档 CNY/M）、`_PRICEABLE_MODELS = {"MiniMax-M3"}` 全部硬编码，未做配置中心。MiniMax 调价或新增模型时需手动改代码并更新 `PRICING_AS_OF` 日期。任一调用不可计价 → 整 run 金额 `null`，不输出系统性偏低的部分金额，token 仍完整。
+`api.py`：`PRICING_AS_OF`（当前 `"2026-07-12"`）、`_TIER_THRESHOLD_INPUT_TOKENS = 512 * 1024`、`_PRICING_TIERS`（standard / long_context 两档 CNY/M）、`_PRICEABLE_MODELS = {"MiniMax-M3"}` 全部硬编码，未做配置中心。MiniMax 调价或新增模型时需手动改代码并更新 `PRICING_AS_OF` 日期。任一调用不可计价 → 整 run 金额 `null`，不输出系统性偏低的部分金额，token 仍完整。
 
 ### 1.2 stream chunk 形状无版本契约（已确认，风险）
 
-`dsagents/runtime/execution.py` 与 `dsagents/runtime/observability.py` 大量依赖 chunk 字段形状：
+`runtime/execution.py` 与 `runtime/observability.py` 大量依赖 chunk 字段形状：
 
 - `chunk["type"]` ∈ `messages` / `custom` / `updates`。
 - `event` 后缀 `delta`；`thinking` / `reasoning` / `non_standard` block 类型。
@@ -23,13 +23,13 @@
 
 ### 1.3 错误透传无护栏（已确认）
 
-- `dsagents/runtime/execution.py` 捕获异常后把 `error` 写入 run status，`repr(exc)` 写入 `raw`。
-- `dsagents/api.py` 的 `_ensure_failed_run` 同样透传错误文本，HTTP 层不包装、不脱敏。
+- `runtime/execution.py` 捕获异常后把 `error` 写入 run status，`repr(exc)` 写入 `raw`。
+- `api.py` 的 `_ensure_failed_run` 同样透传错误文本，HTTP 层不包装、不脱敏。
 - **风险**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、Oracle 连接串、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是「调用方自行处理」，但无护栏。
 
 ### 1.4 provider 耦合：MiniMax 强绑 Anthropic 客户端（已确认）
 
-`dsagents/runtime/agent.py` 把 MiniMax（Anthropic 兼容）配置传入：
+`runtime/agent.py` 把 MiniMax（Anthropic 兼容）配置传入：
 
 ```python
 init_chat_model(
@@ -44,7 +44,7 @@ init_chat_model(
 
 ### 1.5 持久化只增不删，无 TTL/归档（已确认）
 
-- `dsagents_runs.db` 的 `runs` / `run_events` 表无清理方法（`dsagents/runtime/runs.py` 全文无 delete/truncate/vacuum）。
+- `dsagents_runs.db` 的 `runs` / `run_events` 表无清理方法（`runtime/runs.py` 全文无 delete/truncate/vacuum）。
 - `data/internal/run-events/` 的大 payload spill 文件（阈值 `max_inline_bytes=262_144`）只增不删。
 - 业务 JSON/Excel artifact 落在 `data/artifacts/downloads/`，只增不改且无 registry/清理策略。
 - 高频运行会持续增长磁盘占用，生命周期由部署方管理。raw chunk 长期留存（调试有利但占空间且保留模型/错误细节）。
@@ -59,7 +59,7 @@ init_chat_model(
 
 ### 2.1 单飞锁是进程内 `threading.Lock`（已确认）
 
-`dsagents/api.py` 的 `_acquire_session_run` 靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）：
+`api.py` 的 `_acquire_session_run` 靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）：
 
 - 多 worker 部署（如 `uvicorn --workers N`）时，同一 `session_id` 可在不同进程并发执行 run，锁完全失效。
 - `session_id` 在本架构中只作两个用途：LangGraph `thread_id` 与单飞锁键。
@@ -70,9 +70,9 @@ init_chat_model(
 
 ### 2.3 SQLite 三库各立连接，无跨库事务（已确认）
 
-`dsagents/runtime/resources.py` 三个 db 职责明确：
+`runtime/resources.py` 三个 db 职责明确：
 
-- `dsagents_runs.db` — run 与 run_events（`dsagents/runtime/runs.py`，fresh schema 建表 `runs`/`run_events` + 索引）。
+- `dsagents_runs.db` — run 与 run_events（`runtime/runs.py`，fresh schema 建表 `runs`/`run_events` + 索引）。
 - `dsagents_store.db` — LangGraph `SqliteStore`（`/memories/` 显式长期记忆路由，`namespace=("dsagents",)`）。
 - `dsagents_checkpoints.db` — LangGraph `SqliteSaver` checkpointer（`thread_id=session_id`）。
 
@@ -80,7 +80,7 @@ init_chat_model(
 
 ### 2.4 `runs.db` 无 WAL / 无 busy_timeout（已确认）
 
-`dsagents/runtime/runs.py _setup` 仅 `create table if not exists` + 建索引，grep 确认无 `journal_mode` / `busy_timeout` PRAGMA，也无任何 `_migrate` 迁移代码（fresh schema）：
+`runtime/runs.py _setup` 仅 `create table if not exists` + 建索引，grep 确认无 `journal_mode` / `busy_timeout` PRAGMA，也无任何 `_migrate` 迁移代码（fresh schema）：
 
 - `dsagents_runs.db` 为默认 `delete` 模式。
 - `dsagents_checkpoints.db` 由 LangGraph `SqliteSaver` 开启 WAL（磁盘存在 `-wal`/`-shm`，生命周期由 LangGraph 管理）。
@@ -94,7 +94,7 @@ init_chat_model(
 
 ### 2.6 run 在 daemon 线程跑，靠启动兜底（已确认）
 
-`dsagents/api.py` 用 `threading.Thread(..., daemon=True)`。进程被强杀时，run 状态可能停在 `running`/`cancelling`，靠 lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 兜底。
+`api.py` 用 `threading.Thread(..., daemon=True)`。进程被强杀时，run 状态可能停在 `running`/`cancelling`，靠 lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 兜底。
 
 ## 三、安全边界
 
@@ -104,7 +104,7 @@ init_chat_model(
 
 ### 3.2 provider key 通过 `os.getenv` 直读（已确认）
 
-`dsagents/runtime/agent.py` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL"/"MINIMAX_BASE_URL")` 直接构造 `init_chat_model`，无校验、无脱敏日志护栏。`dsagents/integrations/mineru.py` 读取 `MINERU_*` 键（fail-fast）。Skill 的 Oracle 读取只取键且不记录值。
+`runtime/agent.py` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL"/"MINIMAX_BASE_URL")` 直接构造 `init_chat_model`，无校验、无脱敏日志护栏。`integrations/mineru.py` 读取 `MINERU_*` 键（fail-fast）。Skill 的 Oracle 读取只取键且不记录值。
 
 ### 3.3 `data/*.db` 含运行时数据（已确认，已缓解）
 
@@ -112,21 +112,21 @@ init_chat_model(
 
 ### 3.4 无鉴权 / 无用户隔离（已确认）
 
-`dsagents/api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/runs/{run_id}/cancel`、`/upload` 全部匿名可调（grep 确认无 `Depends`/`Authorization`/`Authentication`）。
+`api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/runs/{run_id}/cancel`、`/upload` 全部匿名可调（grep 确认无 `Depends`/`Authorization`/`Authentication`）。
 
 ### 3.5 CORS 未实现（已确认）
 
-grep 在 `dsagents/api.py` 中无 `CORSMiddleware`/`add_middleware` —— 浏览器跨域实际不会被处理。
+grep 在 `api.py` 中无 `CORSMiddleware`/`add_middleware` —— 浏览器跨域实际不会被处理。
 
 ### 3.6 `/upload` 无大小/类型/数量限制（已确认）
 
-`dsagents/api.py` 的 `post_upload`/`_store_upload` 直接 `shutil.copyfileobj(file.file, handle)`，无文件大小上限、无 MIME 白名单、无单批数量上限。恶意或误操作可写满磁盘。文件名经 `clean_filename`/`make_timestamped_name` 处理，路径穿越风险较低，但体积与类型无护栏。
+`api.py` 的 `post_upload`/`_store_upload` 直接 `shutil.copyfileobj(file.file, handle)`，无文件大小上限、无 MIME 白名单、无单批数量上限。恶意或误操作可写满磁盘。文件名经 `clean_filename`/`make_timestamped_name` 处理，路径穿越风险较低，但体积与类型无护栏。
 
 ## 四、易踩坑
 
 ### 4.1 声明式 SubAgent 不继承主 Agent middleware（已确认）
 
-`workflow_subagents()`（`dsagents/runtime/agent.py`）通过 `_extractor(...)` 给每个 SubAgent **显式注入** `runtime_middlewares()`（`ToolTelemetry` + `NoProgressMiddleware`）。若未来新增 middleware 只加在主 Agent 装配处而忘了同步 `runtime_middlewares()`，SubAgent 将静默缺少该 middleware（例如缺少 no-progress 检测会让 SubAgent 死循环）。改动 middleware 列表必须同步 `runtime_middlewares()` 与所有 SubAgent。
+`workflow_subagents()`（`runtime/agent.py`）通过 `_extractor(...)` 给每个 SubAgent **显式注入** `runtime_middlewares()`（`ToolTelemetry` + `NoProgressMiddleware`）。若未来新增 middleware 只加在主 Agent 装配处而忘了同步 `runtime_middlewares()`，SubAgent 将静默缺少该 middleware（例如缺少 no-progress 检测会让 SubAgent 死循环）。改动 middleware 列表必须同步 `runtime_middlewares()` 与所有 SubAgent。
 
 ### 4.2 `NoProgressMiddleware` 是启发式（已确认）
 
@@ -140,11 +140,11 @@ grep 在 `dsagents/api.py` 中无 `CORSMiddleware`/`add_middleware` —— 浏�
 
 ### 4.3 fresh-schema 部署需整体清空 `data/`（已确认）
 
-`dsagents/runtime/runs.py` 是 fresh schema，**无任何迁移代码**（无 `pragma user_version`、无 `_migrate`）。部署切换的正确做法是：停服务 + 整体清空 `backend/data/`（`dsagents_runs.db` / `run_events` / `dsagents_checkpoints.db` / `dsagents_store.db` / `artifacts/uploads` / `artifacts/downloads` / `internal/run-events` 全清），重启后由 `_setup` 与 LangGraph `.setup()` 重建。**不要**把旧库（尤其是旧扁平架构时期的库）直接拷贝过来——表结构/时间戳格式/事件类型均已变更，旧数据不会被迁移，只会导致读端解析失败。
+`runtime/runs.py` 是 fresh schema，**无任何迁移代码**（无 `pragma user_version`、无 `_migrate`）。部署切换的正确做法是：停服务 + 整体清空 `backend/data/`（`dsagents_runs.db` / `run_events` / `dsagents_checkpoints.db` / `dsagents_store.db` / `artifacts/uploads` / `artifacts/downloads` / `internal/run-events` 全清），重启后由 `_setup` 与 LangGraph `.setup()` 重建。**不要**把旧库（尤其是旧扁平架构时期的库）直接拷贝过来——表结构/时间戳格式/事件类型均已变更，旧数据不会被迁移，只会导致读端解析失败。
 
 ### 4.4 `_safe` 把任意对象 `repr()` 落库（已确认）
 
-`dsagents/runtime/runs.py` 的 `_safe`：非 dict/list/标量/None 的对象一律走 `repr(value)`。若传入 `emit_run_event`/`emit_run_status` 的 `raw` 含未实现 `model_dump` 的自定义对象（如异常对象、连接对象），其 `repr`（可能含内存地址、内部字段）会原样落库。`raw=chunk` 传入的是 langchain chunk，已走 `model_dump(mode="json")` 分支，安全；但自定义传参时需注意。
+`runtime/runs.py` 的 `_safe`：非 dict/list/标量/None 的对象一律走 `repr(value)`。若传入 `emit_run_event`/`emit_run_status` 的 `raw` 含未实现 `model_dump` 的自定义对象（如异常对象、连接对象），其 `repr`（可能含内存地址、内部字段）会原样落库。`raw=chunk` 传入的是 langchain chunk，已走 `model_dump(mode="json")` 分支，安全；但自定义传参时需注意。
 
 ### 4.5 取消不回滚已生成文件（已确认）
 
@@ -152,7 +152,7 @@ grep 在 `dsagents/api.py` 中无 `CORSMiddleware`/`add_middleware` —— 浏�
 
 ## 五、§8 Oracle thick mode 外部依赖（已确认）
 
-`dsagents/skills/philipswgqimport/scripts/tools.py` 的 Oracle 单位查询通过 `oracledb` thick mode 连接 Oracle，依赖 `ORACLE_CLIENT_LIB_DIR` 环境变量指向 Oracle instant client 目录。该 instant client **不在仓库**（`.gitignore` 排除 `backend/instantclient/`）。**生产部署必须由外部提供该目录**（容器镜像挂载、主机预装等），不能依赖仓库存放。
+`skills/philipswgqimport/scripts/tools.py` 的 Oracle 单位查询通过 `oracledb` thick mode 连接 Oracle，依赖 `ORACLE_CLIENT_LIB_DIR` 环境变量指向 Oracle instant client 目录。该 instant client **不在仓库**（`.gitignore` 排除 `backend/instantclient/`）。**生产部署必须由外部提供该目录**（容器镜像挂载、主机预装等），不能依赖仓库存放。
 
 行为：
 
@@ -167,7 +167,7 @@ Tecan Skill 不消费任何 Oracle 键。
 
 ### 6.1 `runs.db` 是否需要 WAL + busy_timeout（需确认）
 
-是否需要在 `_setup`（`dsagents/runtime/runs.py`）或连接级为 `runs.db` 设置 `PRAGMA journal_mode=WAL` 与 `PRAGMA busy_timeout=...`，以缓解写锁竞争（§2.4）？以及是否需要对 `checkpoints.db` 的 WAL 做 checkpoint/归档？
+是否需要在 `_setup`（`runtime/runs.py`）或连接级为 `runs.db` 设置 `PRAGMA journal_mode=WAL` 与 `PRAGMA busy_timeout=...`，以缓解写锁竞争（§2.4）？以及是否需要对 `checkpoints.db` 的 WAL 做 checkpoint/归档？
 
 ### 6.2 真实集成测试的隔离策略（需确认）
 
@@ -187,4 +187,4 @@ Tecan Skill 不消费任何 Oracle 键。
 
 ### 6.6 `MINERU_EFFORT` 空值提交（已确认，建议）
 
-`dsagents/integrations/mineru.py` 中 `effort = os.getenv("MINERU_EFFORT") or ""`，可缺省或留空，并会原样以空字符串提交到 MinerU。建议维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。
+`integrations/mineru.py` 中 `effort = os.getenv("MINERU_EFFORT") or ""`，可缺省或留空，并会原样以空字符串提交到 MinerU。建议维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。

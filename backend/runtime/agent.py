@@ -24,11 +24,12 @@ from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel
 
-from dsagents.runtime import observability
-from dsagents.runtime.observability import MAIN_AGENT_NAME
+from runtime import observability
+from runtime.observability import MAIN_AGENT_NAME
 
 
-load_dotenv(Path(__file__).resolve().parents[2].with_name(".env"))
+BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(BACKEND_ENV_PATH)
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -271,7 +272,7 @@ def workflow_subagents() -> list[SubAgent]:
 
 
 def _extractor(*, name: str, description: str, prompt: str, tool: str) -> SubAgent:
-    from dsagents.runtime.tools import default_tool_catalog
+    from runtime.tools import default_tool_catalog
 
     tool_handler = next(
         handler for handler in default_tool_catalog().handlers if handler.__name__ == tool

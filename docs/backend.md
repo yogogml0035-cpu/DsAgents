@@ -1,13 +1,13 @@
 # backend 架构与约定
 
-`backend/` 是 DsAgents 的唯一产品子项目，安装根是 `backend/`，唯一产品包是 `dsagents/`。实现细节以 `backend/.planning/codebase/` 事实文档为准。
+`backend/` 是 DsAgents 的唯一产品子项目，安装根是 `backend/`，源码顶层布局是 `api.py` 与 `runtime/`、`integrations/`、`skills/`；发行名仍为 `dsagents`。实现细节以 `backend/.planning/codebase/` 事实文档为准。
 
 ## 核心模型
 
 - **run-first**：run 是唯一执行与查询单位；`run_events` 是 append-only 事件源，`runs` 是投影快照。
 - **短期上下文**：当前请求的 `messages[]` 发送给 Brain；LangGraph 以 `thread_id=session_id` 维护上下文，应用不再维护 session 事件回放。
 - **能力边界**：`Brain` / `BrainFactory` 是可注入 `Protocol`；工具是 callable + `ToolCatalog`；资源和 ledger 是具体类。
-- **业务 Skill**：Philips 外高桥和 Tecan 业务分别位于 `backend/dsagents/skills/<skill>/`，每个 Skill 通过两个业务工具完成抽取保存与一站式生成。
+- **业务 Skill**：Philips 外高桥和 Tecan 业务分别位于 `backend/skills/<skill>/`，每个 Skill 通过两个业务工具完成抽取保存与一站式生成。
 - **显式 artifacts**：上传、MinerU 结果、抽取 JSON、canonical JSON 和 Excel 都通过 `/artifacts/...` 路径传递；生成文件唯一命名，不覆盖输入或已有产物。
 
 ## 主执行链
@@ -20,14 +20,14 @@
 
 ## 当前模块职责
 
-- `backend/dsagents/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
-- `backend/dsagents/runtime/agent.py`：Brain 工厂、DeepAgents 装配、四个声明式 extractor SubAgent、`ToolTelemetry` 与 `NoProgressMiddleware`。
-- `backend/dsagents/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、协作式 cancel 和默认 harness 工厂。
-- `backend/dsagents/runtime/runs.py`：SQLite run ledger、事件追加、快照投影、用量聚合和大 payload 外溢。
-- `backend/dsagents/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由。
-- `backend/dsagents/runtime/tools.py`：静态注册 6 个工具；不自动扫描 Skill，不提供插件平台。
-- `backend/dsagents/integrations/`：artifact 路径/唯一命名/JSON helper 与 MinerU HTTP/ZIP 集成。
-- `backend/dsagents/skills/`：业务字段合同、规则、模板、抽取保存和 Excel 生成实现。
+- `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
+- `backend/runtime/agent.py`：Brain 工厂、DeepAgents 装配、四个声明式 extractor SubAgent、`ToolTelemetry` 与 `NoProgressMiddleware`。
+- `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、协作式 cancel 和默认 harness 工厂。
+- `backend/runtime/runs.py`：SQLite run ledger、事件追加、快照投影、用量聚合和大 payload 外溢。
+- `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由。
+- `backend/runtime/tools.py`：静态注册 6 个工具；不自动扫描 Skill，不提供插件平台。
+- `backend/integrations/`：artifact 路径/唯一命名/JSON helper 与 MinerU HTTP/ZIP 集成。
+- `backend/skills/`：业务字段合同、规则、模板、抽取保存和 Excel 生成实现。
 
 ## 数据与边界
 

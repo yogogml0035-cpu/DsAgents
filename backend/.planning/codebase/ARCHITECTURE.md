@@ -1,20 +1,20 @@
 # ARCHITECTURE
 
-> 事实来源：当前 `backend/` 源码（run-first runtime，`dsagents/` 包）。
-> 本轮刷新（2026-07-13）已逐文件核对工作树：`dsagents/api.py`、`dsagents/runtime/{agent,execution,observability,resources,runs,tools}.py`、`dsagents/integrations/{artifacts,mineru}.py`、两个内置 Skill 包及其 `scripts/`。所有结论以源码为准。
+> 事实来源：当前 `backend/` 源码（run-first runtime，`backend/` 顶层源码）。
+> 本轮刷新（2026-07-13）已逐文件核对工作树：`api.py`、`runtime/{agent,execution,observability,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、两个内置 Skill 包及其 `scripts/`。所有结论以源码为准。
 
 ## 1. 架构定位
 
-`backend/` 是一个 **Harness 级 agent runtime 底座**，定位是「能力可插拔的运行时壳」，而非某个具体 runner / 容器 / 模型 / 工作流的实现。整个产品收口在一个 Python 包 `dsagents/`，子包 `runtime/`（运行时核心）、`integrations/`（外部解析与 artifact 路径）、`skills/`（两个内置 Skill 包）。
+`backend/` 是一个 **Harness 级 agent runtime 底座**，定位是「能力可插拔的运行时壳」，而非某个具体 runner / 容器 / 模型 / 工作流的实现。整个产品收口在 `backend/` 顶层源码布局（`api.py`、`runtime/`、`integrations/`、`skills/`），子包 `runtime/`（运行时核心）、`integrations/`（外部解析与 artifact 路径）、`skills/`（两个内置 Skill 包）。
 
-- **Brain 可插拔**：`Brain` / `BrainFactory` 是 `Protocol`（`dsagents/runtime/agent.py`），任何实现 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic 客户端）模型。
-- **工具静态注册**：`ToolCatalog`（`dsagents/runtime/tools.py`）是一组普通 `Callable[..., Any]`，不是 `Protocol`；`default_tool_catalog()` 静态注册 6 个工具（2 个 MinerU 通用 + 每个 Skill 2 个业务），主 Agent 装配时直接 import，不自动扫描、无插件平台、无动态加载器。
-- **业务能力按 Skill 打包**：两个内置 Skill 包 `dsagents/skills/philipswgqimport/` 与 `dsagents/skills/tecanimport/`（目录名同时满足 Agent Skill 命名与 Python 包标识符规则，故无需动态 loader）；每个含 `SKILL.md` + `references/` + `assets/` + `scripts/{tools.py, documents.py}`。`workflow_subagents()`（`dsagents/runtime/agent.py`）注册 4 个声明式 extractor SubAgent（A/B 各两个），每个 SubAgent 自装自己的 middleware。
-- 存储与持久化通道收口在 `AgentResources`（`dsagents/runtime/resources.py`），由调用方注入；模型由 `BrainFactory` 创建并注入运行时，二者边界不混合。
+- **Brain 可插拔**：`Brain` / `BrainFactory` 是 `Protocol`（`runtime/agent.py`），任何实现 `stream(payload, config, **kwargs)` 的对象都可作 Brain；默认实现 `DeepAgentsBrainFactory` 用 `deepagents.create_deep_agent` + MiniMax（伪装成 Anthropic 客户端）模型。
+- **工具静态注册**：`ToolCatalog`（`runtime/tools.py`）是一组普通 `Callable[..., Any]`，不是 `Protocol`；`default_tool_catalog()` 静态注册 6 个工具（2 个 MinerU 通用 + 每个 Skill 2 个业务），主 Agent 装配时直接 import，不自动扫描、无插件平台、无动态加载器。
+- **业务能力按 Skill 打包**：两个内置 Skill 包 `skills/philipswgqimport/` 与 `skills/tecanimport/`（目录名同时满足 Agent Skill 命名与 Python 包标识符规则，故无需动态 loader）；每个含 `SKILL.md` + `references/` + `assets/` + `scripts/{tools.py, documents.py}`。`workflow_subagents()`（`runtime/agent.py`）注册 4 个声明式 extractor SubAgent（A/B 各两个），每个 SubAgent 自装自己的 middleware。
+- 存储与持久化通道收口在 `AgentResources`（`runtime/resources.py`），由调用方注入；模型由 `BrainFactory` 创建并注入运行时，二者边界不混合。
 
 > 运行时不绑定特定 runner、特定容器、特定模型、特定工作流。
 
-`typing.Protocol` 只用于可注入能力边界 `Brain` / `BrainFactory`（`dsagents/runtime/agent.py`）。其余抽象（`AgentResources`、`ToolCatalog`、`SqliteRunLedger`、`RunEvent`/`RunSnapshot`）都是具体类与 dataclass。旧的扁平模块（`api.py`/`harness.py`/`hands.py`/`resources.py`/`run_ledger.py`/`tools.py`/`subagents.py`/`workflow_artifacts.py`/`artifact_names.py`/`philips_wgq_import.py`/`tecan_import.py`）与旧带连字符 `skills/` 目录均已删除。
+`typing.Protocol` 只用于可注入能力边界 `Brain` / `BrainFactory`（`runtime/agent.py`）。其余抽象（`AgentResources`、`ToolCatalog`、`SqliteRunLedger`、`RunEvent`/`RunSnapshot`）都是具体类与 dataclass。顶层 HTTP 入口 `api.py` 保留；旧辅助模块（`harness.py`/`hands.py`/`resources.py`/`run_ledger.py`/`tools.py`/`subagents.py`/`workflow_artifacts.py`/`artifact_names.py`/`philips_wgq_import.py`/`tecan_import.py`）与旧带连字符 `skills/` 目录均已删除。
 
 ## 2. run-first 架构核心
 
@@ -22,7 +22,7 @@ run 是唯一的执行单位与查询单位。短期上下文全交给 LangGraph
 
 ### 两个等价入口
 
-1. **HTTP 入口**（`dsagents/api.py`）：`POST /runs` 创建 run 并立即返回 `queued`，run 在后台 daemon 线程执行；`GET /runs/{run_id}` 轮询增量事件（非 SSE，纯轮询）；`POST /runs/{run_id}/cancel` 协作式 drain。
+1. **HTTP 入口**（`api.py`）：`POST /runs` 创建 run 并立即返回 `queued`，run 在后台 daemon 线程执行；`GET /runs/{run_id}` 轮询增量事件（非 SSE，纯轮询）；`POST /runs/{run_id}/cancel` 协作式 drain。
 2. **程序内入口**：`AgentResources(config)` → `create_harness(resources)` → `harness.execute_run(messages, session_id, run_id)`，返回 `Iterator[RunEvent]`。本地测试脚本与 `FakeBrain` 测试也走这条路。
 
 ### `session_id` 的现状
@@ -37,7 +37,7 @@ run 是唯一的执行单位与查询单位。短期上下文全交给 LangGraph
 ## 3. 分层与数据流
 
 ```text
-HTTP 层 (dsagents/api.py)
+HTTP 层 (api.py)
   POST /upload(files[])
     -> 保存到 /artifacts/uploads/<cleaned-stem>_<upload-ts>(_n).ext
   POST /runs(messages, session_id?)
@@ -49,7 +49,7 @@ HTTP 层 (dsagents/api.py)
   POST /runs/{run_id}/cancel
     -> 协作 drain：RunControl；GraphDrained -> cancelled
 
-Harness 层 (dsagents/runtime/execution.py execute_run)
+Harness 层 (runtime/execution.py execute_run)
   -> emit status=running
   -> artifact block 归一化为文本提示 (ARTIFACT_REFERENCE_HINT)
   -> brain_factory.create(resources, middleware, tools)      # 装配 Brain
@@ -73,13 +73,13 @@ Harness 层 (dsagents/runtime/execution.py execute_run)
   + workflow_subagents()（4 个声明式 SubAgent，各自装 middleware）
 
 持久化层
-  dsagents/runtime/runs.py (SqliteRunLedger, data/dsagents_runs.db)
+  runtime/runs.py (SqliteRunLedger, data/dsagents_runs.db)
     + LangGraph SqliteSaver (data/dsagents_checkpoints.db, thread_id=session_id)
     + LangGraph SqliteStore  (data/dsagents_store.db, namespace=("dsagents",))
     + CompositeBackend (/memories/ / /artifacts/ / /large_tool_results/ / /skills/ 路由)
 ```
 
-### CompositeBackend 路由（`dsagents/runtime/resources.py`）
+### CompositeBackend 路由（`runtime/resources.py`）
 
 `AgentResources.__enter__` 装配 `CompositeBackend`：
 
@@ -94,7 +94,7 @@ Harness 层 (dsagents/runtime/execution.py execute_run)
 
 每个 run 的进展以**事件**形式不可变追加到 `run_events` 表，`event_id` 单调递增。`GET /runs/{run_id}?after_event_id=N` 仅靠事件表增量回放，无需额外会话状态；`latest_content_event` 由 `run_id + type not in ('status','model_usage') + event_id desc limit 1` 取得。
 
-事件类型固定 7 种（`dsagents/runtime/execution.py` 写库）：
+事件类型固定 7 种（`runtime/execution.py` 写库）：
 
 ```text
 status, tool_execution, tool_progress, thinking, text_delta, assistant_message, model_usage
@@ -113,7 +113,7 @@ status(running) -> thinking / text_delta / tool_execution / tool_progress /
 
 关键事件类型语义：
 
-- `tool_execution`：由 `ToolTelemetry.wrap_tool_call`（`dsagents/runtime/agent.py`）经 `get_stream_writer()` 发出，载荷 `{name, agent_name, status: started|error|completed, args?, duration_ms?, result?}`，含 scope 路径以重建「主 Agent → SubAgent → Tool」调用链。
+- `tool_execution`：由 `ToolTelemetry.wrap_tool_call`（`runtime/agent.py`）经 `get_stream_writer()` 发出，载荷 `{name, agent_name, status: started|error|completed, args?, duration_ms?, result?}`，含 scope 路径以重建「主 Agent → SubAgent → Tool」调用链。
 - `tool_progress`：MinerU 通用工具（`parse_documents`/`extract_archives`）自发报告提交/轮询/下载进度（custom payload），与 `tool_execution` 是两套独立 custom 事件。
 - `assistant_message`：从 `updates` channel 派生，`payload` 由 `observability.assistant_message_payload(message, tool_calls=...)` 构造，保留最终 `text` 与（若有）最后一个 `thinking` 文本。
 - `model_usage`：每次模型调用终态提取一次，载荷含 `model`、`scope`（`main_agent`/`subagent`）、`agent_name`、`input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`。它是成本/缓存观测事件，不算内容事件，因此被 `latest_content_event` 排除。
@@ -126,7 +126,7 @@ queued → cancelled
 running → cancelling → cancelled
 ```
 
-取消流（`POST /runs/{run_id}/cancel`，`dsagents/api.py`）：
+取消流（`POST /runs/{run_id}/cancel`，`api.py`）：
 
 - 未知 run → `404 {"error":"Unknown run: ..."}`。
 - 终态（`succeeded`/`failed`）→ `409 {"error":"Run already terminal: ...","status":...}`。
@@ -137,7 +137,7 @@ running → cancelling → cancelled
 
 ## 6. 中间件边界
 
-运行时恰好两个 middleware（`dsagents/runtime/agent.py` `runtime_middlewares()` 返回新实例列表）：
+运行时恰好两个 middleware（`runtime/agent.py` `runtime_middlewares()` 返回新实例列表）：
 
 - `ToolTelemetry`（`wrap_tool_call`）：工具调用前/异常/成功后发 `tool_execution` 三态，含计时与 scope 路径。
 - `NoProgressMiddleware`（`before_model`）：自最近一条 `HumanMessage` 之后，若同一 `tool + 归一化 args` 连续出现 `NO_PROGRESS_WINDOW`（=3）次则抛 `NoProgressLoop`，由 `execute_run` 投影为 `failed`。
@@ -152,30 +152,30 @@ running → cancelling → cancelled
 - **run 是事件源**：状态是事件流的投影；查询靠事件表增量回放。
 - **保持运行时薄**：`HarnessRuntime.execute_run` 只做 chunk 规范化与事件转发，不做业务逻辑；业务规则全部下沉到 Skill 的 `scripts/`。
 - **真实错误透传**：异常 → `status=failed` + `error` 文本 + `raw`；`NoProgressLoop` 同样投影为 `failed`。
-- **优先删减范围**：旧扁平模块、旧带连字符 skills 目录、旧事件类型、旧 multi-step builder 全部删除，业务 Tool 收敛为每 Skill 2 个。
+- **优先删减范围**：旧顶层辅助模块、旧带连字符 skills 目录、旧事件类型、旧 multi-step builder 全部删除，业务 Tool 收敛为每 Skill 2 个。
 
 ## 8. 关键抽象
 
 | 抽象 | 定义处 | 作用 |
 |------|--------|------|
-| `AgentResources` | `dsagents/runtime/resources.py` | 资源装配器（context manager）：run ledger + store + checkpointer + CompositeBackend；`ResourceConfig` 给出固定路径 |
-| `create_app(*, resource_config, harness_factory)` | `dsagents/api.py` | FastAPI 工厂：lifespan 装配 `AgentResources`、`fail_incomplete_runs`、harness、单飞锁注册表；模块级 `app = create_app()` |
-| `create_harness(resources)` | `dsagents/runtime/execution.py` | 默认 Harness 工厂：`HarnessRuntime(resources, default_tool_catalog(), DeepAgentsBrainFactory())` |
-| `HarnessRuntime.execute_run(messages, session_id, run_id)` | `dsagents/runtime/execution.py` | run 执行核心，产出 `Iterator[RunEvent]`；`request_cancel(run_id)` 触发 `RunControl` drain |
-| `Brain` / `BrainFactory` | `dsagents/runtime/agent.py` | 模型/Agent 抽象（Protocol） |
-| `DeepAgentsBrainFactory` | `dsagents/runtime/agent.py` | 默认实现：`create_deep_agent` 装配模型/Skills/SubAgents/permissions/middleware |
-| `workflow_subagents()` | `dsagents/runtime/agent.py` | 4 个声明式 extractor SubAgent；每个只挂对应 extraction 保存工具 + 只读文件权限 + 自装 middleware |
-| `ToolTelemetry` / `NoProgressMiddleware` | `dsagents/runtime/agent.py` | 两个运行时 middleware（见 §6） |
-| `SqliteRunLedger` | `dsagents/runtime/runs.py` | run 元数据 + 事件 + 大 payload 外溢 + `aggregate_model_usage`；fresh schema，UTC ISO-8601 毫秒时间戳，无迁移 |
-| `RunEvent` / `RunSnapshot` | `dsagents/runtime/runs.py` | 不可变事件 / run 投影 dataclass（frozen） |
-| `ToolCatalog` / `default_tool_catalog()` | `dsagents/runtime/tools.py` | 工具集合 dataclass / 静态注册 6 个工具 |
-| `CompositeBackend` 装配 | `dsagents/runtime/resources.py` | `/memories/` `/artifacts/` `/large_tool_results/` `/skills/` 四路由 |
-| artifact 路径/JSON helper | `dsagents/integrations/artifacts.py` | `/artifacts/` 安全解析、唯一下载名、不可覆盖 JSON 读写、命名清洗 |
-| MinerU 通用工具 | `dsagents/integrations/mineru.py` | `parse_documents` / `extract_archives` + `MINERU_POLL_INTERVAL_SECONDS` |
-| Philips Skill 业务 Tool | `dsagents/skills/philipswgqimport/scripts/tools.py` | `save_philips_wgq_extraction` + `generate_philips_wgq_import`（一站式 canonical + Oracle + 3 Excel） |
-| Philips Skill Excel 写入 | `dsagents/skills/philipswgqimport/scripts/documents.py` | `generate_tracking` / `generate_invoice_packing` / `generate_bonded_checklist` + 共享 openpyxl helper |
-| Tecan Skill 业务 Tool | `dsagents/skills/tecanimport/scripts/tools.py` | `save_tecan_extraction` + `generate_tecan_import`（订单 + 信息表 join） |
-| Tecan Skill Excel 写入 | `dsagents/skills/tecanimport/scripts/documents.py` | `generate_invoice_packing` + `insert_rows` |
+| `AgentResources` | `runtime/resources.py` | 资源装配器（context manager）：run ledger + store + checkpointer + CompositeBackend；`ResourceConfig` 给出固定路径 |
+| `create_app(*, resource_config, harness_factory)` | `api.py` | FastAPI 工厂：lifespan 装配 `AgentResources`、`fail_incomplete_runs`、harness、单飞锁注册表；模块级 `app = create_app()` |
+| `create_harness(resources)` | `runtime/execution.py` | 默认 Harness 工厂：`HarnessRuntime(resources, default_tool_catalog(), DeepAgentsBrainFactory())` |
+| `HarnessRuntime.execute_run(messages, session_id, run_id)` | `runtime/execution.py` | run 执行核心，产出 `Iterator[RunEvent]`；`request_cancel(run_id)` 触发 `RunControl` drain |
+| `Brain` / `BrainFactory` | `runtime/agent.py` | 模型/Agent 抽象（Protocol） |
+| `DeepAgentsBrainFactory` | `runtime/agent.py` | 默认实现：`create_deep_agent` 装配模型/Skills/SubAgents/permissions/middleware |
+| `workflow_subagents()` | `runtime/agent.py` | 4 个声明式 extractor SubAgent；每个只挂对应 extraction 保存工具 + 只读文件权限 + 自装 middleware |
+| `ToolTelemetry` / `NoProgressMiddleware` | `runtime/agent.py` | 两个运行时 middleware（见 §6） |
+| `SqliteRunLedger` | `runtime/runs.py` | run 元数据 + 事件 + 大 payload 外溢 + `aggregate_model_usage`；fresh schema，UTC ISO-8601 毫秒时间戳，无迁移 |
+| `RunEvent` / `RunSnapshot` | `runtime/runs.py` | 不可变事件 / run 投影 dataclass（frozen） |
+| `ToolCatalog` / `default_tool_catalog()` | `runtime/tools.py` | 工具集合 dataclass / 静态注册 6 个工具 |
+| `CompositeBackend` 装配 | `runtime/resources.py` | `/memories/` `/artifacts/` `/large_tool_results/` `/skills/` 四路由 |
+| artifact 路径/JSON helper | `integrations/artifacts.py` | `/artifacts/` 安全解析、唯一下载名、不可覆盖 JSON 读写、命名清洗 |
+| MinerU 通用工具 | `integrations/mineru.py` | `parse_documents` / `extract_archives` + `MINERU_POLL_INTERVAL_SECONDS` |
+| Philips Skill 业务 Tool | `skills/philipswgqimport/scripts/tools.py` | `save_philips_wgq_extraction` + `generate_philips_wgq_import`（一站式 canonical + Oracle + 3 Excel） |
+| Philips Skill Excel 写入 | `skills/philipswgqimport/scripts/documents.py` | `generate_tracking` / `generate_invoice_packing` / `generate_bonded_checklist` + 共享 openpyxl helper |
+| Tecan Skill 业务 Tool | `skills/tecanimport/scripts/tools.py` | `save_tecan_extraction` + `generate_tecan_import`（订单 + 信息表 join） |
+| Tecan Skill Excel 写入 | `skills/tecanimport/scripts/documents.py` | `generate_invoice_packing` + `insert_rows` |
 | `FakeBrain` / `FakeBrainFactory` | `tests/test_support.py` | 本地测试 Brain 替身（updates + subgraphs + v2 stream） |
 
 ## 9. 存储边界
@@ -190,7 +190,7 @@ running → cancelling → cancelled
 
 三者由 `AgentResources.__enter__` 按需创建，互不共享连接（每次 `SqliteRunLedger` 方法都新开 `sqlite3.connect`）。用户可见文件只落在 `data/artifacts/uploads/`（`POST /upload`）与 `data/artifacts/downloads/`（MinerU JSON/ZIP、解压目录，以及唯一命名的业务 JSON/Excel）。内部大 payload spill 独立落在 `data/internal/run-events/`。
 
-`dsagents_runs.db` 表结构（`dsagents/runtime/runs.py _setup`，fresh schema，无迁移代码）：
+`dsagents_runs.db` 表结构（`runtime/runs.py _setup`，fresh schema，无迁移代码）：
 
 - `runs(run_id, session_id, input_messages_json, status, created_at, updated_at, reply, error)`。
 - `run_events(event_id integer primary key autoincrement, run_id, type, created_at, payload_json, payload_artifact_path, raw_json, raw_artifact_path)` + `idx_run_events_run_order(run_id, event_id)`。
@@ -208,10 +208,10 @@ running → cancelling → cancelled
 
 ## 11. 配置加载
 
-`.env` 由相关模块在**导入时**加载（`load_dotenv(...)`）：
+`backend/.env` 由相关模块在**导入时**加载（`load_dotenv(...)`）：
 
-- `dsagents/runtime/agent.py`（MiniMax 模型：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`）。
-- `dsagents/integrations/mineru.py`（MinerU：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT`〔可留空〕/ `MINERU_TIMEOUT_SECONDS`）。
+- `runtime/agent.py`（MiniMax 模型：`MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`）。
+- `integrations/mineru.py`（MinerU：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT`〔可留空〕/ `MINERU_TIMEOUT_SECONDS`）。
 
 `generate_philips_wgq_import` 另从已加载环境读取可选的 `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`。Oracle thick mode 缺 `ORACLE_CLIENT_LIB_DIR` 时优雅降级为人工校验（详见 CONCERNS.md §8）。
 

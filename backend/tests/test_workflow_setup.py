@@ -9,19 +9,19 @@ from deepagents.middleware.filesystem import FilesystemPermission
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage
 
-from dsagents.runtime.agent import (
+from runtime.agent import (
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
     workflow_subagents,
 )
-from dsagents.runtime.execution import _update_events
-from dsagents.runtime.resources import AgentResources, ResourceConfig
+from runtime.execution import _update_events
+from runtime.resources import AgentResources, ResourceConfig
 
 
 def run() -> None:
-    skills_root = Path(__file__).resolve().parents[1] / "dsagents" / "skills"
+    skills_root = Path(__file__).resolve().parents[1] / "skills"
     philips = (skills_root / "philipswgqimport" / "SKILL.md").read_text(encoding="utf-8")
     tecan = (skills_root / "tecanimport" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
@@ -51,7 +51,7 @@ def run() -> None:
 
     sentinel = object()
     resources = SimpleNamespace(backend=object(), checkpointer=object(), store=object())
-    with patch("dsagents.runtime.agent.create_deep_agent", return_value=sentinel) as create:
+    with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         assert DeepAgentsBrainFactory(model="anthropic:test").create(
             resources=resources,
             middleware=[],

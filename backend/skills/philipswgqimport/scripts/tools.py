@@ -17,12 +17,12 @@ from typing import Any, Mapping, Sequence
 
 from openpyxl import load_workbook
 
-from dsagents.integrations.artifacts import (
+from integrations.artifacts import (
     read_json_artifact,
     resolve_artifact_path,
     write_json_artifact,
 )
-from dsagents.skills.philipswgqimport.scripts import documents as docs
+from skills.philipswgqimport.scripts import documents as docs
 
 
 WORKFLOW = "philips-wgq-import"

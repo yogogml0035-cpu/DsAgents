@@ -16,9 +16,9 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from dsagents.integrations.artifacts import clean_filename, make_timestamped_name
-from dsagents.runtime.execution import HarnessRuntime, create_harness
-from dsagents.runtime.resources import AgentResources, ResourceConfig
+from integrations.artifacts import clean_filename, make_timestamped_name
+from runtime.execution import HarnessRuntime, create_harness
+from runtime.resources import AgentResources, ResourceConfig
 
 
 INTERRUPTED_RUN_ERROR = "执行已中断，请重试"

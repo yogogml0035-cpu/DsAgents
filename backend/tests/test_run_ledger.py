@@ -4,9 +4,9 @@ import re
 import tempfile
 from pathlib import Path
 
-from dsagents.api import INTERRUPTED_RUN_ERROR
-from dsagents.runtime.resources import AgentResources, ResourceConfig
-from dsagents.runtime.runs import SqliteRunLedger
+from api import INTERRUPTED_RUN_ERROR
+from runtime.resources import AgentResources, ResourceConfig
+from runtime.runs import SqliteRunLedger
 from tests.test_support import messages_json, text_block, user_message
 
 

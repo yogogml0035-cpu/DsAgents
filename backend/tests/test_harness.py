@@ -9,19 +9,20 @@ from unittest.mock import patch
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from dsagents.runtime.agent import (
+from runtime.agent import (
+    BACKEND_ENV_PATH,
     DeepAgentsBrainFactory,
     ToolTelemetry,
 )
-from dsagents.runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
-from dsagents.runtime.observability import (
+from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from runtime.observability import (
     assistant_message_payload,
     is_subagent_message,
     model_usage,
     thinking_delta,
 )
-from dsagents.runtime.resources import AgentResources, ResourceConfig
-from dsagents.runtime.tools import ToolCatalog
+from runtime.resources import AgentResources, ResourceConfig
+from runtime.tools import ToolCatalog
 from tests.test_support import (
     FakeBrainFactory,
     artifact_block,
@@ -32,6 +33,7 @@ from tests.test_support import (
 
 
 def run() -> None:
+    assert BACKEND_ENV_PATH == Path(__file__).resolve().parents[1] / ".env"
     assert is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
     assert not is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
     assert thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
@@ -83,7 +85,7 @@ def _check_tool_telemetry_middleware() -> None:
         tool_call={"name": "demo", "args": {"value": 1}},
         runtime=SimpleNamespace(config={"metadata": {"langgraph_node": "agent"}}),
     )
-    with patch("dsagents.runtime.agent.get_stream_writer", return_value=emitted.append):
+    with patch("runtime.agent.get_stream_writer", return_value=emitted.append):
         result = middleware.wrap_tool_call(request, lambda _request: {"ok": True})
     assert result == {"ok": True}
     statuses = [event["status"] for event in emitted]
@@ -95,7 +97,7 @@ def _check_tool_telemetry_middleware() -> None:
     assert "result" in emitted[1]
 
     emitted = []
-    with patch("dsagents.runtime.agent.get_stream_writer", return_value=emitted.append):
+    with patch("runtime.agent.get_stream_writer", return_value=emitted.append):
         try:
             middleware.wrap_tool_call(
                 SimpleNamespace(

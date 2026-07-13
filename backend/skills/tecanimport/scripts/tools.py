@@ -19,12 +19,12 @@ from zipfile import BadZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
-from dsagents.integrations.artifacts import (
+from integrations.artifacts import (
     read_json_artifact,
     resolve_artifact_path,
     write_json_artifact,
 )
-from dsagents.skills.tecanimport.scripts import documents as docs
+from skills.tecanimport.scripts import documents as docs
 
 
 WORKFLOW = "tecan-import"

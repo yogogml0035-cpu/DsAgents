@@ -8,7 +8,7 @@
 |----------|------|
 | **改 backend 代码（业务/存储/runner）** | `backend/.planning/codebase/ARCHITECTURE.md`、`STRUCTURE.md`；改持久化回看 `docs/conventions.md` 的 run-first 原则 |
 | **改文档解析工具 / DeepAgents Brain** | `backend/.planning/codebase/INTEGRATIONS.md`、`STACK.md`；provider 边界见 `INTERFACES.md` §6 |
-| **改 Philips/Tecan Skill 或 Excel** | 对应 `backend/dsagents/skills/*/SKILL.md` 与 `references/`、对应 `scripts/tools.py` / `scripts/documents.py`、`backend/.planning/codebase/INTEGRATIONS.md` §7、对应业务测试 |
+| **改 Philips/Tecan Skill 或 Excel** | 对应 `backend/skills/*/SKILL.md` 与 `references/`、对应 `scripts/tools.py` / `scripts/documents.py`、`backend/.planning/codebase/INTEGRATIONS.md` §7、对应业务测试 |
 | **改集成 / Provider** | `INTERFACES.md`、`backend/.planning/codebase/INTEGRATIONS.md`；未证实关系见 `INTERFACES.md` §7 |
 | **加新子项目（如 frontend）** | `docs/conventions.md`（核心原则）、`ARCHITECTURE.md` §1、`coding_maps/SYSTEM_MAP.md` §4/§6 |
 

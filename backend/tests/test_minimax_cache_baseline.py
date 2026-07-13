@@ -14,7 +14,7 @@ Run it explicitly, pointing at a live server with real MINIMAX_* env set:
 
     cd backend
     # terminal 1: start the real server
-    uvicorn dsagents.api:app --port 8000
+    uv run uvicorn api:app --host 0.0.0.0 --port 8500
     # terminal 2:
     python -m tests.test_minimax_cache_baseline
 
@@ -29,40 +29,43 @@ import time
 import urllib.error
 import urllib.request
 
-BASE_URL = os.getenv("DSAGENTS_BASE_URL", "http://127.0.0.1:8000")
+BASE_URL = os.getenv("DSAGENTS_BASE_URL", "http://127.0.0.1:8500")
 # >=512 tokens of stable prefix, repeated so the provider has enough cacheable
 # content. Kept identical across both turns so the prefix is byte-stable.
 STABLE_PREFIX = (
-    "You are auditing document extraction quality. " * 40
+    "你好，从现在起你是东松公司的小助手"
 )
 TIMEOUT_SECONDS = 120
 
 
 def run() -> None:
-    session = _post_runs_start_session()
-    turn1 = _run_turn(session, "Turn 1: summarize the stable context in one short sentence.")
-    turn2 = _run_turn(session, "Turn 2: now name one risk in that context in one short sentence.")
+    session, turn1 = _run_first_turn()
+    turn2 = _run_turn(session, "Turn 2: 你是谁")
     _report(session, turn1, turn2)
 
 
-def _post_runs_start_session() -> str:
-    # The first POST just establishes a session_id we reuse for both turns.
-    body = _json_body([_user(STABLE_PREFIX + "\n\nBegin.")])
+def _run_first_turn() -> tuple[str, dict]:
+    prompt = "Turn 1: " + STABLE_PREFIX
+    body = _json_body([_user(prompt)])
     payload = _post_json(f"{BASE_URL}/runs", body)
-    return payload["session_id"]
+    return payload["session_id"], _finish_turn(payload["run_id"], prompt)
 
 
 def _run_turn(session_id: str, prompt: str) -> dict:
     body = _json_body([_user(prompt)])
     body["session_id"] = session_id
     started = _post_json(f"{BASE_URL}/runs", body)
-    run_id = started["run_id"]
+    return _finish_turn(started["run_id"], prompt)
+
+
+def _finish_turn(run_id: str, prompt: str) -> dict:
     payload = _poll(run_id)
+    reply = payload["run"].get("reply") or ""
     usage = payload.get("usage")
     if usage is None:
         print(f"[{prompt[:40]}...] run {run_id} returned no usage", file=sys.stderr)
-        return {"run_id": run_id, "usage": None}
-    return {"run_id": run_id, "usage": usage}
+        return {"run_id": run_id, "prompt": prompt, "usage": None, "reply": reply}
+    return {"run_id": run_id, "prompt": prompt, "usage": usage, "reply": reply}
 
 
 def _poll(run_id: str, deadline_s: float = 300.0) -> dict:
@@ -79,6 +82,8 @@ def _poll(run_id: str, deadline_s: float = 300.0) -> dict:
 def _report(session: str, turn1: dict, turn2: dict) -> None:
     print(f"session: {session}")
     for label, turn in (("turn 1", turn1), ("turn 2", turn2)):
+        print(f"{label} user:\n{turn['prompt']}")
+        print(f"{label} assistant:\n{turn['reply'] or '<empty>'}")
         usage = turn.get("usage")
         if not usage:
             print(f"{label}: no usage recorded")
@@ -143,19 +148,13 @@ def _from_json(text: str) -> dict:
 
 
 if __name__ == "__main__":
-    if not os.getenv("MINIMAX_API_KEY"):
-        # Guard against an accidental run against a server with no real key;
-        # the server itself reads MINIMAX_*, so an empty key here usually means
-        # the operator forgot to source the real env before starting it.
-        print(
-            "MINIMAX_API_KEY is not set in this shell. Confirm the live server "
-            "was started with real MINIMAX_* env before proceeding.",
-            file=sys.stderr,
-        )
     try:
         run()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        sys.exit(f"HTTP {exc.code} from {exc.url}: {detail}")
     except (urllib.error.URLError, ConnectionError) as exc:
         sys.exit(
             f"Could not reach {BASE_URL} — start the real server first "
-            f"(e.g. `uvicorn dsagents.api:app --port 8000`). Underlying error: {exc}"
+            f"(e.g. `uv run uvicorn api:app --host 0.0.0.0 --port 8500`). Underlying error: {exc}"
         )
