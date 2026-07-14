@@ -1,12 +1,12 @@
 ---
 last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
-analysis_date: 2026-07-14
+analysis_date: 2026-07-15
 scope: backend/
 ---
 
 # Codebase Concerns
 
-**Analysis Date:** 2026-07-14
+**Analysis Date:** 2026-07-15
 
 > backend 技术债、风险与脆弱点。每条均带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对工作树：`api.py`、`runtime/`、`integrations/`、两个内置 Skill、`tests/`、`pyproject.toml`。不读取 `.env`，不记录任何密钥或连接串值。
 
@@ -95,19 +95,13 @@ scope: backend/
 - **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测。
 - **修复方向**：所有 middleware 变更只改 `runtime_middlewares()`；`tests/test_workflow_setup.py` 继续断言每个 SubAgent 自装 middleware。
 
-### 7. Oracle thick client 初始化失败被宽捕（已确认）
+### 7. Oracle 初始化与整批查询异常合并为一个问题（已确认）
 
-- **问题**：`skills/philipswgqimport/scripts/tools.py` 中 `_init_oracle_client` 在 `lib_dir` 有效时调用 `oracledb.init_oracle_client`；失败由 `_oracle_units` 的 `except Exception` 吞掉，返回「Oracle 查询失败」人工校验项。
-- **影响**：配置错误时业务不崩溃，但核注清单单位字段降级为「需确认…」，易被当成「正常但需人工」而非「部署错误」。
-- **修复方向**：区分「配置缺失 / client 初始化失败 / 查询未命中」三类 `manual_checks` reason，便于运维告警。
+- **问题**：`skills/philipswgqinboundrecognition/scripts/tools.py` 的 `_oracle_data` 用一个宽 `except Exception` 包住 client 初始化、连接与全部 12NC 查询；任一步失败都返回单条「Oracle 查询失败」problem。配置缺失与逐料号未命中能单独区分。
+- **影响**：业务可保留 PDF/Tracking 数据并形成 `partial_success`，但调用方不能仅凭 problem 区分 Instant Client、网络、SQL 或某个料号查询导致的整批失败。
+- **修复方向**：如运维确需定位，再把初始化/连接与逐料号查询分开记录；保持不抛弃已有识别结果，不新增重试框架。
 
-### 8. Excel 公式翻译吞异常（已确认）
-
-- **问题**：`skills/philipswgqimport/scripts/documents.py` `copy_sheet_row` 对 `Translator(...).translate_formula` 使用 `except Exception: pass`，失败时保留原公式字符串。
-- **影响**：复制行后公式可能指向错误单元格，工作簿表面「有公式」但计算结果错。
-- **修复方向**：失败时记录/返回人工校验项，或写死值而非静默保留坏公式。
-
-### 9. cancel 与 execute_run 启动竞态（需确认）
+### 8. cancel 与 execute_run 启动竞态（需确认）
 
 - **问题**：`cancel_run` 先投影 `cancelling`，再 `request_cancel`；若返回 `False`（尚无 `RunControl`）则直接 `cancelled`。同时 `_run_background` 可能刚进入 `execute_run` 注册 control。
 - **影响**：极端时序下可能出现「已 cancelled 投影」与随后 `running`/`succeeded` 事件交错（取决于 ledger 写顺序与线程调度）。
@@ -187,13 +181,14 @@ scope: backend/
 
 ### 1. Oracle thick mode 外部 Instant Client（已确认）
 
-- **问题**：Philips Skill `_oracle_units` 依赖 `ORACLE_CLIENT_LIB_DIR` 指向本机 Instant Client；client **不在仓库**。键：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`（默认 30）。
+- **问题**：Philips Skill `_oracle_data` 可按 `ORACLE_CLIENT_LIB_DIR` 初始化本机 Instant Client；client **不在仓库**。键：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`（默认 30）。
 - **行为**：
-  - 三凭证不齐 → 跳过查询，`manual_checks` 含「Oracle 配置缺失」。
-  - client 初始化或查询异常 → 「Oracle 查询失败」，单元格写「需确认…」类 fallback。
+  - 三凭证不齐 → 跳过查询，`problems` 含「Oracle 配置缺失」。
+  - client 初始化或查询异常 → `problems` 含「Oracle 查询失败」。
+  - 单个 12NC 无记录 → 对应「Oracle 未命中」problem；所有稳定字段仍保持已有值或 `null`。
   - Tecan Skill **不**消费 Oracle。
-- **影响**：生产缺 Instant Client 时流程不崩，但法定单位字段质量下降。
-- **修复方向**：部署清单强制校验 client 目录与连通性探针；失败 reason 可观测。
+- **影响**：生产 Oracle 不可用时 run 不崩，但中文品名、规格型号、原产国、海关编码与计量单位等缺失字段无法补齐，结果为 `partial_success`。
+- **修复方向**：需要 thick mode 的部署清单校验 client 目录与连通性；用结果 `problems` 观测降级。
 
 ### 2. MinerU 必需环境变量 fail-fast（已确认）
 
@@ -215,7 +210,7 @@ scope: backend/
 
 ### 5. 取消与中断后的孤儿文件（已确认）
 
-- **问题**：cancel / fail 不删除已生成 downloads；MinerU 部分产物与业务 Excel 可能残留。
+- **问题**：cancel / fail 不删除已生成 downloads；MinerU 部分产物与 Tecan 业务 Excel 可能残留。
 - **影响**：磁盘泄漏与「幽灵」文件被后续 run 误引用（若调用方仍持有旧路径）。
 - **修复方向**：按 run_id 前缀命名或 registry；定期 GC 无引用文件。
 
@@ -241,11 +236,11 @@ scope: backend/
 - **影响**：§Performance 与 §单飞锁问题只能在部署暴露。
 - **修复方向**：可选压测脚本：同 session 冲突、跨 session 并行 emit、busy timeout。
 
-### 4. Oracle 与 thick client 仅 fallback 断言（已确认）
+### 4. Oracle 普通回归仅使用替身（已确认）
 
-- **问题**：`tests/test_philips_wgq_import.py` 在无 Oracle 配置时断言 `manual_checks` 含 `oracle_units`；无真实 DB 连通测试。
-- **影响**：SQL / Instant Client / 超时路径在 CI 不可见。
-- **修复方向**：可选标记的真实 Oracle 集成测试，与普通回归隔离。
+- **问题**：`tests/test_philips_wgq_inbound_recognition.py` 用 `_FakeConnection` 覆盖命中、配置缺失、查询失败和未命中；普通回归无真实 DB 连通测试。真实 HTTP 验收会经过部署环境，但不隔离验证每个 Oracle 字段来源。
+- **影响**：SQL、Instant Client 与真实超时行为不在默认门禁内。
+- **修复方向**：如需要发布前 Oracle 探针，保持为 opt-in 真实集成，与普通回归隔离。
 
 ### 5. MiniMax cache 字段端到端需人工（需确认）
 
@@ -260,8 +255,8 @@ scope: backend/
 | MiniMax via Anthropic 兼容客户端 | `runtime/agent.py` `init_chat_model("anthropic:...")` | 协议/thinking/cache 变更 | 无本地降级；run `failed` |
 | deepagents / langgraph / langchain | `pyproject.toml` `>=` + `uv.lock` | stream 形状、SubAgent、RunControl | 锁文件 + FakeBrain 回归 |
 | MinerU HTTP | `integrations/mineru.py` `requests` | 服务不可用/超时/状态枚举变化 | 工具失败 → 可能整 run failed |
-| Oracle + Instant Client | `skills/philipswgqimport/scripts/tools.py` | thick client 缺失、网络、SQL | 优雅降级为「需确认」单位 |
-| openpyxl | Skill `documents.py` | 模板变更、公式翻译 | 复制公式异常被吞（见上） |
+| Oracle + Instant Client | `skills/philipswgqinboundrecognition/scripts/tools.py` | thick client 缺失、网络、SQL | 写入 `problems`，保留 PDF/Tracking 数据 |
+| openpyxl | Philips `scripts/tools.py`、Tecan `documents.py` | Tracking 表头/sheet 或模板变化 | Philips 返回 problem；Tecan 由业务回归锁关键单元格 |
 | SQLite 三库 | `runtime/resources.py` / `runs.py` | 锁、磁盘、无迁移 | checkpoints/store 由 LangGraph 管理 |
 | FastAPI / uvicorn / python-multipart | `api.py` | 上传无限制、无鉴权 | 依赖部署面防护 |
 
@@ -281,7 +276,7 @@ scope: backend/
 
 ### 3. middleware 与 SubAgent 装配
 
-- 只通过 `runtime_middlewares()` 增删 middleware，并保证 `workflow_subagents()` 每个 extractor 自装。
+- 只通过 `runtime_middlewares()` 增删 middleware，并保证 `workflow_subagents()` 的两个 Tecan extractor 各自装配；Philips workflow 必须保持无 SubAgent。
 - `register_harness_profile("anthropic", ...)` 为进程级全局副作用；测试或二次 import 需注意。
 - 触达：`runtime/agent.py`、`tests/test_workflow_setup.py`。
 
@@ -293,9 +288,9 @@ scope: backend/
 
 ### 5. Skill 业务工具契约
 
-- 每 Skill 2 工具：`save_*_extraction` + `generate_*_import`；`input_problems` 形状被业务测试锁定。
-- Philips Oracle 与三 Excel 模板路径在 `skills/philipswgqimport/`；Tecan join 逻辑在 `skills/tecanimport/`。
-- 改字段/模板必须同步 `references/`、assets 与对应 `test_*_import.py`。
+- Philips 只使用 `lookup_philips_wgq_master_data`，最终合同是 `PhilipsWgqRecognitionResult`；结构化响应缺失/非法令 run `failed`，业务 `input_problems` 仍令 run `succeeded`。
+- Philips schema/Tracking/Oracle 位于 `skills/philipswgqinboundrecognition/`；Tecan 继续使用 `save_tecan_extraction` + `generate_tecan_import`，join 与模板逻辑在 `skills/tecanimport/`。
+- 改 Philips 字段或主数据规则必须同步 `SKILL.md`、schema、业务测试和真实验收；改 Tecan 字段/模板同步 references、assets 与 `test_tecan_import.py`。
 
 ### 6. 依赖升级清单
 
@@ -313,4 +308,4 @@ scope: backend/
 
 ---
 
-*Concerns analysis: 2026-07-14*
+*Concerns analysis: 2026-07-15*

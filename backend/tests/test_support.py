@@ -9,6 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
+from skills.philipswgqinboundrecognition import WORKFLOW
+
 
 class StreamControl:
     def __init__(self) -> None:
@@ -27,10 +29,12 @@ class FakeBrain:
         threads: dict[str, list[str]],
         received_payloads: list[list[dict[str, Any]]],
         control: StreamControl | None = None,
+        workflow: str | None = None,
     ) -> None:
         self.threads = threads
         self.received_payloads = received_payloads
         self.control = control
+        self.workflow = workflow
 
     def stream(self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: object):
         assert isinstance(payload["messages"], list)
@@ -73,7 +77,7 @@ class FakeBrain:
                         "input_token_details": {"cache_read": 50, "cache_creation": 10},
                     },
                 ),
-                {"langgraph_node": "model", "lc_agent_name": "philips-wgq-extractor-a"},
+                {"langgraph_node": "model", "lc_agent_name": "tecan-extractor-a"},
             ),
         }
         if text == "fail":
@@ -102,6 +106,12 @@ class FakeBrain:
                 }
             },
         }
+        if self.workflow == WORKFLOW and "missing structured" not in text:
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {"agent": {"structured_response": _recognition_result(text)}},
+            }
         # 5. custom chunk: parse_documents progress -> tool_progress
         yield {"type": "custom", "ns": (), "data": {"name": "parse_documents", "status": "started"}}
         # 6. update chunk carrying the tool result (ToolMessage, role=tool -> not mapped)
@@ -169,9 +179,13 @@ class FakeBrainFactory:
         self.control = control
         self.threads: dict[str, list[str]] = {}
         self.received_payloads: list[list[dict[str, Any]]] = []
+        self.created_workflows: list[str | None] = []
 
-    def create(self, **_: object) -> FakeBrain:
-        return FakeBrain(self.threads, self.received_payloads, self.control)
+    def create(self, **kwargs: object) -> FakeBrain:
+        workflow = kwargs.get("workflow")
+        assert workflow is None or isinstance(workflow, str)
+        self.created_workflows.append(workflow)
+        return FakeBrain(self.threads, self.received_payloads, self.control, workflow)
 
 
 def text_block(text: str) -> dict[str, str]:
@@ -204,3 +218,69 @@ def wait_for_run(client: TestClient, run_id: str, expected_status: str) -> dict[
 
 def _message_text(content: list[dict[str, str]]) -> str:
     return "".join(block["text"] for block in content if block["type"] == "text")
+
+
+def _recognition_result(text: str) -> dict[str, Any]:
+    if "input problems" in text:
+        return {
+            "outcome": "input_problems",
+            "data": None,
+            "problems": [
+                {
+                    "source": "batch",
+                    "location": "shipment",
+                    "issue": "检测到多个真实票次",
+                    "action": "拆分批次后重试",
+                }
+            ],
+        }
+    return {
+        "outcome": "success",
+        "data": {
+            "shipment": {"件数": "2", "总毛重": "18.5"},
+            "header": {
+                "OM": None,
+                "DN": "DN123",
+                "PO": "PO123",
+                "SO": "SO123",
+                "原运单号": "9198153694",
+                "买方": None,
+                "卖方": None,
+                "发货人": "shipper",
+                "收货人": "consignee",
+                "付款方式": None,
+                "合同号": None,
+                "业务员": None,
+                "发票号": "INV123",
+                "ETD": "2026-05-25",
+                "启运港": None,
+                "到货港": None,
+            },
+            "items": [
+                {
+                    "SO_ITEM": "10",
+                    "12NC": "989000085103",
+                    "新旧": None,
+                    "中文品名": "医疗设备部件",
+                    "规格型号": None,
+                    "库存数量": "2",
+                    "单位": "个",
+                    "币种": "USD",
+                    "单价": "10.00",
+                    "总价": "20.00",
+                    "原产国": "美国",
+                    "海关编码": "9018909090",
+                    "申报要素": None,
+                    "法一数量": None,
+                    "法一单位": "个",
+                    "法二数量": None,
+                    "法二单位": None,
+                    "毛重": None,
+                    "净重": None,
+                    "BU": "CT",
+                    "售前/售后": None,
+                }
+            ],
+        },
+        "problems": [],
+    }

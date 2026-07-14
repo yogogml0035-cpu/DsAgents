@@ -6,9 +6,9 @@
 
 - 对话短期上下文：LangGraph `checkpointer` + `thread_id=session_id`
 - 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建；新 schema 使用 UTC ISO-8601 毫秒时间；三库互不共享连接
-- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`；启动 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`；无 SSE、无鉴权/CORS
-- 事件：7 类规范化事件；`GET /runs/{run_id}` 返回快照、增量 events、`latest_content_event` 与 `usage`
-- 业务能力：Philips 外高桥与 Tecan 进口 Skills；每个 Skill 仅暴露 `save_*_extraction` + `generate_*_import` 两个 Tool，业务问题统一 `input_problems`
+- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`；`POST /runs` 可选固定 Philips workflow；无 SSE、无鉴权/CORS
+- 事件：固定 7 类；GET 返回快照、顶层 `workflow`/`result`、增量 events、`latest_content_event` 与 `usage`
+- 业务能力：Philips 外高桥用 `philips_wgq_inbound_recognition` + 单一主数据 Tool 返回结构化 JSON；Tecan 保留 2 Tool 与 A/B extractor/Excel
 - 源码布局：`api.py` + `runtime/` + `integrations/` + `skills/`（发行名 `dsagents`）
 
 ## 技术栈指针
@@ -18,7 +18,8 @@
 ## 源码阅读入口
 
 - 运行时主链：`backend/runtime/execution.py`（`HarnessRuntime.execute_run`）、`backend/runtime/agent.py`（Brain/SubAgent/middleware）
-- 业务 Skill/规则：`backend/skills/philipswgqimport/`、`backend/skills/tecanimport/`（各含 `SKILL.md` + `scripts/{tools.py,documents.py}` + `references/` + `assets/`）
+- Philips 识别：`backend/skills/philipswgqinboundrecognition/`（`SKILL.md` + `schema.py` + `scripts/tools.py`）及 [`philips-wgq-inbound-recognition-prd.md`](philips-wgq-inbound-recognition-prd.md)
+- Tecan：`backend/skills/tecanimport/`（`SKILL.md` + `scripts/{tools.py,documents.py}` + `references/` + `assets/`）
 - artifact 基础设施：`backend/integrations/artifacts.py` — 文件名清洗、artifact 虚拟路径与物理路径互转、原子落盘
 - MinerU 集成：`backend/integrations/mineru.py` — `parse_documents` / `extract_archives`
 - Run 持久化：`backend/runtime/runs.py`

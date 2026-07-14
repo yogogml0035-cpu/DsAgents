@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Coding Conventions
 
-**Analysis Date:** 2026-07-14
+**Analysis Date:** 2026-07-15
 
 ## Naming Patterns
 
@@ -13,8 +13,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`MINERU_POLL_INTERVAL_SECONDS`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`）。
 - **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_required_env`）。测试内部检查函数同惯例：`_check_*`。
 - **类型别名**：`ToolHandler = Callable[..., Any]`（`runtime/tools.py`）；协议名用名词：`Brain`、`BrainFactory`。
-- **Skill / 包标识符**：Skill 目录名 = Python 包名，无连字符（`philipswgqimport`、`tecanimport`）。SubAgent 显示名用连字符（`philips-wgq-extractor-a`、`tecan-extractor-b`）。
-- **业务工具函数名**：`save_*_extraction` + `generate_*_import`（如 `save_philips_wgq_extraction`、`generate_tecan_import`）。
+- **Skill / 包标识符**：Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；`SKILL.md` frontmatter 名可使用连字符（`philips-wgq-inbound-recognition`）。声明式 SubAgent 显示名用连字符（当前仅 `tecan-extractor-a/b`）。
+- **业务工具函数名**：按实际职责命名。Philips 使用单一查询工具 `lookup_philips_wgq_master_data`；Tecan 保留 `save_tecan_extraction` + `generate_tecan_import`。
 - **HTTP / 事件字段**：请求与事件 payload 用 `snake_case` JSON 键（`session_id`、`run_id`、`after_event_id`、`input_tokens`、`cache_read_input_tokens`）。
 - **run 状态字面量**：`queued` / `running` / `succeeded` / `failed` / `cancelling` / `cancelled`（集合 `RUN_STATUSES` 于 `runtime/runs.py`）。
 - **事件类型字面量**（固定 7 种）：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
@@ -37,7 +37,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - **继承边界**：仅在外部框架要求时继承——`ToolTelemetry(AgentMiddleware)`、`NoProgressMiddleware(AgentMiddleware)`、`RunRequest(BaseModel)` 等。不为单实现业务工具发明 ABC。
 - **依赖注入优于硬编码**：`HarnessRuntime` 构造接收 `resources`、`tools: ToolCatalog`、`brain_factory: BrainFactory`；`create_app` 接收可选 `resource_config` 与 `harness_factory`，便于测试注入 `FakeBrainFactory`。
 - **运行时保持薄**：`HarnessRuntime.execute_run` 只做「规范化 messages → 调 Brain stream → 解析 chunk → 写 run event」。业务规则下沉到 `skills/*/scripts/`，不在 runtime 内建工作流引擎。
-- **工具静态注册**：`default_tool_catalog()` 在 `runtime/tools.py` 用静态 import 注册 6 个 callable；新增 Skill 时追加 import + 注册行，不自动扫描、不插件化。
+- **工具静态注册**：`default_tool_catalog()` 在 `runtime/tools.py` 用静态 import 注册 5 个 callable；新增 Skill 时追加 import + 注册行，不自动扫描、不插件化。
 - **配置键只读 env 名**：代码从 `MINIMAX_*` / `MINERU_*` / `ORACLE_*` 读环境变量；文档与约定只记键名，不写入本地 `.env` 值。
 - **版本锁定**：以 `uv.lock` 与 `pyproject.toml` 下限为准（如 `deepagents>=0.6.12`）；不写面向未来 deepagents 版本的参数 shim。
 - **注释语言**：模块 docstring 与关键业务注释可用简体中文；标识符、API、路径保持英文/原文。
@@ -48,15 +48,15 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
   - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）
   - `runtime/` — 运行时：`agent.py`（Brain/middleware/SubAgent）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）
   - `integrations/` — 外部集成：`artifacts.py`（路径/JSON）、`mineru.py`（解析与解压）
-  - `skills/` — 内置 Skill 包：`philipswgqimport/`、`tecanimport/`（各含 `SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
-- **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Skill 的 `SKILL.md` / `references/*.md` / `assets/*` 经 `package-data` 打进 wheel。
+  - `skills/` — 内置 Skill 包：`philipswgqinboundrecognition/`（`SKILL.md`、`schema.py`、`scripts/tools.py`）与 `tecanimport/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
+- **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Philips 打包 `SKILL.md`，Tecan 另打包 `references/*.md` / `assets/*`。
 - **导入一律绝对顶层**，无 `backend.` 前缀：
 
   ```python
   from runtime.execution import create_harness
   from runtime.runs import SqliteRunLedger
   from integrations.artifacts import resolve_artifact_path
-  from skills.philipswgqimport.scripts.tools import generate_philips_wgq_import
+  from skills.philipswgqinboundrecognition.scripts.tools import lookup_philips_wgq_master_data
   ```
 
   前提：`cd backend` 或安装后包在 `sys.path`。**没有** `python -m backend.*`。
@@ -75,8 +75,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
   - `SqliteRunLedger.emit_run_status`：非法 status → `ValueError`。
   - 未知 run → `KeyError`（HTTP 层转 `404 {"error":"Unknown run: ..."}`）。
 - **业务问题 vs 异常**：
-  - 工具入参/契约错误（缺文件、非法 extractor 等）→ `raise ValueError`（可导致 run `failed`）。
-  - 可恢复的业务校验（A/B 冲突、缺 C、字段缺失等）→ **不抛异常**，返回：
+  - 工具入参/契约错误（缺文件、非法 extractor、Philips 缺少/非法 `structured_response` 等）→ `raise ValueError` / Pydantic `ValidationError`（可导致 run `failed`）。
+  - Tecan 可恢复的业务校验（A/B 冲突、缺 C、字段缺失等）→ **不抛异常**，返回：
 
     ```python
     {"code": "input_problems", "problems": [{"source", "location", "issue", "action"}]}
@@ -87,11 +87,12 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
     ```python
     {"status": "generated", "canonical_artifact", "artifacts", "manual_checks"}
     ```
-- **Oracle 例外**：Philips 申报单位查询失败或 thick client 缺失时降级为人工校验文案（单元格 `"需确认：申报计量单位"`），继续生成，不让整个 run 因 Oracle 挂掉。
+  - Philips 业务完整度由验证后的 `result.outcome` 表示：`success` / `partial_success` / `input_problems`；其中 `input_problems` 要求 `data=null` 且 run 仍为 `succeeded`。
+- **Oracle 例外**：Philips 主数据工具遇到配置缺失、查询失败或未命中时把原因写入 `problems`，保留 PDF/Tracking 结果；不写“需确认”等占位值。
 - **HTTP 状态约定**：
   - 同 `session_id` 并发冲突 → `409`（`{"error":"该会话正在运行","active_run_id":...}`）
   - cancel 未知 run → `404`；已终态 → `409`；已 `cancelling`/`cancelled` → `200` 幂等；活跃 drain → `202`
-  - pydantic 校验失败 → FastAPI `422`（`extra="forbid"` 拒绝旧字段如单数 `message`）
+  - pydantic 校验失败 → FastAPI `422`（`extra="forbid"` 拒绝旧字段如单数 `message`；未知 `workflow` 或 Philips workflow 复用非空 `session_id` 同样 `422`）
 - **启动恢复**：lifespan 内 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)`，文案 `"执行已中断，请重试"`，把遗留 `queued`/`running`/`cancelling` 标为 `failed`。
 - **部分失败不抛**：MinerU 多文件解析时单文件失败进入 `failed[]`，整体仍返回结果；全无效输入也不抛，返回空 `succeeded`。
 
@@ -104,19 +105,19 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
       def stream(self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any) -> Iterator[dict[str, Any] | Any]: ...
 
   class BrainFactory(Protocol):
-      def create(self, *, resources: Any, middleware: Sequence[AgentMiddleware], tools: Sequence[Any]) -> Brain: ...
+      def create(self, *, resources: Any, middleware: Sequence[AgentMiddleware], tools: Sequence[Any], workflow: str | None = None) -> Brain: ...
   ```
 
   默认实现：`DeepAgentsBrainFactory`；测试实现：`FakeBrain` / `FakeBrainFactory`（`tests/test_support.py`）。**不为工具、ledger、资源再加 Protocol/ABC**。
 - **工具**：普通 callable + 冻结 `ToolCatalog(handlers: tuple[ToolHandler, ...])`，经 `.as_list()` 交给 Brain。
 - **资源与 ledger**：具体类 `AgentResources`、`ResourceConfig`、`SqliteRunLedger`；上下文管理器用 `ExitStack` 管理 store/checkpointer。
-- **声明式 SubAgent**：`workflow_subagents()` 返回 `list[SubAgent]`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）。
-- **结构化输出**：`ToolStrategy(ExtractionReference, ...)` + pydantic `ExtractionReference(extractor, artifact_path)`。
+- **声明式 SubAgent**：`workflow_subagents()` 返回两个 Tecan `SubAgent`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）；Philips workflow 显式使用空 `subagents`。
+- **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
 - **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
 - **Brain stream 契约**（`runtime/execution.py`）：
 
   ```python
-  brain.stream(
+    brain.stream(
       {"messages": normalized_messages},
       config={"configurable": {"thread_id": session_id}},
       stream_mode=["messages", "custom", "updates"],
@@ -126,7 +127,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
   )
   ```
 
-  `artifact` block 进入 Brain 前归一为文本提示 `ARTIFACT_REFERENCE_HINT`；payload **只**含当前请求 `messages[]`。
+  `artifact` block 进入 Brain 前归一为文本提示 `ARTIFACT_REFERENCE_HINT`；payload **只**含当前请求 `messages[]`。`BrainFactory.create(..., workflow=workflow)` 明确接收可选 workflow；当前固定值仅 `philips_wgq_inbound_recognition`。
 - **可观察 payload 形状**（`runtime/observability.py`）：`model_usage` 固定键 `model`（常量 `MAIN_AGENT_MODEL = "MiniMax-M3"`）、`scope`、`agent_name`、四类 token 计数；`assistant_message` 可含 `thinking` + `text`。
 
 ## Logging / Observability conventions
@@ -159,4 +160,4 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - **禁止模式**：不从 `backend.xxx` 导入；不在约定层依赖相对跨包 `from ...` 穿透 Skill 边界以外的随意路径；工具目录不动态 `importlib` 扫描。
 
 ---
-*Conventions analysis: 2026-07-14*
+*Conventions analysis: 2026-07-15*

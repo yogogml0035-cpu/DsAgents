@@ -18,13 +18,13 @@ python -m tests.test_run_ledger
 python -m tests.test_harness
 python -m tests.test_api
 python -m tests.test_workflow_setup
-python -m tests.test_philips_wgq_import
+python -m tests.test_philips_wgq_inbound_recognition
 python -m tests.test_tecan_import
 ```
 
 backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚本方式运行（**非 pytest**）。必须使用 `python -m tests.<name>`，不要直接 `python tests/test_xxx.py`（绝对顶层导入会失败）。
 
-业务工作流改动至少覆盖 `test_workflow_setup`、`test_philips_wgq_import`、`test_tecan_import`，并复跑 `test_tools`、`test_harness`、`test_api`。
+业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机与 usage 聚合的本地 assert 脚本。
 
@@ -42,6 +42,14 @@ python -m tests.test_real_image_run
 ```powershell
 $env:DSAGENTS_RUN_REAL_MULTI_PDF_TEST="1"
 python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
+```
+
+真实 Philips 外高桥进境 HTTP 验收（DHL、DSV、FedEx、UPS、康捷空；需要已启动服务、样例目录、真实模型/MinerU，Oracle 按部署配置）：
+
+```powershell
+$env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
+# 可选：$env:DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT="<进境样例目录>"
+python -m tests.test_real_philips_wgq_inbound_recognition
 ```
 
 MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）：
@@ -72,6 +80,16 @@ curl -X POST http://127.0.0.1:8500/runs ^
   -H "Content-Type: application/json" ^
   -d "{\"session_id\":null,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"帮我看看这个文件\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/demo.pdf\"}]}]}"
 ```
+
+Philips 外高桥进境识别必须省略 `session_id` 并传固定 workflow：
+
+```powershell
+curl -X POST http://127.0.0.1:8500/runs ^
+  -H "Content-Type: application/json" ^
+  -d "{\"workflow\":\"philips_wgq_inbound_recognition\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/waybill.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/invoice.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/tracking.xlsx\"}]}]}"
+```
+
+该请求仍立即返回 `queued`。轮询终态后从 GET 顶层 `result` 读取经 schema 校验的业务 JSON；不要解析 `reply`。未知 workflow 或给该 workflow 传非空 `session_id` 均返回 `422`。
 
 ```powershell
 curl "http://127.0.0.1:8500/runs/<run_id>"

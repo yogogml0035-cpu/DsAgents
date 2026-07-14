@@ -63,6 +63,25 @@ def _check_resources_and_ledger(tmp: str) -> None:
         assert latest_content is not None
         assert latest_content.event_id == run_events[2].event_id
 
+        resources.runs.create_run(
+            "workflow-run",
+            "workflow-session",
+            messages_json(hello_messages),
+            workflow="philips_wgq_inbound_recognition",
+        )
+        resources.runs.emit_run_status("workflow-run", "running")
+        result = {"outcome": "input_problems", "data": None, "problems": [{"issue": "mixed"}]}
+        terminal = resources.runs.emit_run_status(
+            "workflow-run",
+            "succeeded",
+            reply="请拆分批次",
+            result=result,
+        )
+        workflow_snapshot = resources.runs.get_run("workflow-run")
+        assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
+        assert workflow_snapshot.result == result
+        assert terminal.payload["result"] == result
+
         resources.runs.create_run("run-2", "s2", messages_json(multi_messages))
         resources.runs.emit_run_status("run-2", "running")
         resources.runs.emit_run_event("run-2", "thinking", {"content": "plan"}, raw={"type": "messages"})
@@ -112,7 +131,8 @@ def _check_resources_and_ledger(tmp: str) -> None:
     assert not (data_dir / "artifacts" / "run-events").exists()
 
     # Reopening the same DB is idempotent: no migration, fresh schema stable.
-    SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "internal" / "run-events")
+    reopened = SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "internal" / "run-events")
+    assert reopened.get_run("workflow-run").result["outcome"] == "input_problems"
 
 
 def _check_model_usage_aggregation(tmp: str) -> None:

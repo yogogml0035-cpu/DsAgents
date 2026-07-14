@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Technology Stack
 
-**Analysis Date:** 2026-07-14
+**Analysis Date:** 2026-07-15
 
 > 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；运行命令以仓库 `scripts/start-backend.bat` 与测试默认值为准。
 
@@ -17,7 +17,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | 包名 / 版本 | `dsagents` / `0.1.0` | `[project]` |
 | 描述 | Agent runtime for DeepAgents with pluggable document parsing. | `[project].description` |
 
-发行名保持 `dsagents`；源码顶层为 `api.py` 与三个包 `runtime/`、`integrations/`、`skills/`（含内置 Skill 包 `philipswgqimport`、`tecanimport`）。模块使用绝对顶层导入（如 `from runtime.resources import AgentResources`）。
+发行名保持 `dsagents`；源码顶层为 `api.py` 与三个包 `runtime/`、`integrations/`、`skills/`（含内置 Skill 包 `philipswgqinboundrecognition`、`tecanimport`）。模块使用绝对顶层导入（如 `from runtime.resources import AgentResources`）。
 
 ### 构建与打包
 
@@ -28,7 +28,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | 安装根 | `backend/`，`package-dir = {"" = "."}` | `[tool.setuptools]` |
 | 顶层模块 | `py-modules = ["api"]` | `[tool.setuptools]` |
 | 包发现 | `include = ["runtime*", "integrations*", "skills*"]` | `[tool.setuptools.packages.find]` |
-| 包数据 | 两个 Skill 的 `SKILL.md`、`references/*.md`、`assets/*` 随 wheel 打包 | `[tool.setuptools.package-data]` |
+| 包数据 | Philips 打包 `SKILL.md`；Tecan 打包 `SKILL.md`、`references/*.md`、`assets/*` | `[tool.setuptools.package-data]` |
 
 ## Runtime
 
@@ -73,10 +73,10 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | `runtime/observability.py` | `model_usage`、thinking/text delta、subagent 过滤、`MAIN_AGENT_NAME` |
 | `runtime/resources.py` | `AgentResources`、`ResourceConfig`、`CompositeBackend` 路由 |
 | `runtime/runs.py` | `SqliteRunLedger`、`RunEvent`、`RunSnapshot`、`aggregate_model_usage` |
-| `runtime/tools.py` | `ToolCatalog` + `default_tool_catalog()`（静态 6 工具） |
+| `runtime/tools.py` | `ToolCatalog` + `default_tool_catalog()`（静态 5 工具） |
 | `integrations/artifacts.py` | 虚拟路径解析、上传命名、immutable JSON 落盘 |
 | `integrations/mineru.py` | `parse_documents`、`extract_archives`、MinerU HTTP 客户端 |
-| `skills/philipswgqimport/` | Philips WGQ 进口 Skill（`SKILL.md` + tools/documents + 模板） |
+| `skills/philipswgqinboundrecognition/` | Philips WGQ 结构化识别（`SKILL.md` + Pydantic schema + 单一主数据工具） |
 | `skills/tecanimport/` | Tecan 进口 Skill（`SKILL.md` + tools/documents + 模板） |
 
 ## Frameworks
@@ -85,7 +85,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 - **FastAPI**（`>=0.116.1`，lock `0.139.0`）：`create_app(*, resource_config, harness_factory)` → `FastAPI(lifespan=...)`。
 - 端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`。
-- 请求/响应模型：Pydantic v2（`BaseModel`、`ConfigDict(extra="forbid")`、`Field(discriminator=...)`）。
+- 请求/响应模型：Pydantic v2（HTTP `RunRequest` + Philips `PhilipsWgqRecognitionResult`，均 `extra="forbid"`）。
 - 无 SSE / `StreamingResponse`；客户端靠轮询 `GET /runs/{run_id}?after_event_id=...`。
 - 未注册 `CORSMiddleware`。
 
@@ -101,7 +101,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 - 生产 brain：`DeepAgentsBrainFactory` → `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `create_deep_agent(...)`。
 - `skills=["/skills/"]`；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
-- 四个声明式 SubAgent（`philips-wgq-extractor-a/b`、`tecan-extractor-a/b`），各自 `runtime_middlewares()` + 只读文件系统权限。
+- 两个声明式 Tecan SubAgent（`tecan-extractor-a/b`），各自 `runtime_middlewares()` + 只读文件系统权限；Philips workflow 不装 SubAgent。
+- Philips workflow 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；该 invocation 关闭 `ChatAnthropic.thinking`，因为 Anthropic thinking 与 ToolStrategy 强制 tool choice 不兼容；同时只暴露 `parse_documents` 和 `lookup_philips_wgq_master_data`。
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))` 禁用默认 general-purpose subagent（锁版本 0.6.12 无 `harness_profile=` 构造参数）。
 - `/skills/**` 写权限 deny；SubAgent 对 `/**` write deny。
 - `AnthropicPromptCachingMiddleware` 由 DeepAgents 尾栈自动挂载（非本仓库自定义）；因 MiniMax 走 `ChatAnthropic`，对 MiniMax-M3 生效。
@@ -132,8 +133,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | `langchain-core` | `>=1.4.8` | `1.4.8` | 消息与模型基类 | `runtime/agent.py`、`runtime/observability.py` |
 | `langgraph` | `>=1.2.7` | `1.2.7` | 编排 / stream / `RunControl` / `GraphDrained` / `get_stream_writer` | `runtime/execution.py`、`runtime/agent.py`、`integrations/mineru.py` |
 | `langgraph-checkpoint-sqlite` | `>=3.1.0` | `3.1.0` | `SqliteSaver` + 经 `langgraph.store.sqlite` 的 `SqliteStore` | `runtime/resources.py` |
-| `openpyxl` | `>=3.1,<4` | `3.1.5` | 读订单/tracking、基于模板写 Excel | 两个 Skill 的 `scripts/documents.py` / `tools.py` |
-| `oracledb` | `>=3,<4` | `3.4.2` | Philips 法定单位可选查询（thick mode，延迟 import） | `skills/philipswgqimport/scripts/tools.py` |
+| `openpyxl` | `>=3.1,<4` | `3.1.5` | Philips 读 Tracking；Tecan 读订单/信息表并写 Excel | 两个 Skill 的 `scripts/` |
+| `oracledb` | `>=3,<4` | `3.4.2` | Philips 稳定主数据可选补齐（延迟 import，可选 thick mode） | `skills/philipswgqinboundrecognition/scripts/tools.py` |
 | `python-multipart` | `>=0.0.20` | `0.0.32` | multipart 上传 | `api.py` `UploadFile` |
 | `python-dotenv` | `>=1.2.2` | `1.2.2` | 加载 `backend/.env` | `runtime/agent.py`、`integrations/mineru.py` |
 | `requests` | `>=2.34.2` | `2.34.2` | MinerU HTTP；部分真实集成测试 | `integrations/mineru.py`、真实 run 测试 |
@@ -165,15 +166,16 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - 状态集：`queued` / `running` / `succeeded` / `failed` / `cancelled` / `cancelling`。
 - 时间戳：UTC ISO-8601 毫秒（如 `2026-07-13T08:18:59.250Z`）。
 - fresh schema，无迁移；切换部署可清空 `backend/data/` 后由 `_setup()` / `.setup()` 重建。
+- `runs` 同时保存可选 `workflow` 与 `result_json`；Philips 结构化结果经 Pydantic 校验后写入，通用/Tecan 为 `null`。
 - `aggregate_model_usage(run_id)` 汇总 token；CNY 估算在 `api._usage_summary`（仅 `MiniMax-M3` 可计价）。
 
 ### 工具注册（`runtime/tools.py`）
 
-`default_tool_catalog()` 静态 6 个：
+`default_tool_catalog()` 静态 5 个：
 
 1. `parse_documents` — MinerU 批解析
 2. `extract_archives` — ZIP 解压到 downloads
-3. `save_philips_wgq_extraction` / `generate_philips_wgq_import`
+3. `lookup_philips_wgq_master_data` — Philips Tracking/Oracle 稳定字段补齐
 4. `save_tecan_extraction` / `generate_tecan_import`
 
 新增 Skill 时在此静态 import + 注册，不自动扫描。
@@ -185,7 +187,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | HTTP 客户端 | `fastapi.testclient.TestClient`（底层 `httpx2`） | `tests/test_support.py`、`tests/test_api.py` |
 | Brain 替身 | `FakeBrain` / `FakeBrainFactory` | `tests/test_support.py` |
 | 风格 | 可执行 assert 脚本（`tests/test_*.py`） | `backend/tests/` |
-| 真实集成 | 需显式 env 开关（如 `DSAGENTS_RUN_REAL_IMAGE_TEST=1`） | `test_real_*.py` |
+| 真实集成 | 需显式 env 开关（含 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`） | `test_real_*.py` |
 
 ## Configuration
 
@@ -219,7 +221,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | OS | 开发/部署以 Windows 为主（`scripts/start-backend.bat`）；Python 代码跨平台，路径统一用 `pathlib` |
 | Python | 3.11 或 3.12（仓库内见 `cpython-312` 字节码；约束 `<4.0`） |
 | 包同步 | `cd backend && uv sync`（遵守 `uv.lock`） |
-| Oracle thick mode（可选） | 部署机需 `ORACLE_CLIENT_LIB_DIR` 指向有效 Instant Client；缺失时 Philips 单位查询优雅降级为「需确认」+ 人工校验项 |
+| Oracle（可选） | 凭证不全、client/查询失败或未命中时写入 `problems`，不丢弃 PDF/Tracking 结果；启用 thick mode 时需有效 `ORACLE_CLIENT_LIB_DIR` |
 | MinerU | 需可达的 `MINERU_BASE_URL` 服务；缺失必填 env 时 `parse_documents` 抛 `RuntimeError` |
 | MiniMax / Anthropic 兼容 | 需 `MINIMAX_API_KEY`、`MINIMAX_BASE_URL`、`MINIMAX_MODEL`；生产路径触达真实模型 |
 | 磁盘 | 可写 `backend/data/`（SQLite + artifacts + 大 event 外溢） |
@@ -227,9 +229,9 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 ### 版本敏感点
 
-- `thinking={"type":"adaptive"}` 依赖当前 `langchain-anthropic==1.4.8`。
+- 通用/Tecan 的 `thinking={"type":"adaptive"}` 依赖当前 `langchain-anthropic==1.4.8`；Philips invocation 用 `model_copy(update={"thinking": None})` 配合 ToolStrategy。
 - `deepagents==0.6.12` 的 harness profile 用注册 API，非 `create_deep_agent(..., harness_profile=...)`。
 - 升级上述依赖时需重测 brain 装配与 prompt-cache 行为。
 
 ---
-*Stack analysis: 2026-07-14*
+*Stack analysis: 2026-07-15*

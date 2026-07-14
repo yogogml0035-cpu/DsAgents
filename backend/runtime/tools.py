@@ -4,10 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from integrations.mineru import extract_archives, parse_documents
-from skills.philipswgqimport.scripts.tools import (
-    generate_philips_wgq_import,
-    save_philips_wgq_extraction,
-)
+from skills.philipswgqinboundrecognition.scripts.tools import lookup_philips_wgq_master_data
 from skills.tecanimport.scripts.tools import (
     generate_tecan_import,
     save_tecan_extraction,
@@ -25,7 +22,7 @@ class ToolCatalog:
 
 
 def default_tool_catalog() -> ToolCatalog:
-    """Static registration: MinerU 通用工具 + 两个 Skill 各两个业务工具。
+    """Static registration: MinerU 通用工具 + Philips 一个工具 + Tecan 两个工具。
 
     新增 Skill 时在此追加一行静态 import + 一行注册，不复制 runtime、不自动扫描。
     """
@@ -33,8 +30,7 @@ def default_tool_catalog() -> ToolCatalog:
         (
             parse_documents,
             extract_archives,
-            save_philips_wgq_extraction,
-            generate_philips_wgq_import,
+            lookup_philips_wgq_master_data,
             save_tecan_extraction,
             generate_tecan_import,
         )

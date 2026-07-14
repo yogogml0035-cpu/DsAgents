@@ -20,6 +20,6 @@ DsAgents 是单子项目的 agent 运行时底座：产品代码位于 `backend/
 - 接口、provider、存储与 artifacts 边界：[INTERFACES.md](INTERFACES.md)
 - 系统级调用链与任务阅读指南：[coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)
 - 全局原则、命令、任务阅读顺序：[docs/conventions.md](docs/conventions.md)、[docs/commands.md](docs/commands.md)、[docs/reading-order.md](docs/reading-order.md)
-- backend 概览与事实来源：[docs/backend.md](docs/backend.md)、[backend/.planning/codebase/](backend/.planning/codebase/)（7 份 fact docs，Analysis Date: 2026-07-14）
+- backend 概览与事实来源：[docs/backend.md](docs/backend.md)、[backend/.planning/codebase/](backend/.planning/codebase/)（7 份 fact docs，Analysis Date: 2026-07-15）
 
 修改 backend 前先读 `docs/conventions.md`，再按任务读取 `backend/.planning/codebase/` 对应文档；涉及 HTTP 或跨边界行为时回看 `INTERFACES.md` 与 `coding_maps/SYSTEM_MAP.md`。

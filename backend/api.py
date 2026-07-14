@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from integrations.artifacts import clean_filename, make_timestamped_name
 from runtime.execution import HarnessRuntime, create_harness
@@ -40,8 +40,15 @@ _PRICEABLE_MODELS = {"MiniMax-M3"}
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    workflow: Literal["philips_wgq_inbound_recognition"] | None = None
     session_id: str | None = None
     messages: list["RunMessage"]
+
+    @model_validator(mode="after")
+    def reject_workflow_session_reuse(self) -> "RunRequest":
+        if self.workflow is not None and self.session_id is not None:
+            raise ValueError("workflow runs require a new server-generated session_id")
+        return self
 
 
 class TextBlock(BaseModel):
@@ -102,6 +109,7 @@ def create_app(
                 run_id,
                 session_id,
                 json.dumps(messages, ensure_ascii=False),
+                workflow=request.workflow,
             )
         except Exception:
             _release_session_run(app, session_id)
@@ -109,7 +117,7 @@ def create_app(
 
         worker = threading.Thread(
             target=_run_background,
-            args=(app, session_id, run_id, messages),
+            args=(app, session_id, run_id, messages, request.workflow),
             daemon=True,
         )
         try:
@@ -132,6 +140,8 @@ def create_app(
             return JSONResponse(status_code=404, content={"error": f"Unknown run: {run_id}"})
         return {
             "run": _run_body(run),
+            "workflow": run.workflow,
+            "result": run.result,
             "events": [_run_event_body(event) for event in events],
             "latest_content_event": _run_event_body(latest_content_event) if latest_content_event else None,
             "usage": usage,
@@ -214,9 +224,15 @@ def create_app(
 app = create_app()
 
 
-def _run_background(app: FastAPI, session_id: str, run_id: str, messages: list[dict[str, Any]]) -> None:
+def _run_background(
+    app: FastAPI,
+    session_id: str,
+    run_id: str,
+    messages: list[dict[str, Any]],
+    workflow: str | None,
+) -> None:
     try:
-        for _ in app.state.harness.execute_run(messages, session_id, run_id):
+        for _ in app.state.harness.execute_run(messages, session_id, run_id, workflow=workflow):
             pass
     except Exception as exc:
         _ensure_failed_run(app, run_id, exc)

@@ -4,9 +4,9 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # External Integrations
 
-**Analysis Date:** 2026-07-14
+**Analysis Date:** 2026-07-15
 
-> 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。文档只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部允许测试/程序内 `allow_local` 路径，业务 `generate_*_import` 只接受显式 `/artifacts/...`。
+> 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。文档只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部允许测试/程序内 `allow_local` 路径，业务 Tool 只接受显式 `/artifacts/...`。
 
 ## APIs & External Services
 
@@ -16,8 +16,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 方法 / 路径 | 入参 | 行为摘要 | 主要状态码 |
 |---|---|---|---|
-| `POST /runs` | `RunRequest`：`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；session 单飞锁；写 ledger；daemon 线程执行 | `200` queued；`409` 会话冲突；`422` 校验失败 |
-| `GET /runs/{run_id}` | query `after_event_id?` | run 快照 + 增量 events + `latest_content_event` + `usage` | `200`；`404` 未知 run |
+| `POST /runs` | `RunRequest`：`workflow?`、`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；Philips workflow 强制新 session；写 ledger；daemon 执行 | `200` queued；`409` 通用 session 冲突；`422` 未知 workflow/非法复用 |
+| `GET /runs/{run_id}` | query `after_event_id?` | run 快照 + 顶层 `workflow`/`result` + 增量 events + `latest_content_event` + `usage` | `200`；`404` 未知 run |
 | `POST /runs/{run_id}/cancel` | path `run_id` | 协作 drain 或直接 cancelled | `202` cancelling；`200` 已取消中；`409` 终态；`404` 未知 |
 | `POST /upload` | multipart 字段 `files`（可多文件） | 落到 `artifacts/uploads/`，返回虚拟路径 | `200` `files[]` |
 
@@ -28,6 +28,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - **无** CORS 中间件。
 - 时间字段：UTC ISO-8601 毫秒。
 - 取消不回滚已生成文件，不跨进程强杀。
+- 当前唯一固定 workflow 是 `philips_wgq_inbound_recognition`；省略 `workflow` 时保持通用/Tecan 的 `reply` 行为。
+- Philips `result` 来自 `ToolStrategy(PhilipsWgqRecognitionResult)`；`reply` 不参与 JSON 解析。`input_problems` 仍对应 `run.status=succeeded`。
 
 **取消流**：终态 → `409`；已 `cancelling`/`cancelled` → `200`；活跃 → 投影 `cancelling` → `harness.request_cancel`；未进入 `execute_run` 则直接 `cancelled`，HTTP `202`。
 
@@ -41,7 +43,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 | `init_chat_model("anthropic:<MINIMAX_MODEL>", api_key=MINIMAX_API_KEY, base_url=MINIMAX_BASE_URL, thinking={"type":"adaptive"})` → `create_deep_agent(model=...)` | `runtime/agent.py` `DeepAgentsBrainFactory` |
+| 生产 | 通用/Tecan 用 `thinking={"type":"adaptive"}`；Philips invocation 关闭 thinking 以支持 ToolStrategy 强制 tool choice | `runtime/agent.py` `DeepAgentsBrainFactory` |
 | 测试 | `FakeBrain` / `FakeBrainFactory`（v2 stream，不触达网络） | `tests/test_support.py` |
 | prompt-cache | DeepAgents 尾栈 `AnthropicPromptCachingMiddleware`；固定前缀勿注入 run_id/时间等动态内容 | 库行为 + `DEFAULT_SYSTEM_PROMPT` / tool schema |
 | usage 观测 | 从 stream `messages` chunk 的 `usage_metadata` 提取 → `model_usage` 事件；不入库专用表 | `runtime/observability.py`、`runtime/execution.py` |
@@ -67,23 +69,23 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 ### 4. Oracle（可选，仅 Philips Skill）
 
-- 消费者：`skills/philipswgqimport/scripts/tools.py` 的 `_oracle_units` / `_init_oracle_client`。
-- 驱动：`oracledb` thick mode（`init_oracle_client(lib_dir=ORACLE_CLIENT_LIB_DIR)` + `oracledb.connect(...)`）。
-- 行为：按料号候选只读三个单位字段；`ORACLE_DSN`/`USERNAME`/`PASSWORD` 不全、client 失败或查询异常时**优雅降级**（字段「需确认」+ `manual_checks`），不阻断 Excel 生成。
+- 消费者：`skills/philipswgqinboundrecognition/scripts/tools.py` 的 `_oracle_data` / `_init_oracle_client`。
+- 驱动：`oracledb.connect(...)`；配置 `ORACLE_CLIENT_LIB_DIR` 时先启用 thick mode。
+- 查询：参数化 `:product_id`，只读中文品名、规格型号、原产国、海关编码、申报计量单位、法定第一/第二单位；仅查询 Tracking 尚缺字段的 12NC。
+- 行为：配置缺失、client/查询失败或未命中写入 `problems`，不覆盖 Tracking，不丢弃 PDF 结果。
 - Tecan Skill **不**调用 Oracle。
 
 ### 5. 业务工具（进程内，非外部 HTTP）
 
 | 工具 | 模块 | 要点 |
 |---|---|---|
-| `save_philips_wgq_extraction` | `skills/philipswgqimport/scripts/tools.py` | 写 extraction JSON artifact |
-| `generate_philips_wgq_import` | 同上 | canonical + tracking/invoice/核注清单 Excel；可触发 Oracle |
+| `lookup_philips_wgq_master_data` | `skills/philipswgqinboundrecognition/scripts/tools.py` | 严格 Tracking 选行 + Oracle 缺失字段补齐；不返回交易字段 |
 | `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` | 写 extraction JSON |
 | `generate_tecan_import` | 同上 | 订单+信息表匹配 + 发票箱单 Excel |
 
-成功返回 `status=generated`；业务问题统一 `code=input_problems`，无多阶段状态机恢复。
+Philips 最终业务合同由结构化响应承担；Tecan Tool 仍以 `status=generated` / `code=input_problems` 返回。两者都无多阶段状态机恢复。
 
-Excel 读写：`openpyxl`；模板位于各 Skill `assets/`（Philips：`invoice,packing进境.xlsx`、`核注清单导入模板.xlsx`；Tecan：`Tecan_进口_发票箱单_空运.xlsx`）。
+Excel：Philips 仅用 `openpyxl` 只读 Tracking 的 `进口` / `申报要素` sheet；Tecan 使用模板 `Tecan_进口_发票箱单_空运.xlsx` 生成工作簿。旧 Philips Excel 模板与写入模块已删除。
 
 ## Data Storage
 
@@ -95,7 +97,7 @@ Excel 读写：`openpyxl`；模板位于各 Skill `assets/`（Philips：`invoice
 | LangGraph store | `backend/data/dsagents_store.db` | `SqliteStore`（`langgraph.store.sqlite`） |
 | LangGraph checkpointer | `backend/data/dsagents_checkpoints.db` | `SqliteSaver`（`langgraph.checkpoint.sqlite`） |
 
-**runs 投影表**：`run_id` PK、`session_id`、`input_messages_json`、`status`、时间戳、`reply`、`error`。
+**runs 投影表**：`run_id` PK、`session_id`、`input_messages_json`、可选 `workflow`、`status`、时间戳、`reply`、`error`、可选 `result_json`。
 
 **run_events 表**：自增 `event_id`、`run_id`、`type`、`created_at`、payload/raw（可外溢文件）。索引：`idx_run_events_run_order`、`idx_runs_session_created`。
 
@@ -106,7 +108,7 @@ Excel 读写：`openpyxl`；模板位于各 Skill `assets/`（Philips：`invoice
 | 物理目录 | 虚拟前缀 | 写入者 |
 |---|---|---|
 | `data/artifacts/uploads/` | `/artifacts/uploads/` | `POST /upload` |
-| `data/artifacts/downloads/` | `/artifacts/downloads/` | MinerU、解压、Skill JSON/Excel |
+| `data/artifacts/downloads/` | `/artifacts/downloads/` | MinerU、解压、Tecan JSON/Excel |
 
 路径工具：`integrations/artifacts.py` — `resolve_artifact_path`（防 `..`）、`to_virtual_artifact_path`、`clean_filename`、`make_timestamped_name`、`unique_download_path`、`write_json_artifact` / `read_json_artifact`。
 
@@ -125,6 +127,7 @@ brain.stream(
 
 - 查询维度是 `run_id`；`session_id` 仅作 `thread_id` 与进程内单飞锁。
 - payload 只含当前请求 messages，不重放本地 session 历史。
+- `BrainFactory.create(..., workflow)` 明确接收 workflow；Philips 从 `updates` 捕获并再次校验 `structured_response`。
 
 **无** Redis、Postgres、对象存储 SDK、云 blob 客户端。
 
@@ -168,7 +171,7 @@ brain.stream(
 | Oracle 部署前提 | thick mode 需本机 Instant Client 路径 `ORACLE_CLIENT_LIB_DIR` |
 | 健康检查端点 | **无** 专用 `/health` |
 
-程序内入口（非 HTTP）：`AgentResources` + `create_harness(...).execute_run(...)`。
+程序内入口（非 HTTP）：`AgentResources` + `create_harness(...).execute_run(..., workflow=None)`。
 
 ## External File/Document Services
 
@@ -181,9 +184,9 @@ brain.stream(
 | 来源 | 路径模式 | 用途 |
 |---|---|---|
 | 用户上传 | `/artifacts/uploads/...` | 源 PDF/图片/办公文件 |
-| 解析/业务产物 | `/artifacts/downloads/...` | JSON、ZIP、Excel、解压树 |
-| Skill 模板 | `/skills/<skill>/assets/*.xlsx` | 生成时复制/填充，不修改仓库模板 |
-| Skill 说明 | `/skills/<skill>/SKILL.md`、`references/*.md` | Agent 读取的指令与字段规则 |
+| 解析/业务产物 | `/artifacts/downloads/...` | MinerU JSON/ZIP、Tecan JSON/Excel、解压树 |
+| Tecan 模板 | `/skills/tecanimport/assets/*.xlsx` | 生成时复制/填充，不修改仓库模板 |
+| Skill 说明 | `/skills/<skill>/SKILL.md`；Tecan 另有 `references/*.md` | Agent 读取的指令与字段规则 |
 
 DeepAgents 内置文件工具（如 `read_file`）经 `CompositeBackend` 访问上述虚拟路径；图片/媒体可走 `read_file`，结构化文档解析走 `parse_documents`。
 
@@ -219,11 +222,13 @@ DeepAgents 内置文件工具（如 `read_file`）经 `CompositeBackend` 访问�
 | `DSAGENTS_BASE_URL` / `DSAGENTS_API_BASE_URL` | 指向已启动 HTTP 服务 | 真实集成测试 |
 | `DSAGENTS_RUN_REAL_IMAGE_TEST` | 开关真实图片 run 测试 | `test_real_image_run.py` |
 | `DSAGENTS_RUN_REAL_MULTI_PDF_TEST` | 开关真实多 PDF 测试 | `test_real_multi_pdf_run.py` |
+| `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST` | 开关 DHL/DSV/FedEx/UPS/康捷空真实识别验收 | `test_real_philips_wgq_inbound_recognition.py` |
+| `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` | 覆盖外高桥进境样例根目录 | 同上 |
 | `DSAGENTS_IMAGE_PATH` / `DSAGENTS_IMAGE_QUESTION` | 图片路径与提问 | `test_real_image_run.py` |
 | `DSAGENTS_PDF_DIR` / `DSAGENTS_MULTI_PDF_REQUEST` | PDF 目录与请求文案 | `test_real_multi_pdf_run.py` |
 | `DSAGENTS_REAL_*_TIMEOUT_SECONDS` / `*_POLL_SECONDS` / `*_UPLOAD_TIMEOUT_SECONDS` | 超时与轮询间隔 | 对应真实测试 |
 
-> 交叉引用：Oracle 配置不全或 thick client 不可用时 Philips **继续生成**并标人工校验；Tecan 不读 `ORACLE_*`。MinerU 必填键缺失时工具快速失败，不静默跳过。
+> 交叉引用：Oracle 配置不全或不可用时 Philips 保留 PDF/Tracking 数据并把问题纳入 `partial_success`；Tecan 不读 `ORACLE_*`。MinerU 必填键缺失时工具快速失败，不静默跳过。
 
 ---
-*Integrations analysis: 2026-07-14*
+*Integrations analysis: 2026-07-15*

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
+from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
 
 
 BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -44,13 +45,18 @@ DEFAULT_SYSTEM_PROMPT = (
     "/artifacts/."
 )
 
+PHILIPS_WORKFLOW_PROMPT = (
+    "The API selected workflow philips_wgq_inbound_recognition. Load and follow "
+    "/skills/philipswgqinboundrecognition/SKILL.md for this run."
+)
+
 SKILLS_SOURCE = "/skills/"
 NO_PROGRESS_WINDOW = 3
 
 
 # deepagents 0.6.12 exposes profile registration, not a create_deep_agent
-# harness_profile argument. Disable its auto-added fifth subagent at the
-# provider profile and keep the four explicit workflow extractors below.
+# harness_profile argument. Disable its auto-added general-purpose subagent at
+# the provider profile and keep the two explicit Tecan extractors below.
 register_harness_profile(
     "anthropic",
     HarnessProfile(
@@ -75,6 +81,7 @@ class BrainFactory(Protocol):
         resources: Any,
         middleware: Sequence[AgentMiddleware],
         tools: Sequence[Any],
+        workflow: str | None = None,
     ) -> Brain: ...
 
 
@@ -191,26 +198,40 @@ class DeepAgentsBrainFactory:
         resources: Any,
         middleware: Sequence[AgentMiddleware],
         tools: Sequence[Any],
+        workflow: str | None = None,
     ) -> Brain:
-        return create_deep_agent(
-            model=self.model,
-            tools=tools,
-            system_prompt=self.system_prompt,
-            middleware=list(middleware),
-            backend=resources.backend,
-            checkpointer=resources.checkpointer,
-            store=resources.store,
-            skills=[SKILLS_SOURCE],
-            subagents=workflow_subagents(),
-            permissions=[
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "tools": tools,
+            "system_prompt": self.system_prompt,
+            "middleware": list(middleware),
+            "backend": resources.backend,
+            "checkpointer": resources.checkpointer,
+            "store": resources.store,
+            "skills": [SKILLS_SOURCE],
+            "subagents": [] if workflow == WORKFLOW else workflow_subagents(),
+            "permissions": [
                 FilesystemPermission(
                     operations=["write"],
                     paths=["/skills/**"],
                     mode="deny",
                 )
             ],
-            name=MAIN_AGENT_NAME,
-        )
+            "name": MAIN_AGENT_NAME,
+        }
+        if workflow == WORKFLOW:
+            if isinstance(self.model, BaseChatModel) and getattr(self.model, "thinking", None) is not None:
+                # ToolStrategy relies on forced tool use, which Anthropic rejects while thinking is enabled.
+                kwargs["model"] = self.model.model_copy(update={"thinking": None})
+            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{PHILIPS_WORKFLOW_PROMPT}"
+            kwargs["response_format"] = _PHILIPS_RESPONSE_FORMAT
+            kwargs["tools"] = [
+                tool
+                for tool in tools
+                if getattr(tool, "__name__", "")
+                in {"parse_documents", "lookup_philips_wgq_master_data"}
+            ]
+        return create_deep_agent(**kwargs)
 
 
 class ExtractionReference(BaseModel):
@@ -222,34 +243,20 @@ _RESPONSE_FORMAT = ToolStrategy(
     ExtractionReference,
     tool_message_content="Extraction artifact reference recorded.",
 )
+_PHILIPS_RESPONSE_FORMAT = ToolStrategy(
+    PhilipsWgqRecognitionResult,
+    tool_message_content="Philips WGQ recognition result recorded.",
+)
 _READ_ONLY_FILES = [FilesystemPermission(operations=["write"], paths=["/**"], mode="deny")]
 
 
 def workflow_subagents() -> list[SubAgent]:
-    """Return the four stateless declarative extractors registered on the main agent.
+    """Return the two stateless Tecan extractors registered on the main agent.
 
     Each installs its own runtime middleware (telemetry + no-progress) since
     declarative SubAgents do not inherit the main agent's middleware.
     """
     return [
-        _extractor(
-            name="philips-wgq-extractor-a",
-            description=(
-                "Independent Philips WGQ PDF-field extractor A; use only when "
-                "the Philips skill explicitly requests its A vote."
-            ),
-            prompt=_PHILIPS_PROMPT,
-            tool="save_philips_wgq_extraction",
-        ),
-        _extractor(
-            name="philips-wgq-extractor-b",
-            description=(
-                "Independent Philips WGQ PDF-field extractor B; use only when "
-                "the Philips skill explicitly requests its B vote."
-            ),
-            prompt=_PHILIPS_PROMPT,
-            tool="save_philips_wgq_extraction",
-        ),
         _extractor(
             name="tecan-extractor-a",
             description=(
@@ -287,14 +294,6 @@ def _extractor(*, name: str, description: str, prompt: str, tool: str) -> SubAge
         "middleware": runtime_middlewares(),
     }
 
-
-_PHILIPS_PROMPT = """You are {extractor}, a stateless independent extractor.
-Read only the exact source_artifact path in the task description. Do not use prior conclusions,
-search for another file, or infer missing values. Extract exactly the Philips logistics and nine
-item fields requested by the task, with high/medium/low confidence. Call
-save_philips_wgq_extraction exactly once using extractor={extractor}; use null+low for missing values.
-After the save tool returns, emit ExtractionReference with that exact extractor and artifact_path.
-If structured output fails, the final text must still be the same two-field JSON object."""
 
 _TECAN_PROMPT = """You are {extractor}, a stateless independent extractor.
 Read only the exact source_artifact path in the task description. Do not use prior conclusions,

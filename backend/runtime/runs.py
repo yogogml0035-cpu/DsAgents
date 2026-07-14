@@ -30,11 +30,13 @@ class RunSnapshot:
     run_id: str
     session_id: str
     input_messages_json: str
+    workflow: str | None
     status: str
     created_at: str
     updated_at: str
     reply: str | None = None
     error: str | None = None
+    result: Any = None
 
 
 class SqliteRunLedger:
@@ -44,7 +46,13 @@ class SqliteRunLedger:
         self.max_inline_bytes = max_inline_bytes
         self._setup()
 
-    def create_run(self, run_id: str, session_id: str, input_messages_json: str) -> RunSnapshot:
+    def create_run(
+        self,
+        run_id: str,
+        session_id: str,
+        input_messages_json: str,
+        workflow: str | None = None,
+    ) -> RunSnapshot:
         created_at = _now_text()
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
@@ -53,15 +61,17 @@ class SqliteRunLedger:
                     run_id,
                     session_id,
                     input_messages_json,
+                    workflow,
                     status,
                     created_at,
                     updated_at,
                     reply,
-                    error
+                    error,
+                    result_json
                 )
-                values (?, ?, ?, ?, ?, ?, null, null)
+                values (?, ?, ?, ?, ?, ?, ?, null, null, null)
                 """,
-                (run_id, session_id, input_messages_json, "queued", created_at, created_at),
+                (run_id, session_id, input_messages_json, workflow, "queued", created_at, created_at),
             )
             self._insert_event(
                 conn,
@@ -82,11 +92,13 @@ class SqliteRunLedger:
                     run_id,
                     session_id,
                     input_messages_json,
+                    workflow,
                     status,
                     created_at,
                     updated_at,
                     reply,
-                    error
+                    error,
+                    result_json
                 from runs
                 where run_id = ?
                 """,
@@ -98,11 +110,13 @@ class SqliteRunLedger:
             run_id=row[0],
             session_id=row[1],
             input_messages_json=row[2],
-            status=row[3],
-            created_at=row[4],
-            updated_at=row[5],
-            reply=row[6],
-            error=row[7],
+            workflow=row[3],
+            status=row[4],
+            created_at=row[5],
+            updated_at=row[6],
+            reply=row[7],
+            error=row[8],
+            result=json.loads(row[9]) if row[9] is not None else None,
         )
 
     def get_run_events(self, run_id: str, after_event_id: int | None = None) -> list[RunEvent]:
@@ -229,6 +243,7 @@ class SqliteRunLedger:
         *,
         reply: str | None = None,
         error: str | None = None,
+        result: Any = None,
         raw: Any | None = None,
     ) -> RunEvent:
         if status not in RUN_STATUSES:
@@ -239,14 +254,17 @@ class SqliteRunLedger:
             payload["reply"] = reply
         if error is not None:
             payload["error"] = error
+        if result is not None:
+            payload["result"] = result
         safe_payload = _safe(payload)
         safe_raw = safe_payload if raw is None else _safe(raw)
+        result_json = json.dumps(_safe(result), ensure_ascii=False) if result is not None else None
         with closing(sqlite3.connect(self.db_path)) as conn:
             self._require_run(conn, run_id)
             cursor = conn.execute(
                 """
                 update runs
-                set status = ?, updated_at = ?, reply = ?, error = ?
+                set status = ?, updated_at = ?, reply = ?, error = ?, result_json = ?
                 where run_id = ?
                 """,
                 (
@@ -254,6 +272,7 @@ class SqliteRunLedger:
                     created_at,
                     reply if status == "succeeded" else None,
                     error if status in {"failed", "cancelled"} else None,
+                    result_json if status == "succeeded" else None,
                     run_id,
                 ),
             )
@@ -372,11 +391,13 @@ class SqliteRunLedger:
                     run_id text primary key,
                     session_id text not null,
                     input_messages_json text not null,
+                    workflow text,
                     status text not null,
                     created_at text not null,
                     updated_at text not null,
                     reply text,
-                    error text
+                    error text,
+                    result_json text
                 )
                 """
             )

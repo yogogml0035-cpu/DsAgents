@@ -80,8 +80,7 @@ def run() -> None:
     assert [handler.__name__ for handler in default_tool_catalog().handlers] == [
         "parse_documents",
         "extract_archives",
-        "save_philips_wgq_extraction",
-        "generate_philips_wgq_import",
+        "lookup_philips_wgq_master_data",
         "save_tecan_extraction",
         "generate_tecan_import",
     ]

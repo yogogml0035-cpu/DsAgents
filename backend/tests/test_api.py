@@ -25,6 +25,7 @@ from tests.test_support import (
 def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_api(tmp)
+        _check_workflow_api(tmp)
         _check_cancel(tmp)
         _check_startup_recovery(tmp)
         _check_usage_pricing(tmp)
@@ -334,6 +335,49 @@ def _check_api(tmp: str) -> None:
         unknown = client.get("/runs/missing-run")
         assert unknown.status_code == 404
         assert unknown.json() == {"error": "Unknown run: missing-run"}
+
+
+def _check_workflow_api(tmp: str) -> None:
+    data_dir = Path(tmp) / "workflow-api"
+    factory = FakeBrainFactory()
+
+    def fake_harness(resources: AgentResources) -> HarnessRuntime:
+        return HarnessRuntime(resources=resources, tools=ToolCatalog(()), brain_factory=factory)
+
+    app = create_app(
+        resource_config=ResourceConfig(data_dir=data_dir),
+        harness_factory=fake_harness,
+    )
+    request = {
+        "workflow": "philips_wgq_inbound_recognition",
+        "messages": [user_message(text_block("workflow success"))],
+    }
+    with TestClient(app) as client:
+        assert client.post("/runs", json={**request, "session_id": "reused"}).status_code == 422
+        assert client.post("/runs", json={**request, "workflow": "unknown"}).status_code == 422
+
+        first = client.post("/runs", json=request)
+        second = client.post("/runs", json=request)
+        assert first.status_code == second.status_code == 200
+        assert first.json()["session_id"] != second.json()["session_id"]
+        first_run = wait_for_run(client, first.json()["run_id"], "succeeded")
+        assert first_run["workflow"] == "philips_wgq_inbound_recognition"
+        assert first_run["result"]["outcome"] == "success"
+
+        detail = client.get(f"/runs/{first.json()['run_id']}").json()
+        assert detail["workflow"] == "philips_wgq_inbound_recognition"
+        assert detail["result"] == first_run["result"]
+        assert detail["events"][-1]["type"] == "status"
+        assert detail["events"][-1]["payload"]["result"] == detail["result"]
+
+        problem_request = {
+            **request,
+            "messages": [user_message(text_block("input problems"))],
+        }
+        problem = client.post("/runs", json=problem_request).json()
+        problem_run = wait_for_run(client, problem["run_id"], "succeeded")
+        assert problem_run["result"]["outcome"] == "input_problems"
+        assert problem_run["result"]["data"] is None
 
 
 def _check_startup_recovery(tmp: str) -> None:

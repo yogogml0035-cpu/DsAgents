@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage
 from runtime.agent import (
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
+    PHILIPS_WORKFLOW_PROMPT,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
     workflow_subagents,
@@ -22,19 +23,20 @@ from runtime.resources import AgentResources, ResourceConfig
 
 def run() -> None:
     skills_root = Path(__file__).resolve().parents[1] / "skills"
-    philips = (skills_root / "philipswgqimport" / "SKILL.md").read_text(encoding="utf-8")
+    philips = (skills_root / "philipswgqinboundrecognition" / "SKILL.md").read_text(encoding="utf-8")
     tecan = (skills_root / "tecanimport" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
     assert len(tecan.splitlines()) <= 100
-    assert "同一个主模型回合并行" in philips
+    assert "重复 12NC 保留" in philips
+    assert "ZIP、DOCX" in philips
+    assert "两个以上真实票次" in philips
     assert "同一个主模型回合并行" in tecan
     assert "普通 PDF" in philips and "普通 PDF" in tecan
     assert "ordinary PDF extraction request is not enough" in DEFAULT_SYSTEM_PROMPT
+    assert "philipswgqinboundrecognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
 
     specs = workflow_subagents()
     assert [spec["name"] for spec in specs] == [
-        "philips-wgq-extractor-a",
-        "philips-wgq-extractor-b",
         "tecan-extractor-a",
         "tecan-extractor-b",
     ]
@@ -56,13 +58,28 @@ def run() -> None:
             resources=resources,
             middleware=[],
             tools=[],
+            workflow="philips_wgq_inbound_recognition",
         ) is sentinel
     kwargs = create.call_args.kwargs
     assert kwargs["skills"] == [SKILLS_SOURCE]
-    assert [spec["name"] for spec in kwargs["subagents"]] == [spec["name"] for spec in specs]
+    assert kwargs["subagents"] == []
     assert kwargs["name"] == MAIN_AGENT_NAME
     assert kwargs["permissions"] == [
         FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny")
+    ]
+    assert isinstance(kwargs["response_format"], ToolStrategy)
+    assert PHILIPS_WORKFLOW_PROMPT in kwargs["system_prompt"]
+
+    with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
+        DeepAgentsBrainFactory(model="anthropic:test").create(
+            resources=resources,
+            middleware=[],
+            tools=[],
+            workflow=None,
+        )
+    assert "response_format" not in create.call_args.kwargs
+    assert [spec["name"] for spec in create.call_args.kwargs["subagents"]] == [
+        spec["name"] for spec in specs
     ]
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -70,11 +87,11 @@ def run() -> None:
             listing = mounted.backend.ls("/skills/")
             assert listing.error is None
             paths = {entry["path"].rstrip("/") for entry in listing.entries}
-            assert "/skills/philipswgqimport" in paths
+            assert "/skills/philipswgqinboundrecognition" in paths
             assert "/skills/tecanimport" in paths
-            skill = mounted.backend.read("/skills/philipswgqimport/SKILL.md")
+            skill = mounted.backend.read("/skills/philipswgqinboundrecognition/SKILL.md")
             assert skill.error is None and skill.file_data is not None
-            assert "philips-wgq-import" in skill.file_data["content"]
+            assert "philips-wgq-inbound-recognition" in skill.file_data["content"]
 
     # _update_events turns an `updates`-mode node diff into tool_execution /
     # assistant_message events. Two tool calls on one assistant message -> two
@@ -86,7 +103,7 @@ def run() -> None:
             {
                 "id": f"task-call-{name}",
                 "name": "task",
-                "args": {"subagent_type": f"philips-wgq-extractor-{name}", "description": "go"},
+                "args": {"subagent_type": f"tecan-extractor-{name}", "description": "go"},
             }
             for name in ("a", "b")
         ],

@@ -76,6 +76,14 @@ def _check_model_env_loading(tmp: str) -> None:
         assert factory.model.thinking == {"type": "adaptive"}
         assert factory.model.anthropic_api_key.get_secret_value() == "test-key"
         assert factory.model.anthropic_api_url == "https://minimax.example/anthropic"
+        with patch("runtime.agent.create_deep_agent", return_value=object()) as create:
+            factory.create(
+                resources=SimpleNamespace(backend=object(), checkpointer=object(), store=object()),
+                middleware=[],
+                tools=[],
+                workflow="philips_wgq_inbound_recognition",
+            )
+        assert create.call_args.kwargs["model"].thinking is None
 
 
 def _check_tool_telemetry_middleware() -> None:
@@ -228,7 +236,7 @@ def _check_harness(tmp: str) -> None:
         assert agg["cache_read_input_tokens"] == 600 + 50
         assert agg["cache_creation_input_tokens"] == (200 + 50 + 30) + 10
         assert agg["by_agent"][("main_agent", "dsagents-main")]["model_calls"] == 1
-        assert agg["by_agent"][("subagent", "philips-wgq-extractor-a")]["model_calls"] == 1
+        assert agg["by_agent"][("subagent", "tecan-extractor-a")]["model_calls"] == 1
 
         again_messages = [user_message(text_block("again"))]
         resources.runs.create_run("run-h2", "thread-a", messages_json(again_messages))
@@ -262,7 +270,65 @@ def _check_harness(tmp: str) -> None:
         assert fail_agg is not None
         # The subagent chunk is yielded before the "fail" raise, so its usage is kept.
         assert fail_agg["model_calls"] == 1
-        assert fail_agg["by_agent"][("subagent", "philips-wgq-extractor-a")]["model_calls"] == 1
+        assert fail_agg["by_agent"][("subagent", "tecan-extractor-a")]["model_calls"] == 1
+
+        workflow_messages = [user_message(text_block("workflow success"))]
+        resources.runs.create_run(
+            "run-workflow",
+            "thread-workflow",
+            messages_json(workflow_messages),
+            workflow="philips_wgq_inbound_recognition",
+        )
+        workflow_events = list(
+            harness.execute_run(
+                workflow_messages,
+                "thread-workflow",
+                "run-workflow",
+                workflow="philips_wgq_inbound_recognition",
+            )
+        )
+        workflow_snapshot = resources.runs.get_run("run-workflow")
+        assert workflow_snapshot.status == "succeeded"
+        assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
+        assert workflow_snapshot.result["data"]["header"]["原运单号"] == "9198153694"
+        assert workflow_events[-1].payload["result"] == workflow_snapshot.result
+
+        input_problem_messages = [user_message(text_block("input problems"))]
+        resources.runs.create_run(
+            "run-input-problems",
+            "thread-input-problems",
+            messages_json(input_problem_messages),
+            workflow="philips_wgq_inbound_recognition",
+        )
+        list(
+            harness.execute_run(
+                input_problem_messages,
+                "thread-input-problems",
+                "run-input-problems",
+                workflow="philips_wgq_inbound_recognition",
+            )
+        )
+        assert resources.runs.get_run("run-input-problems").status == "succeeded"
+        assert resources.runs.get_run("run-input-problems").result["outcome"] == "input_problems"
+
+        missing_messages = [user_message(text_block("missing structured"))]
+        resources.runs.create_run(
+            "run-missing-structured",
+            "thread-missing-structured",
+            messages_json(missing_messages),
+            workflow="philips_wgq_inbound_recognition",
+        )
+        list(
+            harness.execute_run(
+                missing_messages,
+                "thread-missing-structured",
+                "run-missing-structured",
+                workflow="philips_wgq_inbound_recognition",
+            )
+        )
+        missing_snapshot = resources.runs.get_run("run-missing-structured")
+        assert missing_snapshot.status == "failed"
+        assert "structured_response missing" in missing_snapshot.error
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from runtime.agent import BrainFactory, NoProgressLoop, runtime_middlewares
 from runtime.resources import AgentResources
 from runtime.runs import RunEvent
 from runtime.tools import ToolCatalog
+from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
 
 
 ARTIFACT_REFERENCE_HINT = (
@@ -32,10 +33,16 @@ class HarnessRuntime:
         self.run_controls: dict[str, RunControl] = {}
 
     def execute_run(
-        self, messages: Sequence[dict[str, Any]], session_id: str, run_id: str
+        self,
+        messages: Sequence[dict[str, Any]],
+        session_id: str,
+        run_id: str,
+        workflow: str | None = None,
     ) -> Iterator[RunEvent]:
         assistant_text = ""
         text_parts: list[str] = []
+        result: dict[str, Any] | None = None
+        structured_response: Any = None
         normalized_messages = _normalize_messages(messages)
         yield self.resources.runs.emit_run_status(run_id, "running")
         control = RunControl()
@@ -45,6 +52,7 @@ class HarnessRuntime:
                 resources=self.resources,
                 middleware=runtime_middlewares(),
                 tools=self.tools.as_list(),
+                workflow=workflow,
             )
             for chunk in brain.stream(
                 {"messages": normalized_messages},
@@ -99,12 +107,22 @@ class HarnessRuntime:
                             run_id, "tool_execution", payload, raw=chunk
                         )
                 elif kind == "updates":
+                    candidate = _structured_response(data)
+                    if candidate is not None:
+                        structured_response = candidate
                     for event_type, payload in _update_events(data):
                         if event_type == "assistant_message" and payload.get("text"):
                             assistant_text = payload["text"]
                         yield self.resources.runs.emit_run_event(
                             run_id, event_type, payload, raw=chunk
                         )
+            if workflow == WORKFLOW:
+                if structured_response is None:
+                    raise ValueError("structured_response missing for philips_wgq_inbound_recognition")
+                result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
+                    mode="json",
+                    by_alias=True,
+                )
         except GraphDrained:
             yield self.resources.runs.emit_run_status(
                 run_id, "cancelled", error="run cancelled", raw={"status": "cancelled"}
@@ -135,7 +153,8 @@ class HarnessRuntime:
             run_id,
             "succeeded",
             reply=assistant_text,
-            raw={"status": "succeeded", "reply": assistant_text},
+            result=result,
+            raw={"status": "succeeded", "reply": assistant_text, "result": result},
         )
 
     def request_cancel(self, run_id: str) -> bool:
@@ -211,6 +230,15 @@ def _update_events(data: Any) -> Iterator[tuple[str, dict[str, Any]]]:
             assistant_payload = observability.assistant_message_payload(message, tool_calls=tool_calls)
             if assistant_payload is not None:
                 yield "assistant_message", assistant_payload
+
+
+def _structured_response(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return None
+    for node_value in data.values():
+        if isinstance(node_value, dict) and node_value.get("structured_response") is not None:
+            return node_value["structured_response"]
+    return None
 
 
 def _message_role(message: Any) -> str | None:

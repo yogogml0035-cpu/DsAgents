@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Codebase Structure
 
-**Analysis Date:** 2026-07-14
+**Analysis Date:** 2026-07-15
 
 > 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。
 
@@ -29,17 +29,13 @@ backend/
 │   └── mineru.py                       # parse_documents / extract_archives
 ├── skills/
 │   ├── __init__.py
-│   ├── philipswgqimport/               # Philips 外高桥进境 Skill
+│   ├── philipswgqinboundrecognition/   # Philips 外高桥进境结构化识别 Skill
 │   │   ├── __init__.py
 │   │   ├── SKILL.md
-│   │   ├── references/
-│   │   │   ├── fields.md
-│   │   │   └── rules.md
-│   │   ├── assets/                     # Excel 模板
+│   │   ├── schema.py                   # Pydantic 响应合同
 │   │   └── scripts/
 │   │       ├── __init__.py
-│   │       ├── tools.py                # save_* + generate_* 业务 Tool
-│   │       └── documents.py            # openpyxl 写入器
+│   │       └── tools.py                # Tracking/Oracle 单一主数据 Tool
 │   └── tecanimport/                    # Tecan 帝肯进口 Skill
 │       ├── __init__.py
 │       ├── SKILL.md
@@ -59,8 +55,9 @@ backend/
 │   ├── test_run_ledger.py
 │   ├── test_tools.py
 │   ├── test_workflow_setup.py
-│   ├── test_philips_wgq_import.py
+│   ├── test_philips_wgq_inbound_recognition.py
 │   ├── test_tecan_import.py
+│   ├── test_real_philips_wgq_inbound_recognition.py
 │   ├── test_real_image_run.py          # 真实集成（env 守卫）
 │   ├── test_real_multi_pdf_run.py
 │   ├── test_minimax_cache_baseline.py
@@ -88,7 +85,7 @@ backend/
 | `backend/runtime/` | 运行时核心：执行、资源、事件账本、工具目录、Brain 装配、可观测提取 |
 | `backend/integrations/` | 与外部系统/路径契约的通用能力（artifact FS、MinerU HTTP），不含业务裁决 |
 | `backend/skills/` | 内置 Agent Skills：指令（`SKILL.md`）、字段/规则参考、模板、可调用 scripts |
-| `backend/skills/*/scripts/` | 业务 Tool 与 Excel 生成；由 `runtime/tools.py` 静态 import |
+| `backend/skills/*/scripts/` | 业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
 | `backend/tests/` | 可执行 assert 脚本与 `FakeBrain` 替身；真实集成脚本与本地回归分文件 |
 | `backend/tests/tests_file/` | 手工/集成用样例文件 |
 | `backend/data/` | 固定数据根（`ResourceConfig`，与 CWD 无关）：三库 + artifacts + 事件 spill |
@@ -97,15 +94,15 @@ backend/
 
 ### Skill 目录角色
 
-每个 Skill 目录名同时满足 Agent Skill 名与 Python 包标识符（无连字符），故可直接 `from skills.philipswgqimport...` 与 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载，无需动态 loader。
+Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skills=[SKILLS_SOURCE]` 挂载到 `/skills/`；无动态 loader。Philips 包目录为 `philipswgqinboundrecognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`。
 
 | 子路径 | 角色 |
 |--------|------|
-| `SKILL.md` | 主 Agent 可读的适用场景与 A/B/C 流程指令 |
-| `references/` | 字段与规则详述（Agent 按需读取） |
-| `assets/` | 只读 Excel 模板（随 wheel `package-data` 打包） |
-| `scripts/tools.py` | 暴露给模型的业务 Tool（每 Skill 2 个） |
-| `scripts/documents.py` | 模板填充/行插入等写入实现，一般不直接注册为 Tool |
+| `SKILL.md` | 主 Agent 可读的领域流程；Philips 只有一份专用提示词 |
+| `schema.py` | Philips 固定 Pydantic 结构化响应合同 |
+| `references/` / `assets/` | 仅 Tecan 保留字段参考与 Excel 模板 |
+| `scripts/tools.py` | 暴露给模型的业务 Tool；Philips 1 个、Tecan 2 个 |
+| `scripts/documents.py` | 仅 Tecan 的模板写入实现，不直接注册为 Tool |
 
 ## Key File Locations
 
@@ -134,8 +131,8 @@ backend/
 | 静态工具注册 | `backend/runtime/tools.py` |
 | MinerU | `backend/integrations/mineru.py` |
 | artifact 路径安全 | `backend/integrations/artifacts.py` |
-| Philips 业务 | `backend/skills/philipswgqimport/scripts/tools.py` |
-| Philips Excel | `backend/skills/philipswgqimport/scripts/documents.py` |
+| Philips 响应合同 | `backend/skills/philipswgqinboundrecognition/schema.py` |
+| Philips 主数据工具 | `backend/skills/philipswgqinboundrecognition/scripts/tools.py` |
 | Tecan 业务 | `backend/skills/tecanimport/scripts/tools.py` |
 | Tecan Excel | `backend/skills/tecanimport/scripts/documents.py` |
 
@@ -146,9 +143,10 @@ backend/
 | HTTP 契约 / cancel / usage | `backend/tests/test_api.py` |
 | harness / middleware / 事件序列 | `backend/tests/test_harness.py` |
 | ledger / spill / 聚合 | `backend/tests/test_run_ledger.py` |
-| 六工具注册与 MinerU mock | `backend/tests/test_tools.py` |
+| 五工具注册与 MinerU mock | `backend/tests/test_tools.py` |
 | SubAgent / middleware 装配 | `backend/tests/test_workflow_setup.py` |
-| 业务生成形状 | `backend/tests/test_philips_wgq_import.py`、`test_tecan_import.py` |
+| 业务合同/生成形状 | `backend/tests/test_philips_wgq_inbound_recognition.py`、`test_tecan_import.py` |
+| Philips 真实 HTTP 样例 | `backend/tests/test_real_philips_wgq_inbound_recognition.py` |
 | 替身 | `backend/tests/test_support.py` |
 
 ### 业务 Tool → 模块映射
@@ -157,8 +155,7 @@ backend/
 |--------------|----------|
 | `parse_documents` | `integrations/mineru.py` |
 | `extract_archives` | `integrations/mineru.py` |
-| `save_philips_wgq_extraction` | `skills/philipswgqimport/scripts/tools.py` |
-| `generate_philips_wgq_import` | `skills/philipswgqimport/scripts/tools.py` |
+| `lookup_philips_wgq_master_data` | `skills/philipswgqinboundrecognition/scripts/tools.py` |
 | `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` |
 | `generate_tecan_import` | `skills/tecanimport/scripts/tools.py` |
 
@@ -172,8 +169,8 @@ backend/
   - `from runtime import AgentResources, create_harness`
   - `from runtime.runs import SqliteRunLedger, RunEvent`
   - `from integrations.artifacts import resolve_artifact_path, write_json_artifact`
-  - `from skills.philipswgqimport.scripts.tools import generate_philips_wgq_import`
-- Skill 目录名：小写无连字符 Python 包名（`philipswgqimport`、`tecanimport`），与 workflow 字符串（如 `philips-wgq-import`）区分。
+  - `from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult`
+- Skill 目录名：小写无连字符 Python 包名（`philipswgqinboundrecognition`、`tecanimport`）；Philips HTTP workflow 使用下划线常量 `philips_wgq_inbound_recognition`。
 
 ### 标识符风格
 
@@ -186,7 +183,7 @@ backend/
 | frozen dataclass | PascalCase | `RunEvent`、`ToolCatalog`、`ResourceConfig` |
 | Protocol | PascalCase 能力名 | `Brain`、`BrainFactory` |
 | 工具函数名 | snake_case，即模型可见名 | `parse_documents`、`generate_tecan_import` |
-| SubAgent `name` | kebab-case | `philips-wgq-extractor-a`、`tecan-extractor-b` |
+| SubAgent `name` | kebab-case | `tecan-extractor-a`、`tecan-extractor-b`；Philips 无 SubAgent |
 | 主 Agent `name` | `dsagents-main`（`MAIN_AGENT_NAME`） | |
 | 虚拟路径 | POSIX `/artifacts/...`、`/skills/`、`/memories/` | |
 | 事件 type 字符串 | snake_case | `tool_execution`、`model_usage`、`assistant_message` |
@@ -215,8 +212,8 @@ backend/
 | 新 middleware | `runtime/agent.py` + `runtime_middlewares()` | SubAgent 需各自注入实例 |
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
-| 新业务 Skill | `skills/<packagename>/`：`SKILL.md` + `references/` + `assets/` + `scripts/` | 目录名须合法 Python 包名；`pyproject.toml` `package-data` 增加资源；`tools.py` 注册进 `default_tool_catalog()` |
-| 新 extractor SubAgent | `workflow_subagents()` / `_extractor` | 自装 middleware；工具与权限最小化 |
+| 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |
+| 新 extractor SubAgent | `workflow_subagents()` / `_extractor` | 仅真实需要投票抽取时增加；自装 middleware |
 | 改持久化路径/后端路由 | `ResourceConfig` / `AgentResources.__enter__` | 三库职责勿混 |
 | 改 run 事件 schema | `runtime/runs.py` | fresh schema 无迁移；破坏性变更需清库策略 |
 | 本地回归测试 | `tests/test_*.py` + `test_support.py` | assert 脚本；`python -m tests.<module>` |
@@ -225,20 +222,20 @@ backend/
 
 ### 新增 Skill 最小清单
 
-1. 创建 `skills/<name>/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools,documents}.py`）。
+1. 创建 `skills/<name>/`，只加入本 Skill 实际需要的 `SKILL.md`、schema、scripts 或 assets。
 2. 在 `runtime/tools.py` 的 `default_tool_catalog()` 静态 import 并注册 Tool。
-3. 若需 A/B 抽取，在 `workflow_subagents()` 增加声明式 SubAgent。
+3. 仅当业务明确需要独立抽取器时，在 `workflow_subagents()` 增加声明式 SubAgent。
 4. `pyproject.toml` `[tool.setuptools.package-data]` 声明 `SKILL.md` / `references/*` / `assets/*`。
-5. 增加 `tests/test_<skill>.py` 覆盖 `input_problems` 形状与代表性工作簿输出。
+5. 增加 `tests/test_<skill>.py` 覆盖合同与领域规则；真实依赖另放 env 守卫脚本。
 6. 刷新 `.planning/codebase/` 相关事实文档。
 
 ### 不要放在哪里
 
-- 不要在 `api.py` 写业务裁决或 Excel 逻辑。
+- 不要在 `api.py` 写业务裁决或 Excel 逻辑；固定 workflow 字段校验和路由透传属于 HTTP 契约。
 - 不要在 `execution.py` 解析业务字段；只转发事件。
 - 不要新增 session 表或 SSE 通道替代 run 轮询（除非产品契约整体变更）。
 - 不要引入动态 Skill 扫描器替代 `default_tool_catalog()` 静态注册。
 - 不要把密钥或 `.env` 内容写入文档或测试断言字符串。
 
 ---
-*Structure analysis: 2026-07-14*
+*Structure analysis: 2026-07-15*
