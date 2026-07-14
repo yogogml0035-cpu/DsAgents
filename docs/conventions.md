@@ -10,8 +10,9 @@
 - **保持运行时薄**：提交 run、驱动 Brain、规范化 stream chunk、写回 run 事件。在真实 caller 需要前，不增加服务层、策略框架、工作流引擎、容器或宽泛的安全/配置系统。
 - **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
 - **简单性约束**：优先删减范围而非增加旋钮。
+- **源码顶层布局稳定**：产品代码落在 `backend/` 的 `api.py` + `runtime/` + `integrations/` + `skills/`；业务逻辑归属对应 Skill 包，不要再引入已删除的顶层辅助模块或 `backend/dsagents/` 包壳。
 
-> 完整阐述与"为什么"见 `ARCHITECTURE.md` §5（关键约束/当前风险）与 `backend/.planning/codebase/ARCHITECTURE.md`（内部架构与核心运行时原则）。
+> 完整阐述与“为什么”见根级 `ARCHITECTURE.md` §5（run-first 执行模型）与 §7（系统级风险），以及 `backend/.planning/codebase/ARCHITECTURE.md`（内部架构与核心运行时原则）。
 
 ## 维护规则
 
@@ -19,5 +20,15 @@
 - **改代码后同步事实层**：修改 `backend/` 实现后，先更新对应事实文档，再视影响回看 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`。
 - **文档用简体中文**：保留代码标识符、文件路径、命令、配置键、API 名称、IP/端口原文。
 - **不外泄密钥**：文档不写入任何密钥 / token / 连接串。
-- **证据不足标注**：用"需确认 / 初步判断"表达，不写成硬规则。
-- **新增部署依赖须同步风险**：新增运行时/部署依赖（如外部客户端库、系统级组件）时，必须把对应的部署前提、缺失时的降级行为、验证步骤同步到 `backend/.planning/codebase/CONCERNS.md`（Oracle thick client 即为范例，见该文件 §8），并在根级 `ARCHITECTURE.md` §7 风险清单同步一条系统级条目。
+- **证据不足标注**：用“需确认 / 初步判断”表达，不写成硬规则。
+- **新增部署依赖须同步风险**：新增运行时/部署依赖（如外部客户端库、系统级组件）时，必须把对应的部署前提、缺失时的降级行为、验证步骤同步到 `backend/.planning/codebase/CONCERNS.md`（Oracle thick client 见该文件 **Operational Risks** / **External Dependency Risks**），并在根级 `ARCHITECTURE.md` §7 风险清单同步一条系统级条目。
+
+## 仍成立的开发约定（来自分支落地）
+
+以下约定已在当前代码中稳定成立，修改相关面时优先遵守：
+
+- **工具静态注册**：新业务工具写入对应 Skill 的 `scripts/tools.py`，并在 `runtime/tools.py` 的 `default_tool_catalog()` 显式注册；不要做目录扫描或动态 loader。
+- **事件 schema 固定 7 类**：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`。不要重新引入已删除的 `tool_call` / `tool_status` / `tool_result`。
+- **artifact 路径显式传递**：HTTP 与 Skill 边界使用 `/artifacts/...`；生成文件唯一命名、不覆盖输入。业务问题统一 `input_problems`，跨 run 不隐式恢复中间态。
+- **进程内边界**：同 `session_id` 单飞锁、`run_controls` cancel 字典均为进程内；多 worker 不提供跨进程互斥或强杀。
+- **SQLite 三库分离**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 互不共享连接；新 schema 无迁移，部署切换需整目录一致清空或替换。

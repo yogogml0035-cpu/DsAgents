@@ -1,13 +1,15 @@
 # 项目总览
 
-> 本文件承接 AGENTS.md 的详细说明（当前重点、技术栈指针、源码阅读入口）。项目定位、关键约定（`uv` 包管理、发行包 `dsagents`（源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`）、无 `from session import run_session`）见 [`AGENTS.md`](../AGENTS.md)。
+> 本文件承接 AGENTS.md 的详细说明（当前重点、技术栈指针、源码阅读入口）。项目定位、关键约定见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 当前重点
 
 - 对话短期上下文：LangGraph `checkpointer` + `thread_id=session_id`
-- 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建；新 schema 使用 UTC ISO-8601 毫秒时间
-- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`，启动 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`
+- 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建；新 schema 使用 UTC ISO-8601 毫秒时间；三库互不共享连接
+- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`；启动 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`；无 SSE、无鉴权/CORS
+- 事件：7 类规范化事件；`GET /runs/{run_id}` 返回快照、增量 events、`latest_content_event` 与 `usage`
 - 业务能力：Philips 外高桥与 Tecan 进口 Skills；每个 Skill 仅暴露 `save_*_extraction` + `generate_*_import` 两个 Tool，业务问题统一 `input_problems`
+- 源码布局：`api.py` + `runtime/` + `integrations/` + `skills/`（发行名 `dsagents`）
 
 ## 技术栈指针
 

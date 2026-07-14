@@ -6,18 +6,49 @@
 cd backend
 uv sync
 ```
-## 测试脚本
+
+不要用 `pip install -e .` 绕过 `uv.lock`。
+
+## 本地回归测试（FakeBrain / mock，默认门禁）
 
 ```powershell
 cd backend
+python -m tests.test_tools
+python -m tests.test_run_ledger
+python -m tests.test_harness
 python -m tests.test_api
+python -m tests.test_workflow_setup
+python -m tests.test_philips_wgq_import
+python -m tests.test_tecan_import
 ```
 
-backend 测试统一放在 `backend/tests/test_*.py`。业务工作流改动运行 `test_workflow_setup`、`test_philips_wgq_import`、`test_tecan_import`，并复跑 `test_tools`、`test_harness`、`test_api`；真实外部集成脚本保持独立。
+backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚本方式运行（**非 pytest**）。必须使用 `python -m tests.<name>`，不要直接 `python tests/test_xxx.py`（绝对顶层导入会失败）。
 
-`python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机的本地 assert 脚本。
+业务工作流改动至少覆盖 `test_workflow_setup`、`test_philips_wgq_import`、`test_tecan_import`，并复跑 `test_tools`、`test_harness`、`test_api`。
 
-真实图片 HTTP / 模型集成脚本默认跳过；只有显式设置 `DSAGENTS_RUN_REAL_IMAGE_TEST=1` 时才触达真实服务。
+`python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机与 usage 聚合的本地 assert 脚本。
+
+## 真实外部集成（默认跳过，不进普通门禁）
+
+真实图片 HTTP / 模型集成：
+
+```powershell
+$env:DSAGENTS_RUN_REAL_IMAGE_TEST="1"
+python -m tests.test_real_image_run
+```
+
+真实多 PDF + MinerU：
+
+```powershell
+$env:DSAGENTS_RUN_REAL_MULTI_PDF_TEST="1"
+python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
+```
+
+MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）：
+
+```powershell
+python -m tests.test_minimax_cache_baseline
+```
 
 ## 启动 HTTP
 
@@ -46,7 +77,7 @@ curl -X POST http://127.0.0.1:8500/runs ^
 curl "http://127.0.0.1:8500/runs/<run_id>"
 ```
 
-轮询增量事件时可加 `?after_event_id=<event_id>`；该游标只影响返回的 `events[]`，不影响 `latest_content_event`。
+轮询增量事件时可加 `?after_event_id=<event_id>`；该游标只影响返回的 `events[]`，不影响 `latest_content_event` 与顶层 `usage`。
 
 取消一个活跃 run：
 
@@ -60,7 +91,7 @@ curl -X POST http://127.0.0.1:8500/runs/<run_id>/cancel
 
 ## 程序内调用
 
-仓库不再提供 `from session import run_session`。
+仓库不再提供 `from session import run_session`，也不再提供顶层 `from harness import ...` 等旧导入。
 
 如需程序内调用，用：
 
@@ -93,4 +124,10 @@ with AgentResources(ResourceConfig()) as resources:
     )
     for _event in harness.execute_run(messages, "session-id", run.run_id):
         pass
+```
+
+## 仅文档变更
+
+```powershell
+git diff --check
 ```

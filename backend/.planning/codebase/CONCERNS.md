@@ -1,190 +1,316 @@
-# CONCERNS
+---
+last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
+analysis_date: 2026-07-14
+scope: backend/
+---
 
-> backend 风险、技术债、关注点。每条均带证据（文件 / 配置 / 行为）。状态分 **已确认**（代码或配置可证）与 **需确认**（推断，需人工核实）。
-> 本轮刷新（2026-07-13）已核对当前工作树（`backend/` 顶层源码、`tests/`、`pyproject.toml`）。结论以源码为准。
+# Codebase Concerns
 
-## 一、技术债
+**Analysis Date:** 2026-07-14
 
-### 1.1 定价常量硬编码（已确认）
+> backend 技术债、风险与脆弱点。每条均带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对工作树：`api.py`、`runtime/`、`integrations/`、两个内置 Skill、`tests/`、`pyproject.toml`。不读取 `.env`，不记录任何密钥或连接串值。
 
-`api.py`：`PRICING_AS_OF`（当前 `"2026-07-12"`）、`_TIER_THRESHOLD_INPUT_TOKENS = 512 * 1024`、`_PRICING_TIERS`（standard / long_context 两档 CNY/M）、`_PRICEABLE_MODELS = {"MiniMax-M3"}` 全部硬编码，未做配置中心。MiniMax 调价或新增模型时需手动改代码并更新 `PRICING_AS_OF` 日期。任一调用不可计价 → 整 run 金额 `null`，不输出系统性偏低的部分金额，token 仍完整。
+## Tech Debt
 
-### 1.2 stream chunk 形状无版本契约（已确认，风险）
+### 1. 定价常量硬编码（已确认）
 
-`runtime/execution.py` 与 `runtime/observability.py` 大量依赖 chunk 字段形状：
+- **问题**：`api.py` 中 `PRICING_AS_OF`（`"2026-07-12"`）、`_TIER_THRESHOLD_INPUT_TOKENS = 512 * 1024`、`_PRICING_TIERS`（standard / long_context 两档 CNY/M）、`_PRICEABLE_MODELS = {"MiniMax-M3"}` 全部写死在源码。
+- **影响**：MiniMax 调价、新增模型或改 tier 阈值时必须改代码并同步 `PRICING_AS_OF`。任一调用模型不在可计价集合 → 整 run 的 `estimated_cost_cny` / `estimated_savings_cny` 为 `null`（token 计数仍完整）。
+- **修复方向**：外置定价配置（文件或 env JSON），并保留「不可计价则金额 null」语义；测试继续覆盖 unpriceable / zero-input 分支。
 
-- `chunk["type"]` ∈ `messages` / `custom` / `updates`。
-- `event` 后缀 `delta`；`thinking` / `reasoning` / `non_standard` block 类型。
-- snapshot 中 `message.id` / `tool_call_id` / `tool_calls[]` 形状。
-- `usage_metadata` / `input_token_details` / `ephemeral_5m_input_tokens` 形状。
-- SubAgent 识别依赖 `lc_agent_name` metadata 与 `MAIN_AGENT_NAME` 常量。
+### 2. stream chunk 形状无版本契约（已确认）
 
-依赖下限在 `pyproject.toml`：`deepagents>=0.6.12`、`langchain>=1.3.11`、`langchain-anthropic>=1.4.8`、`langgraph>=1.2.7`，均为 `>=` 无上限，`uv.lock` 锁具体版本。任一主版本升级可能破坏 stream chunk 解析，且这些形状是 langchain/deepagents 内部约定，无公开契约保护。
+- **问题**：`runtime/execution.py` 与 `runtime/observability.py` 依赖 langchain / deepagents 内部 chunk 约定：
+  - `chunk["type"]` ∈ `messages` / `custom` / `updates`
+  - `thinking` / `reasoning` / `non_standard` block 与 `usage_metadata` / `input_token_details` / `ephemeral_*_input_tokens`
+  - SubAgent 识别靠 `lc_agent_name` 与 `MAIN_AGENT_NAME`
+- **证据**：`pyproject.toml` 依赖均为 `>=` 无上限（`deepagents>=0.6.12`、`langchain>=1.3.11`、`langgraph>=1.2.7` 等），具体版本仅靠 `uv.lock`。
+- **影响**：主版本或次版本升级可能静默破坏事件解析、usage 统计或 subagent 文本过滤。
+- **修复方向**：升级前用 `tests/test_harness.py` + `FakeBrain` 契约做回归；评估对关键包加上限或锁定策略；关键字段解析加防御性默认值。
 
-### 1.3 错误透传无护栏（已确认）
+### 3. MiniMax 强绑 Anthropic 客户端协议（已确认）
 
-- `runtime/execution.py` 捕获异常后把 `error` 写入 run status，`repr(exc)` 写入 `raw`。
-- `api.py` 的 `_ensure_failed_run` 同样透传错误文本，HTTP 层不包装、不脱敏。
-- **风险**：真实错误（含 provider 4xx/5xx body、MinerU 内网地址、Oracle 连接串、文件路径）会原样落到 `runs.error` 与 `run_events.raw`，进而可能暴露给前端调用方；约定是「调用方自行处理」，但无护栏。
+- **问题**：`runtime/agent.py` 的 `DeepAgentsBrainFactory` 使用 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})`；模块导入时 `register_harness_profile("anthropic", ...)` 禁用 general-purpose SubAgent。
+- **影响**：换 provider / 改 profile 名时，可能自动多出第五个 SubAgent，或 `thinking` / prompt-cache 中间件行为变化。
+- **修复方向**：Brain 工厂参数化 provider profile；切换模型时显式回归 `workflow_subagents()` 数量与 cache 中间件行为。
 
-### 1.4 provider 耦合：MiniMax 强绑 Anthropic 客户端（已确认）
+### 4. 持久化只增不删，无 TTL / 归档（已确认）
 
-`runtime/agent.py` 把 MiniMax（Anthropic 兼容）配置传入：
+- **问题**：
+  - `runtime/runs.py` 无 delete / truncate / vacuum；`runs` / `run_events` 只追加。
+  - 大 payload spill（`max_inline_bytes=262_144`）落 `data/internal/run-events/`，只增不删。
+  - 业务 JSON/Excel 与 MinerU 产物落 `data/artifacts/downloads/`，只增不改、无 registry。
+- **影响**：高频运行磁盘持续增长；`raw` chunk 长期保留模型与错误细节。
+- **修复方向**：部署侧定期归档/清理策略；可选按 `created_at` 的保留窗口与 spill 文件 GC。
 
-```python
-init_chat_model(
-    f"anthropic:{os.getenv('MINIMAX_MODEL')}",
-    api_key=os.getenv("MINIMAX_API_KEY"),
-    base_url=os.getenv("MINIMAX_BASE_URL"),
-    thinking={"type": "adaptive"},
-)
-```
+### 5. fresh schema、无迁移（已确认）
 
-强耦合 Anthropic 客户端协议与 `thinking` 参数。`register_harness_profile("anthropic", ...)` 是进程级全局行为且只覆盖 `anthropic` profile。若将默认模型改成其它 provider，需重新核对是否会自动多出 general-purpose SubAgent；不要假设当前四个 extractor 配置自动跨 provider 等价。
+- **问题**：`SqliteRunLedger._setup` 仅 `create table if not exists`，无 `pragma user_version` / `_migrate`。
+- **影响**：schema 变更不能就地升级旧库；旧扁平架构时期的库直接复用会导致读端解析失败。
+- **修复方向**：部署切换时停服务并整体清空 `backend/data/`（三库 + artifacts + internal）；若需在线升级，再引入显式迁移。
 
-### 1.5 持久化只增不删，无 TTL/归档（已确认）
+### 6. 无 CI 门禁与静态检查配置（已确认）
 
-- `dsagents_runs.db` 的 `runs` / `run_events` 表无清理方法（`runtime/runs.py` 全文无 delete/truncate/vacuum）。
-- `data/internal/run-events/` 的大 payload spill 文件（阈值 `max_inline_bytes=262_144`）只增不删。
-- 业务 JSON/Excel artifact 落在 `data/artifacts/downloads/`，只增不改且无 registry/清理策略。
-- 高频运行会持续增长磁盘占用，生命周期由部署方管理。raw chunk 长期留存（调试有利但占空间且保留模型/错误细节）。
+- **问题**：`pyproject.toml` 无 `[tool.pytest...]` / coverage / ruff / mypy / black；回归靠 `python -m tests.test_xxx` 人工选择。
+- **影响**：未强制的脚本易被漏跑；真实集成脚本与本地脚本同目录，误用风险见 Testing Gaps。
+- **修复方向**：CI 固定跑本地 7 个 assert 脚本；真实集成单独 job + env 开关。
 
-### 1.6 无 CI 自动化测试断言（已确认）
+## Known Bugs / Fragile Behavior
 
-- 本地测试脚本：`test_api` / `test_harness` / `test_run_ledger` / `test_tools` / `test_workflow_setup` / `test_philips_wgq_import` / `test_tecan_import`，加三个手动真实集成脚本 `test_real_image_run` / `test_real_multi_pdf_run` / `test_minimax_cache_baseline`。
-- **风险一**：真实集成脚本是手动真实 HTTP / 模型 / MinerU 调用，靠 env 守卫（`DSAGENTS_RUN_REAL_*_TEST=1`）默认关闭，但无 `pytest.mark.skipif` 等隔离标记（`pyproject.toml` 也未配置 pytest）。若误用 `pytest tests/` 全跑，会触发真实 provider 调用与外部依赖。
-- **风险二**：无 CI 可运行的自动化测试断言；回归靠人工选择并运行对应测试脚本（`cd backend && python -m tests.test_xxx`）。
+### 1. 单飞锁仅进程内有效（已确认）
 
-## 二、并发与一致性
+- **问题**：`api.py` `_acquire_session_run` 用 `app.state.session_locks: dict[str, threading.Lock]` + `registry_lock` 实现同 `session_id` 串行。
+- **影响**：`uvicorn --workers N` 或多实例时，同一 `session_id` 可跨进程并发；LangGraph `thread_id=session_id` 的 checkpointer 可能交错写入。
+- **修复方向**：单 worker 部署写死运维约束；多实例需分布式锁（或按 session 粘性路由）保护 `thread_id` 写。
 
-### 2.1 单飞锁是进程内 `threading.Lock`（已确认）
+### 2. `session_locks` 字典只增不删（已确认）
 
-`api.py` 的 `_acquire_session_run` 靠**进程内** `threading.Lock` + `dict[session_id, Lock]`（`app.state.session_locks`）：
+- **问题**：`setdefault(session_id, threading.Lock())` 永不清理；`active_runs` 在 `_release_session_run` 中 pop。
+- **影响**：内存占用通常可忽略（Lock 对象很小）；若 `session_id` 每次随机 UUID，字典无限增长。真正风险是释放逻辑 bug 导致 `active_runs` 残留 → 同 session 永久 `409`。
+- **修复方向**：可选 LRU/TTL 清理 `session_locks`；释放路径加断言/指标。
 
-- 多 worker 部署（如 `uvicorn --workers N`）时，同一 `session_id` 可在不同进程并发执行 run，锁完全失效。
-- `session_id` 在本架构中只作两个用途：LangGraph `thread_id` 与单飞锁键。
+### 3. 取消是协作 drain，非强杀（已确认）
 
-### 2.2 `session_locks` 字典只增不删（已确认）
+- **问题**：`POST /runs/{run_id}/cancel` → `RunControl.request_drain`；`execute_run` 在 chunk 间检查 `control.drain_requested` 并捕获 `GraphDrained` → `cancelled`。工具/网络阻塞期间可能长时间不回到检查点。
+- **证据**：`runtime/execution.py` `request_cancel` / `GraphDrained`；`api.py` cancel 在无 `RunControl` 时直接标 `cancelled`。
+- **影响**：卡死工具（如 MinerU 长轮询）下取消延迟；取消不回滚已写 `downloads/` 文件。
+- **修复方向**：工具层尊重超时并尽量短事务；文档明确「取消不回滚 artifacts」；可选 cancel 超时后标记 failed。
 
-每个新 `session_id` 都会在 `_acquire_session_run` 的 `setdefault` 永久残留一个 Lock 对象。**严重性低**：每个 `threading.Lock` 约几十字节，即便上千 `session_id` 也只占几十 KB。真正的风险不在内存，而在 `active_runs` 字典里残留的 `run_id` 可能因清理逻辑 bug 让同 session 的新 run 误判旧 run 仍活跃。
+### 4. daemon 线程 + 启动兜底（已确认）
 
-### 2.3 SQLite 三库各立连接，无跨库事务（已确认）
+- **问题**：`api.py` 用 `threading.Thread(..., daemon=True)` 跑 run；进程被强杀时状态可能停在 `queued`/`running`/`cancelling`。
+- **缓解**：lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 标 `failed`。
+- **影响**：强杀后需重启才纠正投影；中断瞬间前端可能看到中间态。
+- **修复方向**：保持 lifespan 兜底；运维避免 SIGKILL；可选健康检查暴露 incomplete 计数。
 
-`runtime/resources.py` 三个 db 职责明确：
+### 5. `NoProgressMiddleware` 仅为启发式（已确认）
 
-- `dsagents_runs.db` — run 与 run_events（`runtime/runs.py`，fresh schema 建表 `runs`/`run_events` + 索引）。
-- `dsagents_store.db` — LangGraph `SqliteStore`（`/memories/` 显式长期记忆路由，`namespace=("dsagents",)`）。
-- `dsagents_checkpoints.db` — LangGraph `SqliteSaver` checkpointer（`thread_id=session_id`）。
+- **问题**：`NO_PROGRESS_WINDOW = 3`；仅检测「最近 HumanMessage 之后，同一 `tool + 归一化 args` 连续 3 次」。
+- **影响**：A/B 交替失败调用不会触发；args 微调可绕过；阈值不可配置。
+- **修复方向**：可配置窗口；可选总 tool-call 上限；跨工具振荡检测。
 
-三 db 各自独立连接、无跨库事务。`SqliteRunLedger` 每次数据库操作都开短连接，高并发下锁竞争与写吞吐有限。
+### 6. 声明式 SubAgent 不继承主 Agent middleware（已确认）
 
-### 2.4 `runs.db` 无 WAL / 无 busy_timeout（已确认）
+- **问题**：`workflow_subagents()` 经 `_extractor` 显式注入 `runtime_middlewares()`（`ToolTelemetry` + `NoProgressMiddleware`）。
+- **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测。
+- **修复方向**：所有 middleware 变更只改 `runtime_middlewares()`；`tests/test_workflow_setup.py` 继续断言每个 SubAgent 自装 middleware。
 
-`runtime/runs.py _setup` 仅 `create table if not exists` + 建索引，grep 确认无 `journal_mode` / `busy_timeout` PRAGMA，也无任何 `_migrate` 迁移代码（fresh schema）：
+### 7. Oracle thick client 初始化失败被宽捕（已确认）
 
-- `dsagents_runs.db` 为默认 `delete` 模式。
-- `dsagents_checkpoints.db` 由 LangGraph `SqliteSaver` 开启 WAL（磁盘存在 `-wal`/`-shm`，生命周期由 LangGraph 管理）。
-- `dsagents_store.db` 同走 LangGraph `SqliteStore`。
+- **问题**：`skills/philipswgqimport/scripts/tools.py` 中 `_init_oracle_client` 在 `lib_dir` 有效时调用 `oracledb.init_oracle_client`；失败由 `_oracle_units` 的 `except Exception` 吞掉，返回「Oracle 查询失败」人工校验项。
+- **影响**：配置错误时业务不崩溃，但核注清单单位字段降级为「需确认…」，易被当成「正常但需人工」而非「部署错误」。
+- **修复方向**：区分「配置缺失 / client 初始化失败 / 查询未命中」三类 `manual_checks` reason，便于运维告警。
 
-**风险**：`runs.db` 的 `delete` 模式下，`emit_run_event` 在 run 执行期间高频短连接写（每个 stream chunk 一条），与读端 `get_run_events` 轮询并发时易触发 `database is locked`（SQLite 默认 5s busy timeout，本仓未显式设置 `busy_timeout`）。
+### 8. Excel 公式翻译吞异常（已确认）
 
-### 2.5 取消是协作 drain，非强杀（已确认）
+- **问题**：`skills/philipswgqimport/scripts/documents.py` `copy_sheet_row` 对 `Translator(...).translate_formula` 使用 `except Exception: pass`，失败时保留原公式字符串。
+- **影响**：复制行后公式可能指向错误单元格，工作簿表面「有公式」但计算结果错。
+- **修复方向**：失败时记录/返回人工校验项，或写死值而非静默保留坏公式。
 
-`POST /runs/{run_id}/cancel` 通过 LangGraph `RunControl` 协作式 drain，依赖 LangGraph 在自己的事件循环检查点检查 `RunControl`。`GraphDrained` 投影为 `cancelled`。若 Brain 长时间不回到检查点（例如某工具卡死），取消可能延迟生效；进程被强杀时 run 可能停在 `cancelling`，靠 lifespan 启动 `fail_incomplete_runs` 兜底（把 `queued`/`running`/`cancelling` 标 `failed`）。
+### 9. cancel 与 execute_run 启动竞态（需确认）
 
-### 2.6 run 在 daemon 线程跑，靠启动兜底（已确认）
+- **问题**：`cancel_run` 先投影 `cancelling`，再 `request_cancel`；若返回 `False`（尚无 `RunControl`）则直接 `cancelled`。同时 `_run_background` 可能刚进入 `execute_run` 注册 control。
+- **影响**：极端时序下可能出现「已 cancelled 投影」与随后 `running`/`succeeded` 事件交错（取决于 ledger 写顺序与线程调度）。
+- **修复方向**：用 ledger 状态机约束终态不可再前进；cancel 与 register control 共用同一把 per-run 锁。
 
-`api.py` 用 `threading.Thread(..., daemon=True)`。进程被强杀时，run 状态可能停在 `running`/`cancelling`，靠 lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 兜底。
+## Security
 
-## 三、安全边界
+### 1. HTTP API 无鉴权 / 无用户隔离（已确认）
 
-### 3.1 `.env` 私有配置（已确认，已缓解）
+- **问题**：`api.py` `create_app` 未注册 auth middleware；`/upload`、`/runs`、`GET /runs/{run_id}`、`/cancel` 全部匿名。
+- **影响**：任何能访问端口的客户端可上传文件、创建 run、读取任意 `run_id` 的事件与 reply/error。
+- **修复方向**：网关鉴权、mTLS 或应用层 token；run/session 与主体绑定。
 
-`.gitignore` 排除 `backend/.env`。长期文档只记录配置键与消费者，不读取、不抄录本地值；分享工作区前仍需检查私有配置和运行时数据。
+### 2. 无 CORS 配置（已确认）
 
-### 3.2 provider key 通过 `os.getenv` 直读（已确认）
+- **问题**：`api.py` 无 `CORSMiddleware`。
+- **影响**：浏览器跨域调用不会按应用策略放行（默认浏览器限制）；若前置网关另配 CORS，需与匿名 API 风险一并评估。
+- **修复方向**：若需浏览器直连，显式白名单 origin；否则保持无 CORS 并由同源网关代理。
 
-`runtime/agent.py` 用 `os.getenv("MINIMAX_API_KEY"/"MINIMAX_MODEL"/"MINIMAX_BASE_URL")` 直接构造 `init_chat_model`，无校验、无脱敏日志护栏。`integrations/mineru.py` 读取 `MINERU_*` 键（fail-fast）。Skill 的 Oracle 读取只取键且不记录值。
+### 3. `/upload` 无大小 / 类型 / 数量限制（已确认）
 
-### 3.3 `data/*.db` 含运行时数据（已确认，已缓解）
+- **问题**：`post_upload` / `_store_upload` 直接 `shutil.copyfileobj`，无 max size、MIME 白名单、单批数量上限。
+- **影响**：匿名可写下磁盘直至占满卷。文件名经 `clean_filename` / `make_timestamped_name` 处理，路径穿越风险较低。
+- **修复方向**：限制单文件与总批大小、扩展名白名单、单请求文件数；磁盘配额监控。
 
-`backend/data/dsagents_*.db` 未被 git 跟踪（`.gitignore` 含 `backend/data/`）。`input_messages_json`、`reply`、`error` 与 `run_events.raw` 会入库；上传文件本体落在 `data/artifacts/uploads/`，大 payload spill 落在 `data/internal/run-events/`。分享前需同时清理数据库与运行时文件目录。
+### 4. 错误与 raw 未脱敏落库并可能回传（已确认）
 
-### 3.4 无鉴权 / 无用户隔离（已确认）
+- **问题**：`runtime/execution.py` / `api.py` 将 `str(exc)` 写入 `error`，`repr(exc)` 写入 `raw`；`GET /runs/{run_id}` 返回事件与 run 投影。`runtime/runs.py` `_safe` 对未知对象走 `repr(value)`。
+- **影响**：provider/MinerU/Oracle/路径类错误细节可能暴露给调用方；调试有利但生产面过大。
+- **修复方向**：对外错误码 + 简短消息；完整 traceback 仅服务端日志；raw 默认不返回或按角色裁剪。
 
-`api.py` 的 `create_app` 未注册任何 auth middleware；`/runs`、`/runs/{run_id}`、`/runs/{run_id}/cancel`、`/upload` 全部匿名可调（grep 确认无 `Depends`/`Authorization`/`Authentication`）。
+### 5. provider / 集成密钥经 `os.getenv` 直读（已确认）
 
-### 3.5 CORS 未实现（已确认）
+- **问题**：`runtime/agent.py` 读 `MINIMAX_*`；`integrations/mineru.py` 读 `MINERU_*`（缺必需键 fail-fast）；Philips Oracle 读 `ORACLE_*` 且不记录值。
+- **影响**：密钥不进仓库（`.env` 应被 gitignore），但进程环境与错误文本仍可能泄漏。
+- **修复方向**：禁止把 env 值写入事件；日志只打键名。
 
-grep 在 `api.py` 中无 `CORSMiddleware`/`add_middleware` —— 浏览器跨域实际不会被处理。
+### 6. `parse_documents` 允许本地绝对路径（已确认）
 
-### 3.6 `/upload` 无大小/类型/数量限制（已确认）
+- **问题**：`integrations/mineru.py` `_resolve_document_path` 调用 `resolve_artifact_path(..., allow_local=True)`；业务 Skill 的 generator 默认 `allow_local=False`。
+- **影响**：模型若被诱导传入任意本地路径，可把主机可读文件提交给 MinerU（依赖运行用户权限）。
+- **修复方向**：生产默认关闭 `allow_local`；仅测试/程序内入口显式开启。
 
-`api.py` 的 `post_upload`/`_store_upload` 直接 `shutil.copyfileobj(file.file, handle)`，无文件大小上限、无 MIME 白名单、无单批数量上限。恶意或误操作可写满磁盘。文件名经 `clean_filename`/`make_timestamped_name` 处理，路径穿越风险较低，但体积与类型无护栏。
+### 7. 主 Agent 可写 `/artifacts/**`（已确认）
 
-## 四、易踩坑
+- **问题**：主 Agent 仅 deny 写 `/skills/**`（`runtime/agent.py` permissions）；SubAgent 全路径 write deny。
+- **影响**：主 Agent 工具链可改写 artifacts 区文件（业务产物设计为 exclusive create，但通用文件工具仍可能覆盖/写入意外路径）。
+- **修复方向**：收紧主 Agent 写权限到 `/artifacts/downloads/**` 或仅工具 API 写盘。
 
-### 4.1 声明式 SubAgent 不继承主 Agent middleware（已确认）
+## Performance
 
-`workflow_subagents()`（`runtime/agent.py`）通过 `_extractor(...)` 给每个 SubAgent **显式注入** `runtime_middlewares()`（`ToolTelemetry` + `NoProgressMiddleware`）。若未来新增 middleware 只加在主 Agent 装配处而忘了同步 `runtime_middlewares()`，SubAgent 将静默缺少该 middleware（例如缺少 no-progress 检测会让 SubAgent 死循环）。改动 middleware 列表必须同步 `runtime_middlewares()` 与所有 SubAgent。
+### 1. `runs.db` 无 WAL / 无 busy_timeout（已确认）
 
-### 4.2 `NoProgressMiddleware` 是启发式（已确认）
+- **问题**：`SqliteRunLedger` 每次操作 `sqlite3.connect(self.db_path)`，`_setup` 未设 `PRAGMA journal_mode=WAL` 或 `busy_timeout`。
+- **影响**：run 执行期间高频 `emit_run_event` 与轮询 `get_run_events` 并发时，默认 delete journal + 默认 busy 超时易出现 `database is locked`。
+- **修复方向**：连接时 `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000`（或更高）；评估长连接或写队列。
 
-`NoProgressMiddleware` 仅检测「自最近一条 `HumanMessage` 之后，同一 `tool + 归一化 args` 连续出现 `NO_PROGRESS_WINDOW=3` 次」。它的局限：
+### 2. 三库独立连接、无跨库事务（已确认）
 
-- 只看最近 3 次连续相同调用；若 Agent 在两个不同失败调用间反复横跳（A 失败 → B 失败 → A 失败 ...），不会触发。
-- 归一化 args 可能被模型微调后绕过（args 字段顺序/多余空格不同即视为不同 token）。
-- 阈值是硬编码常量，不可配置。
+- **问题**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 分属 ledger / SqliteSaver / SqliteStore（`runtime/resources.py`）。
+- **影响**：run 事件与 checkpointer 状态无法原子一致；崩溃窗口靠 `fail_incomplete_runs` 与协作 cancel 语义兜底。
+- **修复方向**：接受最终一致并文档化；避免假设「事件 succeeded ⇔ checkpoint 终态」强一致。
 
-它是兜底保险，不是完备的死循环检测。
+### 3. 事件流写放大（已确认）
 
-### 4.3 fresh-schema 部署需整体清空 `data/`（已确认）
+- **问题**：每个 stream chunk 可写 `thinking` / `text_delta` / `tool_*` / `model_usage` 等事件，且常带 `raw=chunk`；超 `max_inline_bytes` 外溢到磁盘。
+- **影响**：长思考 / 多工具 run 导致 SQLite 与 spill 目录膨胀，轮询响应变大。
+- **修复方向**：raw 采样或仅 failed 保留；合并连续 text_delta；客户端善用 `after_event_id`。
 
-`runtime/runs.py` 是 fresh schema，**无任何迁移代码**（无 `pragma user_version`、无 `_migrate`）。部署切换的正确做法是：停服务 + 整体清空 `backend/data/`（`dsagents_runs.db` / `run_events` / `dsagents_checkpoints.db` / `dsagents_store.db` / `artifacts/uploads` / `artifacts/downloads` / `internal/run-events` 全清），重启后由 `_setup` 与 LangGraph `.setup()` 重建。**不要**把旧库（尤其是旧扁平架构时期的库）直接拷贝过来——表结构/时间戳格式/事件类型均已变更，旧数据不会被迁移，只会导致读端解析失败。
+### 4. MinerU 同步轮询阻塞工具线程（已确认）
 
-### 4.4 `_safe` 把任意对象 `repr()` 落库（已确认）
+- **问题**：`integrations/mineru.py` 默认 `MINERU_POLL_INTERVAL_SECONDS = 30.0`，总超时 `MINERU_TIMEOUT_SECONDS`；在工具调用栈内同步 `requests` + sleep 轮询。
+- **影响**：占用 daemon 工作线程直至完成/超时；取消依赖协作点，轮询中可能延迟响应 cancel。
+- **修复方向**：轮询循环检查 drain 标志；缩短 interval 上限可配置；避免同进程过多并行长解析。
 
-`runtime/runs.py` 的 `_safe`：非 dict/list/标量/None 的对象一律走 `repr(value)`。若传入 `emit_run_event`/`emit_run_status` 的 `raw` 含未实现 `model_dump` 的自定义对象（如异常对象、连接对象），其 `repr`（可能含内存地址、内部字段）会原样落库。`raw=chunk` 传入的是 langchain chunk，已走 `model_dump(mode="json")` 分支，安全；但自定义传参时需注意。
+## Operational Risks
 
-### 4.5 取消不回滚已生成文件（已确认）
+### 1. Oracle thick mode 外部 Instant Client（已确认）
 
-`POST /runs/{run_id}/cancel` 只协作 drain LangGraph 图，**不回滚**已落到 `data/artifacts/downloads/` 的业务 JSON/Excel。取消后这些孤儿文件仍留在磁盘，由部署方清理。
+- **问题**：Philips Skill `_oracle_units` 依赖 `ORACLE_CLIENT_LIB_DIR` 指向本机 Instant Client；client **不在仓库**。键：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`（默认 30）。
+- **行为**：
+  - 三凭证不齐 → 跳过查询，`manual_checks` 含「Oracle 配置缺失」。
+  - client 初始化或查询异常 → 「Oracle 查询失败」，单元格写「需确认…」类 fallback。
+  - Tecan Skill **不**消费 Oracle。
+- **影响**：生产缺 Instant Client 时流程不崩，但法定单位字段质量下降。
+- **修复方向**：部署清单强制校验 client 目录与连通性探针；失败 reason 可观测。
 
-## 五、§8 Oracle thick mode 外部依赖（已确认）
+### 2. MinerU 必需环境变量 fail-fast（已确认）
 
-`skills/philipswgqimport/scripts/tools.py` 的 Oracle 单位查询通过 `oracledb` thick mode 连接 Oracle，依赖 `ORACLE_CLIENT_LIB_DIR` 环境变量指向 Oracle instant client 目录。该 instant client **不在仓库**（`.gitignore` 排除 `backend/instantclient/`）。**生产部署必须由外部提供该目录**（容器镜像挂载、主机预装等），不能依赖仓库存放。
+- **问题**：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 缺失即 `RuntimeError`；`MINERU_EFFORT` 可为 `""` 并原样提交。
+- **影响**：未配 MinerU 时文档解析工具直接失败，整 run 可能 `failed`。
+- **修复方向**：部署健康检查验证三键；文档标明 `MINERU_EFFORT` 空值语义。
 
-行为：
+### 3. MiniMax 三键缺失时模型装配失败（已确认）
 
-- `ORACLE_CLIENT_LIB_DIR` 缺失或 `oracledb.init_oracle_client(lib_dir=...)` 失败 → `_init_oracle_client` 优雅降级，不抛错，跳过法定单位查询。
-- `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` 三者齐备且 client 初始化成功才发起查询；否则跳过。
-- 查询异常也只追加人工校验项（单元格写「需确认」值）并继续生成，业务影响是核注清单缺少法定单位字段，**非崩溃**。
-- `ORACLE_TIMEOUT_SECONDS` 控制连接/调用超时，默认 30 秒。
+- **问题**：`DeepAgentsBrainFactory` 无启动期校验，`os.getenv` 可能得到 `None` 直至首次 `create`/调用。
+- **影响**：run 进入 `running` 后才失败并透传错误。
+- **修复方向**：lifespan 或工厂构造时校验 `MINIMAX_*` 非空。
 
-Tecan Skill 不消费任何 Oracle 键。
+### 4. 部署数据目录生命周期（已确认）
 
-## 六、待确认事项
+- **问题**：`ResourceConfig` 将数据固定在 `backend/data/`（与 CWD 无关）；含三 SQLite、uploads/downloads、run-events spill。
+- **影响**：备份/迁移必须整目录一致；混用旧库危险（见 Tech Debt §5）。
+- **修复方向**：运维 runbook：停服 → 备份/清空 → 启服；监控磁盘。
 
-### 6.1 `runs.db` 是否需要 WAL + busy_timeout（需确认）
+### 5. 取消与中断后的孤儿文件（已确认）
 
-是否需要在 `_setup`（`runtime/runs.py`）或连接级为 `runs.db` 设置 `PRAGMA journal_mode=WAL` 与 `PRAGMA busy_timeout=...`，以缓解写锁竞争（§2.4）？以及是否需要对 `checkpoints.db` 的 WAL 做 checkpoint/归档？
+- **问题**：cancel / fail 不删除已生成 downloads；MinerU 部分产物与业务 Excel 可能残留。
+- **影响**：磁盘泄漏与「幽灵」文件被后续 run 误引用（若调用方仍持有旧路径）。
+- **修复方向**：按 run_id 前缀命名或 registry；定期 GC 无引用文件。
 
-### 6.2 真实集成测试的隔离策略（需确认）
+## Testing Gaps
 
-`test_real_image_run.py` / `test_real_multi_pdf_run.py` / `test_minimax_cache_baseline.py` 是否需要加 `pytest.mark.manual`/`skipif` 标记或移出 `tests/` 目录，避免误用 `pytest tests/` 全跑触发真实 provider 计费与外部依赖（§1.6）？当前靠 env 守卫（`DSAGENTS_RUN_REAL_*_TEST=1`）默认关闭，但 `pyproject.toml` 未配置 pytest。
+### 1. 真实集成脚本与本地回归同目录（已确认）
 
-### 6.3 MiniMax 端点是否回传 cache token（需确认）
+- **问题**：
+  - `tests/test_real_image_run.py` / `test_real_multi_pdf_run.py`：`run()` 需 `DSAGENTS_RUN_REAL_*_TEST=1`，但 `python -m ...` 走 `main()` 会立即打真实服务。
+  - `tests/test_minimax_cache_baseline.py`：`__main__` 直接 `run()`，无 env 开关，会打真实 HTTP/MiniMax。
+- **影响**：误跑产生费用与外部副作用；`pyproject.toml` 未配置 pytest，但若引入 pytest 全收集更危险。
+- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集。
 
-库语义（usage 仅在终态 `message_delta` 一次出现）已在代码注释中说明，但真实 MiniMax 端点是否回传 `cache_read_input_tokens`/`cache_creation_input_tokens` 需 `test_minimax_cache_baseline.py` 真实跑一轮确认——缺失时这些字段为 0，不影响 input/output token，但会让 `cache_hit_rate` 恒为 `None` 或 0。
+### 2. 无自动化聚合入口（已确认）
 
-### 6.4 `session_locks` 的长期清理策略（需确认）
+- **问题**：无 `self_check` / tox / CI workflow 绑定 7 个本地脚本。
+- **影响**：局部改动易漏跑 `test_workflow_setup` 或业务 Skill 测试。
+- **修复方向**：单命令跑本地套件（非真实集成）。
 
-是否需要为 `app.state.session_locks` 加 LRU 或定期清理，避免长期运行下字典无限增长（§2.2）？当前严重性低，但若 `session_id` 由外部不可控来源生成（如前端随机 UUID 每次新建），增长会加速。
+### 3. 并发 / 多 worker / SQLite 锁压力未覆盖（已确认）
 
-### 6.5 `/upload` 是否需要体积/类型护栏（需确认）
+- **问题**：本地测试用 `TestClient` + 单进程；无多 worker、无 `runs.db` 写锁压力测试。
+- **影响**：§Performance 与 §单飞锁问题只能在部署暴露。
+- **修复方向**：可选压测脚本：同 session 冲突、跨 session 并行 emit、busy timeout。
 
-是否需要为 `/upload`（§3.6）加最大文件大小、MIME 白名单、单批数量上限？取决于部署环境是否可信（当前无鉴权，默认不可信）。
+### 4. Oracle 与 thick client 仅 fallback 断言（已确认）
 
-### 6.6 `MINERU_EFFORT` 空值提交（已确认，建议）
+- **问题**：`tests/test_philips_wgq_import.py` 在无 Oracle 配置时断言 `manual_checks` 含 `oracle_units`；无真实 DB 连通测试。
+- **影响**：SQL / Instant Client / 超时路径在 CI 不可见。
+- **修复方向**：可选标记的真实 Oracle 集成测试，与普通回归隔离。
 
-`integrations/mineru.py` 中 `effort = os.getenv("MINERU_EFFORT") or ""`，可缺省或留空，并会原样以空字符串提交到 MinerU。建议维护本地或部署环境时按 `.env.example` 的键名补齐配置；长期文档不记录本地 `.env` 的实际值。
+### 5. MiniMax cache 字段端到端需人工（需确认）
+
+- **问题**：库侧 usage 规范化已有单测；真实端点是否回传 `cache_read_input_tokens` / `cache_creation_input_tokens` 依赖 `test_minimax_cache_baseline.py` 人工跑。
+- **影响**：缺失时字段为 0，`cache_hit_rate` 失真，计价 savings 偏低。
+- **修复方向**：定期跑基线并记录结果；端点变更时重验。
+
+## External Dependency Risks
+
+| 依赖 | 证据 | 风险 | 降级 / 备注 |
+|------|------|------|-------------|
+| MiniMax via Anthropic 兼容客户端 | `runtime/agent.py` `init_chat_model("anthropic:...")` | 协议/thinking/cache 变更 | 无本地降级；run `failed` |
+| deepagents / langgraph / langchain | `pyproject.toml` `>=` + `uv.lock` | stream 形状、SubAgent、RunControl | 锁文件 + FakeBrain 回归 |
+| MinerU HTTP | `integrations/mineru.py` `requests` | 服务不可用/超时/状态枚举变化 | 工具失败 → 可能整 run failed |
+| Oracle + Instant Client | `skills/philipswgqimport/scripts/tools.py` | thick client 缺失、网络、SQL | 优雅降级为「需确认」单位 |
+| openpyxl | Skill `documents.py` | 模板变更、公式翻译 | 复制公式异常被吞（见上） |
+| SQLite 三库 | `runtime/resources.py` / `runs.py` | 锁、磁盘、无迁移 | checkpoints/store 由 LangGraph 管理 |
+| FastAPI / uvicorn / python-multipart | `api.py` | 上传无限制、无鉴权 | 依赖部署面防护 |
+
+## Areas Requiring Care When Changing
+
+### 1. 事件类型与 `GET /runs` 契约
+
+- 事件类型固定由 `execute_run` 写入：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`。
+- `latest_content_event` 排除 `status` 与 `model_usage`；改过滤条件会破坏前端轮询语义。
+- 触达文件：`runtime/execution.py`、`runtime/runs.py`、`api.py`、`tests/test_api.py`、`tests/test_harness.py`。
+
+### 2. run 状态机与 cancel
+
+- 合法状态：`RUN_STATUSES` in `runtime/runs.py`。
+- 路径：`queued→running→succeeded|failed`；`queued→cancelled`；`running→cancelling→cancelled`。
+- 改 cancel 必须同步 `request_cancel`、`GraphDrained`、`fail_incomplete_runs` 与 `tests/test_api.py` cancel 覆盖。
+
+### 3. middleware 与 SubAgent 装配
+
+- 只通过 `runtime_middlewares()` 增删 middleware，并保证 `workflow_subagents()` 每个 extractor 自装。
+- `register_harness_profile("anthropic", ...)` 为进程级全局副作用；测试或二次 import 需注意。
+- 触达：`runtime/agent.py`、`tests/test_workflow_setup.py`。
+
+### 4. artifact 路径安全
+
+- 虚拟路径解析与 `..` 拒绝：`integrations/artifacts.py` `resolve_artifact_path`。
+- 业务写盘用 `unique_download_path` / `write_json_artifact`（不可覆盖）。
+- 改 `allow_local` 默认值会影响 MinerU 与测试夹具路径。
+
+### 5. Skill 业务工具契约
+
+- 每 Skill 2 工具：`save_*_extraction` + `generate_*_import`；`input_problems` 形状被业务测试锁定。
+- Philips Oracle 与三 Excel 模板路径在 `skills/philipswgqimport/`；Tecan join 逻辑在 `skills/tecanimport/`。
+- 改字段/模板必须同步 `references/`、assets 与对应 `test_*_import.py`。
+
+### 6. 依赖升级清单
+
+- 升级 `deepagents` / `langgraph` / `langchain-anthropic` 前：
+  1. `uv lock` 后跑全部本地脚本；
+  2. 核对 `FakeBrain` 契约（`stream_mode` / `subgraphs` / `version=v2` / `RunControl`）；
+  3. 核对 harness profile API 是否仍用 `register_harness_profile`；
+  4. 抽样真实 run 验证 usage 与 cancel。
+
+### 7. 存储与部署
+
+- 不要单独替换三库之一；schema 变更默认整清 `data/`。
+- 多 worker 前先解决 session 单飞与 SQLite 写模型。
+- 生产必须外部提供 Oracle Instant Client（若启用 Philips 单位查询）与可达的 MinerU。
+
+---
+
+*Concerns analysis: 2026-07-14*

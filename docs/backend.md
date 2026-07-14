@@ -37,4 +37,4 @@
 - 业务问题统一返回 `input_problems`；当前 run 结束，下一 run 重新显式传入所需 artifact 路径。
 - Philips 法定单位查询可选使用 Oracle thick mode；缺少 `ORACLE_CLIENT_LIB_DIR` 或查询失败时生成流程降级为人工校验。
 
-完整接口、provider 和存储边界见根级 `INTERFACES.md`；测试入口见 `backend/.planning/codebase/TESTING.md`。
+完整接口、provider 和存储边界见根级 `INTERFACES.md` §5；系统级风险见 `ARCHITECTURE.md` §7 与 `backend/.planning/codebase/CONCERNS.md`；测试入口见 `backend/.planning/codebase/TESTING.md` 与 `docs/commands.md`。
