@@ -163,7 +163,7 @@ brain.stream(
 | 项 | 状态 / 约定 |
 |---|---|
 | backend 内 CI 配置 | **无** 专属 `.github/workflows` 等（本子项目目录内） |
-| 本地启动 | `scripts/start-backend.bat` → `uv run uvicorn api:app --host 0.0.0.0 --port 8500` |
+| 本地启动 | `scripts/start-backend.ps1` → 独立 PowerShell 窗口 → `uv run uvicorn api:app --host 0.0.0.0 --port 8500` |
 | 依赖安装 | `cd backend && uv sync` |
 | 打包 | setuptools wheel；Skill 资源经 `package-data` 打入 |
 | 配置 | 部署机放置 `backend/.env`（参考 `.env.example` 键名） |

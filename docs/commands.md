@@ -65,7 +65,13 @@ cd backend
 uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
 
-或直接运行根级脚本 `scripts/start-backend.bat`（等价命令，会自动切到 `backend/` 再启动）。
+或运行根级脚本 `scripts/start-backend.ps1`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-backend.ps1
+```
+
+脚本会打开一个独立的 PowerShell 窗口，并在其中自动切到 `backend/` 启动服务。
 
 ## 调用 HTTP
 

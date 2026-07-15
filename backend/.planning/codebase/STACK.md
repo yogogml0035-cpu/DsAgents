@@ -6,7 +6,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 **Analysis Date:** 2026-07-15
 
-> 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；运行命令以仓库 `scripts/start-backend.bat` 与测试默认值为准。
+> 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；运行命令以仓库 `scripts/start-backend.ps1` 与测试默认值为准。
 
 ## Languages
 
@@ -23,7 +23,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 项 | 值 | 证据 |
 |---|---|---|
-| 包管理器 | `uv`（非 `pip install -e .`） | `backend/uv.lock`、`scripts/start-backend.bat` 用 `uv run` |
+| 包管理器 | `uv`（非 `pip install -e .`） | `backend/uv.lock`、`scripts/start-backend.ps1` 用 `uv run` |
 | 构建 backend | `setuptools>=68`（`setuptools.build_meta`） | `[build-system]` |
 | 安装根 | `backend/`，`package-dir = {"" = "."}` | `[tool.setuptools]` |
 | 顶层模块 | `py-modules = ["api"]` | `[tool.setuptools]` |
@@ -37,8 +37,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | 项 | 值 | 证据 |
 |---|---|---|
 | HTTP 入口 | `api:app`（`create_app()` 返回的 `FastAPI`） | `backend/api.py` |
-| ASGI 服务器 | `uvicorn`（依赖声明；`api.py` 不直接 import） | `pyproject.toml`、`scripts/start-backend.bat` |
-| 启动命令 | `cd backend` 后 `uv run uvicorn api:app --host 0.0.0.0 --port 8500` | `scripts/start-backend.bat` |
+| ASGI 服务器 | `uvicorn`（依赖声明；`api.py` 不直接 import） | `pyproject.toml`、`scripts/start-backend.ps1` |
+| 启动命令 | `cd backend` 后 `uv run uvicorn api:app --host 0.0.0.0 --port 8500` | `scripts/start-backend.ps1` |
 | 默认端口 | `8500` | 启动脚本；`tests/test_real_image_run.py` 的 `DEFAULT_BASE_URL` |
 | HTTP handler | 同步 `def`（FastAPI 同步路由跑在线程池） | `api.py` |
 | 后台执行 | `threading.Thread(daemon=True)`，per-run（`_run_background`） | `api.py` |
@@ -218,7 +218,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 项 | 要求 |
 |---|---|
-| OS | 开发/部署以 Windows 为主（`scripts/start-backend.bat`）；Python 代码跨平台，路径统一用 `pathlib` |
+| OS | 开发/部署以 Windows 为主（`scripts/start-backend.ps1`）；Python 代码跨平台，路径统一用 `pathlib` |
 | Python | 3.11 或 3.12（仓库内见 `cpython-312` 字节码；约束 `<4.0`） |
 | 包同步 | `cd backend && uv sync`（遵守 `uv.lock`） |
 | Oracle（可选） | 凭证不全、client/查询失败或未命中时写入 `problems`，不丢弃 PDF/Tracking 结果；启用 thick mode 时需有效 `ORACLE_CLIENT_LIB_DIR` |

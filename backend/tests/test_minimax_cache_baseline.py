@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 
-BASE_URL = os.getenv("DSAGENTS_BASE_URL", "http://127.0.0.1:8500")
+BASE_URL = os.getenv("DSAGENTS_BASE_URL", "http://10.11.148.97:8500")
 # >=512 tokens of stable prefix, repeated so the provider has enough cacheable
 # content. Kept identical across both turns so the prefix is byte-stable.
 STABLE_PREFIX = (
