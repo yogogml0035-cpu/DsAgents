@@ -8,7 +8,8 @@
 - 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建；新 schema 使用 UTC ISO-8601 毫秒时间；三库互不共享连接
 - HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`；`POST /runs` 可选固定 Philips workflow；无 SSE、无鉴权/CORS
 - 事件：固定 7 类；GET 返回快照、顶层 `workflow`/`result`、增量 events、`latest_content_event` 与 `usage`
-- 业务能力：Philips 外高桥用 `philips_wgq_inbound_recognition` + 单一主数据 Tool 返回结构化 JSON；Tecan 保留 2 Tool 与 A/B extractor/Excel
+- 业务能力：Philips 外高桥用 `philips_wgq_inbound_recognition` + 单一主数据 Tool 返回结构化 JSON；workflow 工具收窄用 denylist（保留共享 MinerU）；Tecan 保留 2 Tool 与 A/B extractor/Excel
+- middleware：集中在 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试与空 data 壳纠错）
 - 源码布局：`api.py` + `runtime/` + `integrations/` + `skills/`（发行名 `dsagents`）
 
 ## 技术栈指针

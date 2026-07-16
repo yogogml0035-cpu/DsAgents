@@ -26,7 +26,9 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
-改 `StructuredOutputRecovery` / `after_model` / `jump_to` 时务必跑 `python -m tests.test_harness`，确认重试次数封顶且耗尽时 `jump_to: "end"`（禁止只返回 `None`）。
+改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：Philips 工具名集合须**含** `parse_documents` / `extract_archives`（及本业务主数据工具），**不含**帝肯业务工具；禁止业务-only allowlist 导致共享 MinerU 工具从模型工具表消失。
+
+改 `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认重试次数封顶（约 `1 + max_retries` 次模型调用）且耗尽时 `jump_to: "end"`（禁止只返回 `None`）。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机与 usage 聚合的本地 assert 脚本。
 

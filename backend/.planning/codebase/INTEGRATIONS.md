@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 9c7215e
 ---
 
 # Integrations
@@ -43,9 +43,9 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 - `messages[].content`：`type: "text"` + `text`，或 `type: "artifact"` + `path`。
 - `extra="forbid"`：未知字段拒绝。
 
-#### 事件类型（查询侧可见）
+#### 事件类型（查询侧可见，固定 7 类）
 
-执行层写入、`GET /runs/{run_id}` 返回的事件类型包括（实现见 `runtime/execution.py` + `runtime/runs.py`）：
+执行层写入、`GET /runs/{run_id}` 返回的事件类型（`runtime/execution.py` + `runtime/runs.py`）：
 
 | `type` | 来源概要 |
 |---|---|
@@ -79,6 +79,8 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 `deepagents` profile `"anthropic"`：禁用自动 general-purpose subagent。
 
+真实推理前需三键可用；工厂在构造时 `init_chat_model`，**无** lifespan 启动期强校验。
+
 ---
 
 ### 3. MinerU 文档解析服务
@@ -87,7 +89,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 |---|---|
 | 客户端 | `integrations/mineru.py`，HTTP 库 `requests` |
 | 配置键 | `MINERU_BASE_URL`（必填）、`MINERU_BACKEND`（必填）、`MINERU_EFFORT`（可空）、`MINERU_TIMEOUT_SECONDS`（必填） |
-| 示例 | base `http://10.11.0.110:6006`；backend `vlm-engine`；timeout `7200` |
+| 示例（`.env.example`） | base `http://10.11.0.110:6006`；backend `vlm-engine`；timeout `7200` |
 | 轮询间隔 | `MINERU_POLL_INTERVAL_SECONDS = 30.0` |
 
 **工具边界：**
@@ -99,7 +101,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 **MinerU HTTP 约定（代码假设）：**
 
-1. `POST {MINERU_BASE_URL}/tasks` — multipart `files` + form：`backend`、`effort`、`return_md`、`return_content_list`、`return_images`、`return_original_file`、`response_format_zip`（布尔以 form 字符串传递）。
+1. `POST {MINERU_BASE_URL}/tasks` — multipart `files` + form：`backend`、`effort`、`return_md`、`return_content_list`、`return_images`、`return_original_file`、`response_format_zip`（布尔以 form 字符串 `true`/`false` 传递）。
 2. 响应 JSON 必须含字符串 `task_id`、`status_url`、`result_url`（相对 URL 会相对 base 拼接）。
 3. `GET status_url` — `status` 为 `pending` / `processing` / `completed` / `failed`（大小写不敏感）。
 4. `GET result_url` — JSON 对象或 ZIP 字节流。
@@ -122,10 +124,13 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | 调用点 | `skills/philipswgqinboundrecognition/scripts/tools.py` → `lookup_philips_wgq_master_data` → `_oracle_data` |
 | 配置键 | `ORACLE_DSN`、`ORACLE_USERNAME`、`ORACLE_PASSWORD`、`ORACLE_CLIENT_LIB_DIR`、`ORACLE_TIMEOUT_SECONDS` |
 | Thick mode | 若 `ORACLE_CLIENT_LIB_DIR` 非空：进程内一次 `oracledb.init_oracle_client(lib_dir=...)`；`.env.example` 提示 Instant Client 可放在 gitignore 的 `backend/.oracle/...` |
+| 连接 | `oracledb.connect(..., tcp_connect_timeout=timeout)`；`connection.call_timeout = int(timeout * 1000)` |
 | 降级 | 三凭证任一缺失 → **不抛**，返回 `problems`（提示配置 Oracle 或人工补齐）；连接/查询异常同样落入 `problems` |
 | SQL | 按 `product_id`（12NC）查 `od.chda` 并 join `dongsong.good` / `dongsong.custom_unit`，填充 `ORACLE_FIELDS`：`chinese_name`、`specification`、`origin_country`、`customs_code`、`unit`、`legal_unit_1`、`legal_unit_2` |
 
-**与 Tracking 的优先级（工具内）：** 先读可选 Tracking `.xlsx`（`进口` / `申报要素` sheet），再用 Oracle **仅补齐**仍为 `null` 的 `ORACLE_FIELDS`；不得用 Oracle 覆盖 Tracking 已有值。申报要素、BU 等不在 Oracle 字段集。
+**与 Tracking 的优先级（工具内）：** 先读可选 Tracking `.xlsx`（`进口` / `申报要素` sheet，`openpyxl`），再用 Oracle **仅补齐**仍为 `null` 的 `ORACLE_FIELDS`；不得用 Oracle 覆盖 Tracking 已有值。申报要素、BU 等不在 Oracle 字段集。
+
+**Tecan 不消费 Oracle。**
 
 ---
 
@@ -170,9 +175,9 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | API workflow | `workflow="philips_wgq_inbound_recognition"`（`WORKFLOW` 常量） |
 | 外部依赖 | MinerU（PDF）+ 可选 Tracking Excel（openpyxl）+ 可选 Oracle |
 | 工具 | `parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`（workflow 排除帝肯工具，保留共享 MinerU 工具） |
-| 输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` → `run.result`；业务失败形态 `input_problems` |
+| 输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` → `run.result`；业务失败形态 `input_problems` 时 run 仍 `succeeded` |
 | SubAgent | **禁用**（workflow 时 `subagents=[]`） |
-| 文档 | `SKILL.md` 约束 1–10 PDF、可选 1 Tracking；不解析 ZIP/DOCX/图片作为业务主路径 |
+| 文档 | `SKILL.md` 约束业务输入形态；手册与工具表需同时可见 `extract_archives` |
 
 ### Tecan 帝肯进口
 
@@ -247,6 +252,7 @@ Client
 - 无独立“文件下载”HTTP 路由：产物靠虚拟路径 + 共享磁盘/后续封装。
 - Oracle 与 MinerU **不**在 lifespan 做健康检查；失败发生在工具调用时。
 - 密钥不进 ledger 事件正文设计目标；文档与代码映射不记录真实密钥。
+- 无 webhook 入站/出站、无 Redis/Postgres 等外部消息或关系库。
 
 ## Analysis 边界
 

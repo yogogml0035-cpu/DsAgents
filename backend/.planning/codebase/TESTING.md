@@ -11,7 +11,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 ## Test Framework
 
 - **不是 pytest 套件**。`backend/pyproject.toml` 无 pytest、coverage、ruff、mypy 或 black 门禁，也无 CI 聚合器。
-- 每个普通验证模块提供 `run() -> None`，内部使用原生 `assert`；失败即异常和非零退出。
+- 每个普通验证模块提供 `run() -> None`，内部使用原生 `assert`；失败即异常和非零退出。成功路径通常静默（exit 0）。
 - 必须在 `backend/` 下以模块方式执行：
 
   ```powershell
@@ -23,6 +23,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 - HTTP 测试使用 `fastapi.testclient.TestClient`；磁盘隔离使用 `TemporaryDirectory` + `ResourceConfig(data_dir=...)`。
 - `FakeBrain` / `FakeBrainFactory`、消息构造器与轮询 helper 集中在 `tests/test_support.py`。
 - 真实模型、MinerU、Oracle 和外部 HTTP 验收与普通本地回归分开，默认不执行（或标为诊断脚本）。
+- 入口惯例：普通回归 `if __name__ == "__main__": run()`；部分真实脚本另有 `main()` + `argparse`（如 `test_real_image_run`、`test_real_multi_pdf_run`）。
 
 ## Run Commands
 
@@ -64,11 +65,11 @@ python -m tests.test_real_philips_wgq_inbound_recognition
 # UPS 单用例诊断：当前无 env 门闸，会直连 DSAGENTS_API_BASE_URL；断言主体已注释，偏人工观察
 python -m tests.test_real_philips_wgq_ups
 
-# 诊断型 MiniMax prompt-cache 基线；无开关，会触达真实端点
+# 诊断型 MiniMax prompt-cache 基线；无开关，会触达真实端点（BASE_URL 默认读 DSAGENTS_BASE_URL）
 python -m tests.test_minimax_cache_baseline
 ```
 
-仅文档变更至少执行 `git diff --check`。改 `StructuredOutputRecovery` 重试/退出语义时务必跑 `python -m tests.test_harness`，确认重试次数封顶且耗尽时 `jump_to: "end"`。
+仅文档变更至少执行 `git diff --check`。改 `StructuredOutputRecovery` 重试/退出语义时务必跑 `python -m tests.test_harness`，确认重试次数封顶且耗尽时 `jump_to: "end"`。改 Philips 工具裁剪时务必跑 `python -m tests.test_workflow_setup`，确认工具名集合含 `extract_archives`、不含帝肯工具。
 
 ## Test File Organization
 
@@ -86,7 +87,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_real_philips_wgq_ups.py` | `run()` | UPS 普货单用例诊断：上传 case 目录 PDF、流式轮询并打印 `result`/`usage`；当前断言主体注释，无默认 skip 开关 |
 | `tests/test_real_image_run.py` | `run()` + `main()` | 真实 HTTP 图片 run；`DSAGENTS_RUN_REAL_IMAGE_TEST=1` |
 | `tests/test_real_multi_pdf_run.py` | `run()` + `main()` | 真实多 PDF + MinerU；`DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1` |
-| `tests/test_minimax_cache_baseline.py` | `run()` | 真实 MiniMax cache 基线（诊断型，无 env 门闸） |
+| `tests/test_minimax_cache_baseline.py` | `run()` | 真实 MiniMax cache 基线（诊断型，无 env 门闸；读 `DSAGENTS_BASE_URL`） |
 
 命名统一 `test_*.py`。普通回归以 `if __name__ == "__main__": run()` 收口；真实脚本必须在模块说明和命令文档中标明外部依赖。仓库内**没有** `tests/tests_file/` 夹具目录；真实样例路径由 env 或脚本默认值指向外部目录。
 
@@ -98,11 +99,12 @@ python -m tests.test_minimax_cache_baseline
 - `test_api` 覆盖四个端点、增量轮询、`latest_content_event`、usage 计价、启动恢复和 cancel 全出口。
 - Philips workflow 覆盖：未知 workflow `422`、非空 `session_id` `422`、每次服务端生成不同 session、GET 顶层与 `run` 快照同时暴露 `workflow` / `result`。
 - `result.outcome=input_problems` 仍断言 `run.status=succeeded`；结构化结果缺失则断言 `failed`。
+- 启动恢复：遗留 `queued`/`running`/`cancelling` 经 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 变为 `failed`，错误文案 `"执行已中断，请重试"`。
 
 ### 2. Harness / stream / Brain 装配
 
 - `FakeBrain` 硬断言 `stream_mode=["messages","custom","updates"]`、`subgraphs=True`、`version="v2"` 和 `thread_id=session_id`。
-- 验证 artifact block 进入 Brain 前全部转为 text block。
+- 验证 artifact block 进入 Brain 前全部转为 text block（`ARTIFACT_REFERENCE_HINT`）。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage **七类事件**。
 - Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking；独立 fake chat model 还实际经过 `create_agent` 的 `wrap_model_call` 链并保留 `structured_response`，Harness 再从 `updates` 捕获并做 Pydantic 校验。
 - `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；`attempts >= max_retries` → `jump_to: "end"`（含空文本路径）；端到端模型调用次数 = 1 + `max_retries` 后退出；空 `data: {}` 文本与 ToolMessage 错误路径使用 `EMPTY_DATA_SHELL_HINT`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
@@ -125,7 +127,7 @@ python -m tests.test_minimax_cache_baseline
 
 ### 4. Tecan 回归
 
-Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical 和 Excel 生成。Philips 删除旧 A/B/C 与 Excel 后，`test_tecan_import` / `test_workflow_setup` 继续防止误删 Tecan 行为。
+Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical 和 Excel 生成。Philips 删除旧 A/B/C 与 Excel 后，`test_tecan_import` / `test_workflow_setup` 继续防止误删 Tecan 行为。业务问题统一返回 `{"code": "input_problems", "problems": [...]}`，不抛异常结束工具调用。
 
 ### 5. Cancel 状态机
 
@@ -135,13 +137,19 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 
 `test_real_philips_wgq_inbound_recognition.py` 默认 skip；开关为 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`。默认样例根可用 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` 覆盖，服务地址用 `DSAGENTS_API_BASE_URL`，超时/轮询分别用 `DSAGENTS_REAL_PHILIPS_WGQ_TIMEOUT_SECONDS` / `DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS`。
 
-脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、`original_waybill_number`、商品行、`product_id`、`quantity`/价格、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。
+脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、`original_waybill_number`、商品行、`product_id`、`quantity`/价格（`currency` / `unit_price` / `total_price`）、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。
 
 `test_real_philips_wgq_ups` 是单用例诊断脚本：默认 case 目录可通过 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` 覆盖；**当前无 env 门闸**，会直接 HTTP 访问 `DSAGENTS_API_BASE_URL`（默认 `http://127.0.0.1:8500`）。运行时打印上传列表、流式事件与最终 `result`/`usage`；`_assert_response` 仍保留但调用处已注释，适合人工观察而非门禁。
 
+### 7. 其它真实诊断
+
+- `test_real_image_run`：`DSAGENTS_RUN_REAL_IMAGE_TEST=1`；可选 `DSAGENTS_API_BASE_URL`、`DSAGENTS_IMAGE_PATH`、`DSAGENTS_IMAGE_QUESTION`、超时/轮询 env。
+- `test_real_multi_pdf_run`：`DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；`--pdf-dir` 或对应 env。
+- `test_minimax_cache_baseline`：无开关；读 `DSAGENTS_BASE_URL`（注意与其它真实脚本的 `DSAGENTS_API_BASE_URL` 不同）；两 turn 同 session 打印 cache 相关 `model_usage`，零 cache 只记诊断不失败。
+
 ## Mocking Patterns
 
-- **Brain**：`FakeBrainFactory` 记录 `created_workflows` 和收到的 payload；`FakeBrain` 按输入文本产生成功、`input_problems`、缺少 structured response、失败、hold 等路径。
+- **Brain**：`FakeBrainFactory` 记录 `created_workflows` 和收到的 payload；`FakeBrain` 按输入文本产生成功、`input_problems`（文本含 `"input problems"`）、缺少 structured response（文本含 `"missing structured"`）、失败（`"fail"`）、hold（`"hold"` + `StreamControl`）等路径。
 - **网络**：`test_tools.py` 替换 `requests` 调用链，不访问真实 MinerU。
 - **Oracle**：Philips 测试 patch `oracledb.connect`，用 `_FakeConnection` / `_FakeCursor` 记录实际查询的 12NC；`patch.dict(os.environ, ..., clear=True)` 覆盖配置缺失与异常。
 - **Tracking**：测试内用 `openpyxl.Workbook` 创建临时 `进口` / `申报要素` sheet，再 patch `integrations.artifacts.artifacts_root`。
@@ -156,12 +164,13 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
       )
   ```
 
+  再经 `create_app(resource_config=..., harness_factory=fake_harness)` 挂到 `TestClient`。
 - 禁止把真实 LLM、MinerU、Oracle 或外部 HTTP 调用混入普通 `run()`。
 
 ## Fixtures / Support
 
 - `text_block` / `artifact_block` / `user_message` / `messages_json` 构造 HTTP/run 输入。
-- `wait_for_run(client, run_id, expected_status)` 使用有限 deadline 轮询。
+- `wait_for_run(client, run_id, expected_status)` 使用有限 deadline（约 5s）轮询。
 - `_recognition_result` 提供完整固定字段的 Philips 成功与 `input_problems` payload。
 - Philips Tracking 与 Oracle fixture 留在对应业务测试内，避免共享隐式状态。
 - 真实样例目录属于外部测试材料，不复制进仓库；脚本允许通过 env 覆盖路径。
@@ -171,12 +180,13 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 
 普通回归至少覆盖：
 
-- 5 工具静态注册与 MinerU mock 路径；
-- ledger 的 `workflow` / `result_json`、事件、spill、usage；
+- 5 工具静态注册与 MinerU mock 路径（`test_tools` 精确名称列表：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`）；
+- ledger 的 `workflow` / `result_json`、事件、spill、usage、`/memories/AGENTS.md` seed；
 - Harness 的结构化响应捕获、七类事件、`StructuredOutputRecovery` 有界重试与 `jump_to: end`、通用行为；
 - HTTP 四端点、workflow 校验、新 session、result 投影、cancel、usage；
 - Philips Pydantic 合同、严格 Tracking、Oracle 补缺与降级、交易字段隔离；
-- Tecan SubAgent 与 Excel 行为未回归；两个 SubAgent 各含 **4** 个 runtime middleware（无 handbook），且 `StructuredOutputRecovery` / `StructuredOutputCompatibility` 仍在场。
+- Tecan SubAgent 与 Excel 行为未回归；两个 SubAgent 各含 **4** 个 runtime middleware（无 handbook），且 `StructuredOutputRecovery` / `StructuredOutputCompatibility` 仍在场；
+- Philips workflow 工具 denylist：含 `extract_archives`，不含帝肯工具。
 
 明确不在普通回归内：真实模型抽取质量、真实 MinerU 内容、真实 Oracle 命中、prompt-cache 数值、跨进程锁和 SQLite 压力、UPS 诊断脚本。
 
@@ -188,8 +198,9 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 4. 改 workflow/result/事件时同步 `test_api`、`test_harness`、`test_run_ledger` 和 `test_support`。
 5. 改 Philips schema/Tracking/Oracle 时同步 `test_philips_wgq_inbound_recognition`；改 Tecan 时同步 `test_tecan_import`。
 6. 新工具必须静态登记进 `default_tool_catalog()`，并更新 `test_tools` 的精确名称列表。
-7. 改 `after_model` + `jump_to` 时必须覆盖：`can_jump_to` 含 `"end"`、耗尽 `max_retries` 时 `jump_to: "end"`、不可仅 `return None`；用 `python -m tests.test_harness` 验证。
-8. 真实外部测试单独建文件、默认 skip（或明确标为诊断），并在 `docs/commands.md` 标明开关、服务和样例依赖。
+7. 为 workflow 收窄 `tools` 时用 denylist 排除**其他业务**工具，保留共享 MinerU 工具；用 `python -m tests.test_workflow_setup` 验证。
+8. 改 `after_model` + `jump_to` 时必须覆盖：`can_jump_to` 含 `"end"`、耗尽 `max_retries` 时 `jump_to: "end"`、不可仅 `return None`；用 `python -m tests.test_harness` 验证。
+9. 真实外部测试单独建文件、默认 skip（或明确标为诊断），并在 `docs/commands.md` 标明开关、服务和样例依赖。
 
 ---
 *Testing analysis: 2026-07-16*

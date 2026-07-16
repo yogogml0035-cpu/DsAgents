@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 9c7215e
 ---
 
 # Technology Stack
@@ -79,7 +79,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 | `langgraph` | `1.2.7` | 图执行、`RunControl`、`GraphDrained`、stream v2 |
 | `langgraph-checkpoint-sqlite` | `3.1.0` | `SqliteSaver` / `SqliteStore` 入口 |
 | `langgraph-checkpoint` | `4.1.1` | checkpoint 核心 |
-| `langgraph-prebuilt` | `1.1.0` | prebuilt 组件 |
+| `langgraph-prebuilt` | `1.1.0` | prebuilt 组件（传递） |
 | `langgraph-sdk` | `0.4.2` | SDK 传递 |
 | `langsmith` | `0.9.5` | 观测传递依赖（非本服务对外 API） |
 
@@ -124,11 +124,11 @@ init_chat_model(
 
 | 库 | 锁定版本 | 说明 |
 |---|---|---|
-| `httpx2` | `2.5.0` | 写在 `pyproject.toml`；当前 `backend/**/*.py` **无**直接 `import`（可能为传递/预留） |
+| `httpx2` | `2.5.0` | 写在 `pyproject.toml`；当前 `backend/**/*.py` **无**直接 `import`（预留/传递） |
 | `httpx` | `0.28.1` | 传递依赖（常见于 langchain/http 栈） |
 | `sqlite-vec` | `0.1.9` | 随 langgraph sqlite 栈出现 |
 | `aiosqlite` | `0.22.1` | 异步 sqlite 传递 |
-| `cryptography` | `49.0.0` | 传递 |
+| `cryptography` | `49.0.0` | 传递（oracledb 等） |
 | `pyyaml` | `6.0.3` | 传递 |
 | `tenacity` | `9.1.4` | 传递 |
 | `orjson` | `3.11.9` | 传递 |
@@ -190,6 +190,8 @@ init_chat_model(
 | `RUNTIME_AGENTS_PATH` | `"/memories/AGENTS.md"` | `runtime/resources.py` |
 | `max_inline_bytes` | `262_144`（ledger 事件内联阈值） | `runtime/runs.py` |
 | `RUN_STATUSES` | queued/running/succeeded/failed/cancelled/cancelling | `runtime/runs.py` |
+| `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES` | `2` | `runtime/middleware.py` |
+| `NO_PROGRESS_WINDOW` | `3` | `runtime/middleware.py` / `runtime/agent.py` |
 
 ### 工具静态注册
 
@@ -201,14 +203,14 @@ init_chat_model(
 4. `save_tecan_extraction`
 5. `generate_tecan_import`
 
-Philips workflow 下 Brain 排除帝肯工具，保留共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`，并启用 `ToolStrategy(PhilipsWgqRecognitionResult)` + 结构化输出中间件。
+Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），保留共享 MinerU 工具与 `lookup_philips_wgq_master_data`，并启用 `ToolStrategy(PhilipsWgqRecognitionResult)` + 结构化输出中间件。
 
 ## Platform Requirements
 
 | 项 | 要求 |
 |---|---|
 | OS | 开发/文档以 Windows 为主（`scripts/start-backend.ps1`）；Python 代码跨平台，路径统一用 `pathlib` |
-| Python | `>=3.11,<4.0`（本机探测示例：3.12.x） |
+| Python | `>=3.11,<4.0`（本机常见 3.12.x） |
 | 包安装 | 在 `backend/` 执行 `uv sync`，以 `uv.lock` 为准 |
 | 启动 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`，或仓库根 `scripts/start-backend.ps1`（可新开窗口） |
 | 磁盘 | 可写 `backend/data/`（SQLite 三库 + artifacts + 可选 run-events） |
