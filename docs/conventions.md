@@ -36,3 +36,5 @@
 - **共享操作手册 seed**：`/memories/AGENTS.md` 缺失时由资源层写入含 ZIP→`extract_archives` 等基线指引；**已有文件不覆盖**。改手册文案时同步检查 Skill 与 workflow 工具表是否仍一致。
 - **进程内边界**：同 `session_id` 单飞锁、`run_controls` cancel 字典均为进程内；多 worker 不提供跨进程互斥或强杀。
 - **SQLite 三库分离**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 互不共享连接；新 schema 无迁移，部署切换需整目录一致清空或替换。
+- **Philips 空壳 vs 业务问题**：`data: {}` 是非法形状（recovery 纠错 / 耗尽 skeleton），不是 `input_problems`；`input_problems` 要求 `data=null` 且至少一条 problem。空壳耗尽的 all-null skeleton 使用 `partial_success` + runtime problem，**禁止**用编造业务值“凑成功”。
+- **Philips consolidated 票次**：同一 HAWB/运单下多张商业发票或多个 PO/DN 视为一票；header 字段可逗号拼接，items 按发票顺序展开。规则见 Skill 与 `PHILIPS_WORKFLOW_PROMPT`，改提示词时两边同步。

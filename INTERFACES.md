@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单、工具入参）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-16）对齐固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试与空 data 壳纠错）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
+> 本轮刷新（2026-07-16）对齐 backend 事实文档（Analysis Date: 2026-07-16，`last_mapped_commit` 28534a9）：固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
 
 HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`parse_documents` 的程序内调用为测试便利保留 `allow_local`，不改变对外 API 契约。
 
@@ -37,7 +37,7 @@ HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`p
 | `input_problems` | **必须 `null`** | **至少一个** | `succeeded`（业务问题 ≠ 执行失败） |
 | （无/非法 structured_response） | — | — | `failed` |
 
-完整 JSON 形状与 `usage` 字段表见 [`INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 的 **APIs & External Services** 章节。
+空 `data: {}` 壳经 recovery 耗尽时 middleware 可写 all-null skeleton + `partial_success`（见 §4），与上表 `partial_success` 行一致；完整 JSON 形状与 `usage` 字段表见 [`INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 的 **APIs & External Services** 章节。
 
 ## 2. 取消流
 
@@ -112,7 +112,7 @@ brain.stream(
 - `BrainFactory.create(..., workflow=workflow)` 明确接收 workflow。Philips 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`，从 `updates` 捕获后再次 Pydantic 校验；缺失/非法即 `failed`。
 - **workflow 工具收窄必须用 denylist**：Philips 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`，不装 SubAgent；禁止只 allowlist 业务工具导致手册中的通用工具从模型工具表消失。验证：`python -m tests.test_workflow_setup`。
 - `runtime/middleware.py` 的 `StructuredOutputCompatibility.wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。兼容 middleware 不写 graph state。
-- **`StructuredOutputRecovery`（硬性约定）**：`after_model` 从纯文本 JSON 恢复 `structured_response`；失败（含空文本、空 `data: {}` 壳）则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`；总模型轮次约 `1 + max_retries`）；空壳用 `EMPTY_DATA_SHELL_HINT`，**不**编造业务字段；耗尽或无法继续时**必须** `jump_to: "end"`，且 `@hook_config(can_jump_to=["model", "end"])`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。验证：`cd backend && python -m tests.test_harness`。
+- **`StructuredOutputRecovery`（硬性约定）**：`after_model` 从纯文本 JSON 恢复 `structured_response`；失败（含空文本、空 `data: {}` 壳）则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`；总模型轮次约 `1 + max_retries`）；空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示，**不**编造业务字段；耗尽或无法继续时**必须** `jump_to: "end"`，且 `@hook_config(can_jump_to=["model", "end"])`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。**空壳耗尽**：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem → harness 可投影 `succeeded`；**其它失败模式**耗尽后无 `structured_response` → harness 标 `failed`。验证：`cd backend && python -m tests.test_harness`。
 - `control=RunControl()`：`request_cancel` → drain → `GraphDrained` → `cancelled`。
 - 生产工厂：`DeepAgentsBrainFactory`（MiniMax via `init_chat_model("anthropic:...")` + `create_deep_agent`）；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
 - `runtime_middlewares()` 固定顺序返回新建实例：`StructuredOutputRecovery` → `ToolTelemetry` → `NoProgressMiddleware` → `StructuredOutputCompatibility`；主 Agent 经 `memory_backend=` 追加受限 `MemoryMiddleware`（**共 5 个**）。两个 Tecan 声明式 SubAgent **不继承**主 Agent middleware，须经无 memory 的 `runtime_middlewares()` 显式注入（**各 4 个**）；勿同时使用 `create_deep_agent(memory=...)`。`runtime.agent` 保留 middleware 符号导入兼容性。
@@ -204,7 +204,7 @@ brain.stream(
 | 新增 Skill / 工具 | `skills/<name>/` + `default_tool_catalog()` 静态注册 + `package-data` |
 | 改 Philips 识别 | `docs/philips-wgq-inbound-recognition-prd.md` → Skill/schema/主数据工具 → workflow/result HTTP 合同；保持单一工具、无 SubAgent/Excel |
 | 改 Tecan 生成 | `SKILL.md` / `references/` → `scripts/tools.py` / `documents.py`；保持 2 Tool + `input_problems` |
-| 改 structured recovery | `runtime/middleware.py` `StructuredOutputRecovery`；保留 `can_jump_to` 含 `"end"`、空壳纠错与耗尽 `jump_to: "end"`；`python -m tests.test_harness` |
+| 改 structured recovery | `runtime/middleware.py` `StructuredOutputRecovery`；保留 `can_jump_to` 含 `"end"`、空壳纠错、耗尽 skeleton/`jump_to: "end"`；`python -m tests.test_harness` |
 | 改 workflow 工具裁剪 | denylist 排除他业务工具，保留 `parse_documents` / `extract_archives`；`python -m tests.test_workflow_setup` |
 | 加鉴权 / CORS | 当前缺失（已确认）；需显式补中间件 |
 | 跨进程部署 | 单飞锁仅进程内；多 worker 前需跨进程锁或单进程约束 |

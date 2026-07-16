@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 28534a9
 ---
 
 # Architecture
@@ -117,7 +117,7 @@ POST /runs/{run_id}/cancel
 emit status=running
   → 注册 RunControl
   → brain_factory.create(resources, middleware, tools, workflow)
-    → Philips（workflow == WORKFLOW）：
+    → Philips（workflow == WORKFLOW == "philips_wgq_inbound_recognition"）：
         ToolStrategy(PhilipsWgqRecognitionResult) + handle_errors
         缺则补 StructuredOutputCompatibility / StructuredOutputRecovery
         denylist 排除 save_tecan_extraction / generate_tecan_import
@@ -252,7 +252,7 @@ Philips workflow 用 **denylist** 排除帝肯业务工具，**保留**共享 Mi
 | 耗尽/放行 | `attempts >= max_retries` 时返回 `{"jump_to": "end"}`，**禁止**只返回 `None` |
 | 钩子声明 | `@hook_config(can_jump_to=["model", "end"])` — 必须同时声明 `"end"` |
 | 为何必须 end | 仅有 `ToolStrategy`、业务 tool 被收窄时，缺 `structured_response` 且返回 `None` 会走 model↔model 边无限循环 |
-| 下游 | harness 见 `structured_response missing` → run `failed` |
+| 下游 | harness 见 `structured_response missing` → run `failed`（空壳耗尽走 skeleton 成功路径时除外） |
 
 ### run 状态机
 
@@ -305,7 +305,8 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 | cancel 时无 `RunControl`（仍 queued） | 直接 `cancelled` |
 | Philips `input_problems` | 验证后的 `result.outcome=input_problems`；run 仍 `succeeded` |
 | Philips 缺少/非法结构化结果 | run `failed`，不从 `reply` 猜 JSON |
-| structured recovery 耗尽 | middleware `jump_to: "end"` → harness 报 `structured_response missing` → `failed` |
+| structured recovery 耗尽（非空壳） | middleware `jump_to: "end"` → harness 报 `structured_response missing` → `failed` |
+| structured recovery 空壳耗尽 | middleware 写入 all-null skeleton + `jump_to: "end"` → 可 `succeeded` + `partial_success` |
 | 大 payload | `SqliteRunLedger._store_blob` 超 `max_inline_bytes=262_144` 外溢到 `data/internal/run-events/{uuid}.json` |
 | Oracle 配置缺失/查询失败/未命中 | 主数据工具写入 `problems`，保留 PDF/Tracking 数据并形成 `partial_success` |
 | 真实错误 | 透传异常文本；不吞掉 stack 语义（`raw` 保留 `repr`） |

@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 28534a9
 analysis_date: 2026-07-16
 scope: backend/
 ---
@@ -59,9 +59,11 @@ scope: backend/
 
 - **问题**：
   - `tests/test_real_image_run.py` / `test_real_multi_pdf_run.py`：`run()` 需 `DSAGENTS_RUN_REAL_*_TEST=1`，但 `python -m ...` 走 `main()` 会立即打真实服务。
-  - `tests/test_minimax_cache_baseline.py`：`__main__` 直接 `run()`，无 env 开关，会打真实 HTTP/MiniMax。
+  - `tests/test_real_philips_wgq_inbound_recognition.py`：`run()` 需 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；`__main__` 直接 `run()`（有 env 门闩）。
+  - `tests/test_real_philips_wgq_ups.py`：`__main__` 直接 `run()`，**无** env 开关；默认 `DEFAULT_CASE_DIR` 为开发机本地绝对路径；会打真实 HTTP API。
+  - `tests/test_minimax_cache_baseline.py`：`__main__` 直接调用真实 endpoint，无 env 开关。
 - **影响**：误跑产生费用与外部副作用；若引入 pytest 全收集更危险。
-- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集。
+- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集；去掉硬编码本机路径。
 
 ### 8. 无自动化聚合入口（已确认）
 
@@ -383,4 +385,4 @@ scope: backend/
 
 ---
 
-*Concerns analysis: 2026-07-16*
+*Concerns analysis: 2026-07-16 · last_mapped_commit: 28534a9*
