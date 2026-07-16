@@ -307,11 +307,16 @@ def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddl
         StructuredOutputCompatibility(),
     ]
     if memory_backend is not None:
+        # add_cache_control: second breakpoint on the memory block (official
+        # memory= also sets this). Still sits in user middleware before
+        # AnthropicPromptCachingMiddleware — not as optimal as create_deep_agent
+        # tail placement, but avoids default memory= prompt semantics.
         middleware.append(
             MemoryMiddleware(
                 backend=memory_backend,
                 sources=[RUNTIME_AGENTS_PATH],
                 system_prompt=RUNTIME_MEMORY_SYSTEM_PROMPT,
+                add_cache_control=True,
             )
         )
     return middleware

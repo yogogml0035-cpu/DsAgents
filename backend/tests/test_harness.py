@@ -438,6 +438,7 @@ def _check_main_agent_memory_middleware() -> None:
             assert len(memory_items) == 1
             mm = memory_items[0]
             assert mm.sources == [RUNTIME_AGENTS_PATH]
+            assert mm._add_cache_control is True
             update = mm.before_agent(
                 {},
                 SimpleNamespace(context=None, stream_writer=None, store=resources.store),

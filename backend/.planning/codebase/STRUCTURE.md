@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
+last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 ---
 
 # Codebase Structure
@@ -59,10 +59,10 @@ backend/
 │   ├── test_philips_wgq_inbound_recognition.py
 │   ├── test_tecan_import.py
 │   ├── test_real_philips_wgq_inbound_recognition.py
-│   ├── test_real_image_run.py          # 真实集成（env 守卫）
+│   ├── test_real_philips_wgq_ups.py    # 真实集成（env 守卫）
+│   ├── test_real_image_run.py
 │   ├── test_real_multi_pdf_run.py
-│   ├── test_minimax_cache_baseline.py
-│   └── tests_file/                     # 样例图片/PDF（非源码）
+│   └── test_minimax_cache_baseline.py
 ├── .planning/
 │   └── codebase/                       # 子项目级事实文档（本目录）
 └── data/                               # 运行时数据（通常 gitignore）
@@ -83,12 +83,11 @@ backend/
 | 路径 | 用途 |
 |------|------|
 | `backend/api.py` | 唯一 HTTP 入口模块；`create_app` / 模块级 `app` |
-| `backend/runtime/` | 运行时核心：执行、资源、事件账本、工具目录、Brain 装配、可观测提取 |
+| `backend/runtime/` | 运行时核心：执行、资源、事件账本、工具目录、Brain 装配、middleware、可观测提取 |
 | `backend/integrations/` | 与外部系统/路径契约的通用能力（artifact FS、MinerU HTTP），不含业务裁决 |
 | `backend/skills/` | 内置 Agent Skills：指令（`SKILL.md`）、字段/规则参考、模板、可调用 scripts |
 | `backend/skills/*/scripts/` | 业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
-| `backend/tests/` | 可执行 assert 脚本与 `FakeBrain` 替身；真实集成脚本与本地回归分文件 |
-| `backend/tests/tests_file/` | 手工/集成用样例文件 |
+| `backend/tests/` | 可执行 assert 脚本与 `FakeBrain` 替身；真实集成脚本与本地回归分文件；**无**仓库内 `tests_file/` 夹具目录（真实样例路径由 env 或脚本默认值指向外部） |
 | `backend/data/` | 固定数据根（`ResourceConfig`，与 CWD 无关）：三库 + artifacts + 事件 spill |
 | `backend/.planning/codebase/` | 子项目 codebase maps；根级文档上游事实源 |
 | `backend/pyproject.toml` | 依赖与 setuptools 打包：`py-modules=["api"]`，packages `runtime*` / `integrations*` / `skills*` |
@@ -124,11 +123,12 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | ledger schema / 投影 | `backend/runtime/runs.py` |
 | stream 载荷提取 | `backend/runtime/observability.py` |
 
-### Brain / 工具 / Skill
+### Brain / 工具 / Skill / middleware
 
 | 关注点 | 文件 |
 |--------|------|
 | Protocol 与默认工厂 | `backend/runtime/agent.py` |
+| middleware 与有界 structured recovery | `backend/runtime/middleware.py` |
 | 静态工具注册 | `backend/runtime/tools.py` |
 | MinerU | `backend/integrations/mineru.py` |
 | artifact 路径安全 | `backend/integrations/artifacts.py` |
@@ -142,7 +142,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 关注点 | 文件 |
 |--------|------|
 | HTTP 契约 / cancel / usage | `backend/tests/test_api.py` |
-| harness / middleware / 事件序列 | `backend/tests/test_harness.py` |
+| harness / middleware / 事件序列 / recovery 封顶 | `backend/tests/test_harness.py` |
 | ledger / spill / 聚合 | `backend/tests/test_run_ledger.py` |
 | 五工具注册与 MinerU mock | `backend/tests/test_tools.py` |
 | SubAgent / middleware 装配 | `backend/tests/test_workflow_setup.py` |
@@ -177,10 +177,10 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 
 | 类别 | 约定 | 示例 |
 |------|------|------|
-| 模块/文件 | snake_case | `execution.py`、`artifacts.py` |
-| 类 | PascalCase | `HarnessRuntime`、`SqliteRunLedger` |
-| 函数/方法 | snake_case | `execute_run`、`emit_run_status` |
-| 常量 | UPPER_SNAKE | `RUN_STATUSES`、`MAIN_AGENT_NAME`、`SKILLS_SOURCE` |
+| 模块/文件 | snake_case | `execution.py`、`artifacts.py`、`middleware.py` |
+| 类 | PascalCase | `HarnessRuntime`、`SqliteRunLedger`、`StructuredOutputRecovery` |
+| 函数/方法 | snake_case | `execute_run`、`emit_run_status`、`runtime_middlewares` |
+| 常量 | UPPER_SNAKE | `RUN_STATUSES`、`MAIN_AGENT_NAME`、`SKILLS_SOURCE`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES` |
 | frozen dataclass | PascalCase | `RunEvent`、`ToolCatalog`、`ResourceConfig` |
 | Protocol | PascalCase 能力名 | `Brain`、`BrainFactory` |
 | 工具函数名 | snake_case，即模型可见名 | `parse_documents`、`generate_tecan_import` |
@@ -203,6 +203,24 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 
 - `.planning/codebase/` 与长期文档：说明用简体中文；代码标识符、路径、命令、配置键、API 名称保持原文。
 
+## 模块职责表
+
+| 模块 | 职责 | 不负责 |
+|------|------|--------|
+| `api.py` | HTTP 契约、session 单飞锁、后台线程调度、usage 计价汇总 | 业务裁决、stream 解析细节 |
+| `runtime/execution.py` | `HarnessRuntime`：装配 Brain、消费 stream、写 7 类事件、协作取消 | 解析业务字段、计价 |
+| `runtime/agent.py` | `Brain`/`BrainFactory` Protocol、DeepAgents 工厂、SubAgent 声明 | 事件落库、HTTP |
+| `runtime/middleware.py` | Tool 遥测、无进展熔断、ToolStrategy thinking 兼容、structured recovery 有界重试 | harness 循环、ledger |
+| `runtime/observability.py` | chunk → usage/thinking/text/assistant/tool payload 纯函数 | I/O、run 状态 |
+| `runtime/resources.py` | 三库 + CompositeBackend 装配与 handbook 种子 | run 事件语义 |
+| `runtime/runs.py` | append-only `run_events` + `runs` 投影、usage 聚合、启动清理 | 模型调用 |
+| `runtime/tools.py` | `ToolCatalog` 与 5 工具静态注册 | 工具实现体 |
+| `integrations/artifacts.py` | `/artifacts/` 路径安全、命名、JSON 写入 helper | 业务 schema |
+| `integrations/mineru.py` | MinerU 解析/解压工具与 progress 事件 | run ledger |
+| `skills/philipswgqinboundrecognition/` | 固定 workflow 合同 + 主数据 Tool | harness 通用路径 |
+| `skills/tecanimport/` | 抽取/生成 Excel 业务 Tool 与参考资料 | HTTP 入口 |
+| `tests/*` | 可执行 assert 回归与真实集成脚本 | 生产路径 |
+
 ## Where to Add New Code
 
 | 目标 | 落点 | 注意 |
@@ -211,6 +229,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 改 stream→事件映射 | `runtime/execution.py` | 保持 harness 薄；业务不下沉到此 |
 | 新 chunk 字段解析 | `runtime/observability.py` | 保持纯函数、无 I/O |
 | 新 middleware | `runtime/middleware.py` + `runtime_middlewares()` | `execution.py` / `agent.py` 装配；主 Agent 手册用 `memory_backend=`；SubAgent 各自注入无 memory 实例 |
+| structured recovery 调整 | `StructuredOutputRecovery` | 必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"` |
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
 | 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |
@@ -237,6 +256,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 不要新增 session 表或 SSE 通道替代 run 轮询（除非产品契约整体变更）。
 - 不要引入动态 Skill 扫描器替代 `default_tool_catalog()` 静态注册。
 - 不要把密钥或 `.env` 内容写入文档或测试断言字符串。
+- 不要在 `after_model` 有界重试中省略 `can_jump_to` 的 `"end"` 或耗尽时只返回 `None`。
 
 ---
 *Structure analysis: 2026-07-16*

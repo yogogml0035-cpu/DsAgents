@@ -1,5 +1,8 @@
 param(
-    [switch]$Server
+    [switch]$Server,
+    [Alias("P")]
+    [ValidateRange(1, 65535)]
+    [int]$Port = 8500
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,17 +11,19 @@ $backendPath = Join-Path $repoRoot "backend"
 
 if (-not $Server) {
     $scriptPath = $PSCommandPath
+    Write-Host "Opening backend server window on port $Port ..."
     Start-Process -FilePath "powershell.exe" `
         -WorkingDirectory $repoRoot `
         -ArgumentList @(
             "-NoExit"
             "-ExecutionPolicy", "Bypass"
-            "-File", "`"$scriptPath`""
+            "-File", $scriptPath
             "-Server"
+            "-Port", "$Port"
         )
     exit 0
 }
 
 Set-Location $backendPath
-Write-Host "Starting DsAgents backend at http://127.0.0.1:8500"
-uv run uvicorn api:app --host 0.0.0.0 --port 8500
+Write-Host "Starting DsAgents backend at http://127.0.0.1:$Port"
+uv run uvicorn api:app --host 0.0.0.0 --port $Port

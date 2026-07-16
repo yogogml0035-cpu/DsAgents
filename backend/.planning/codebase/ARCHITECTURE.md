@@ -1,12 +1,12 @@
 ---
-last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
+last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 ---
 
 # Architecture
 
 **Analysis Date:** 2026-07-16
 
-> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,observability,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` 及其 `scripts/`、`tests/`。结论以源码为准。
+> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` 及其 `scripts/`。结论以源码为准。
 
 ## Pattern Overview
 
@@ -117,8 +117,10 @@ emit status=running
   → 注册 RunControl
   → brain_factory.create(resources, middleware, tools, workflow)
     → Philips：ToolStrategy(PhilipsWgqRecognitionResult)，注册
-      StructuredOutputCompatibility，按请求关闭 thinking，
+      StructuredOutputCompatibility（ToolStrategy 请求关闭 thinking），
+      StructuredOutputRecovery（after_model 有界重试 + jump_to end），
       仅暴露 parse_documents + lookup_philips_wgq_master_data，无 SubAgent
+    → 通用：default tools + workflow_subagents()（Tecan A/B）
   → brain.stream(
        {"messages": normalized},          # artifact block → 文本提示
        config={"configurable":{"thread_id": session_id}},
@@ -182,8 +184,9 @@ tool_progress / assistant_message / model_usage / ... → status(succeeded)
 | `ToolTelemetry` | `runtime/middleware.py` | `wrap_tool_call` → custom `tool_execution` 三态；不自动写手册 |
 | `NoProgressMiddleware` | `runtime/middleware.py` | `before_model`：从当前消息状态计算同 tool+args 连续 3 次 → `NoProgressLoop`；不保存实例级调用状态 |
 | `StructuredOutputCompatibility` | `runtime/middleware.py` | `wrap_model_call`：仅当 `ToolStrategy` + thinking 时用 `request.override(model=...)` 复制模型并关闭 thinking，不增加 graph state |
-| `MemoryMiddleware`（内置） | DeepAgents + `runtime/middleware.py` | 主 Agent 仅：`sources=["/memories/AGENTS.md"]` + 受限 `RUNTIME_MEMORY_SYSTEM_PROMPT`；不走 `memory=[]` 默认提示 |
-| `workflow_subagents()` | `runtime/agent.py` + `runtime/middleware.py` | 2 个声明式 Tecan extractor；各装 3 个 runtime middleware（无 Memory）+ 只读 FS；Philips 不使用 SubAgent |
+| `StructuredOutputRecovery` | `runtime/middleware.py` | `after_model`：从纯文本 JSON 恢复 `structured_response`；失败则有界 `jump_to: "model"`，耗尽或无法继续时 `jump_to: "end"` |
+| `MemoryMiddleware`（内置） | DeepAgents + `runtime/middleware.py` | 主 Agent 仅：`sources=["/memories/AGENTS.md"]` + 受限 `RUNTIME_MEMORY_SYSTEM_PROMPT` + `add_cache_control=True`；不走 `memory=` 默认提示 |
+| `workflow_subagents()` | `runtime/agent.py` | 2 个声明式 Tecan extractor；各装 `runtime_middlewares()`（含 Recovery，无 Memory）+ 只读 FS；Philips 不使用 SubAgent |
 | `observability.*` | `runtime/observability.py` | 无 I/O 的 chunk 载荷提取 |
 | artifact helpers | `integrations/artifacts.py` | 路径解析、唯一下载名、不可覆盖 JSON |
 | MinerU tools | `integrations/mineru.py` | `parse_documents` / `extract_archives` + progress custom 事件 |
@@ -206,10 +209,32 @@ Philips 只暴露 1 个业务 Tool，且工具结果不含历史数量、价格�
 ### 中间件约束
 
 - `runtime/middleware.py` 集中放置运行时 middleware；`runtime/agent.py` 只负责导入、工厂装配与 SubAgent 声明。
-- `runtime_middlewares(*, memory_backend=None)`：始终返回 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`；主 Agent 传入 `memory_backend=resources.backend` 时再追加一个内置 `MemoryMiddleware`。不使用 `create_deep_agent(memory=...)`，以免默认用户偏好记忆语义与重复加载。
-- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`（无 handbook）；Philips 工厂对直接调用方传入的 middleware 仍补齐兼容实例。
+- `runtime_middlewares(*, memory_backend=None)` 固定顺序返回（洋葱模型：列表靠前的 `after_model` 后执行）：
+  1. `StructuredOutputRecovery()`（列在最前，使 `after_model` 在 after 钩子中最后执行，便于在其它层之后仍可回填 `structured_response`）
+  2. `ToolTelemetry()`
+  3. `NoProgressMiddleware()`
+  4. `StructuredOutputCompatibility()`
+  5. 可选：主 Agent 传入 `memory_backend=resources.backend` 时追加内置 `MemoryMiddleware`（`add_cache_control=True`）
+- 不使用 `create_deep_agent(memory=...)`，以免默认用户偏好记忆语义与重复加载。
+- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`（无 handbook）。
+- Philips 工厂（`DeepAgentsBrainFactory.create`）对调用方已传入的 middleware 做 **缺则补齐、已有则跳过**：缺 `StructuredOutputCompatibility` 时 **append**；缺 `StructuredOutputRecovery` 时 **insert(0)**（与 `runtime_middlewares` 同序意图，保证 recovery 的 `after_model` 仍最后跑）。
 - `StructuredOutputCompatibility` 只改本次 `ModelRequest`，不使用 `state_schema`、`ExtendedModelResponse` 或 `Command`；`NoProgressMiddleware` 也从既有 `messages` 派生判断，不增加自定义 graph state。
 - 操作经验沉淀：基线预置 + 自动注入 system prompt；工具失败后由模型按模板 `edit_file` 追加；无审批/去重/自动拦截写手册。
+
+### StructuredOutputRecovery 有界重试（`after_model` + `jump_to`）
+
+实现位置：`runtime/middleware.py` 中 `StructuredOutputRecovery`。
+
+| 要点 | 行为 |
+|------|------|
+| 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含 **空文本** 结束） |
+| 成功路径 | 从 fenced/raw 文本解析 JSON → `schema.model_validate` → 写入 `structured_response`，计数归零 |
+| 失败重试 | 无合法 JSON、校验失败或空文本：追加校正 `HumanMessage`，`jump_to: "model"`，`structured_recovery_attempts += 1` |
+| 上限 | 默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`（总模型轮次约 `1 + max_retries`） |
+| 耗尽/放行 | `attempts >= max_retries` 时返回 `{"jump_to": "end"}`，**禁止**只返回 `None` |
+| 钩子声明 | `@hook_config(can_jump_to=["model", "end"])` — 必须同时声明 `"end"` |
+| 为何必须 end | 仅有 `ToolStrategy`、业务 tool 被收窄时，缺 `structured_response` 且返回 `None` 会走 model↔model 边无限循环 |
+| 下游 | harness 见 `structured_response missing` → run `failed`（与 `result.outcome=input_problems` 仍 `succeeded` 严格区分） |
 
 ### run 状态机
 
@@ -244,7 +269,7 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 
 ### 测试
 
-`backend/tests/` 为可执行 assert 脚本（非 pytest 套件），如 `python -m tests.test_api`。真实模型 / MinerU / HTTP 脚本与本地回归分离。
+`backend/tests/` 为可执行 assert 脚本（非 pytest 套件），如 `python -m tests.test_api`。真实模型 / MinerU / HTTP 脚本与本地回归分离。有界重试封顶可用 `cd backend && python -m tests.test_harness` 验证。
 
 ## Error Handling
 
@@ -262,6 +287,7 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 | cancel 时无 `RunControl`（仍 queued） | 直接 `cancelled` |
 | Philips `input_problems` | 验证后的 `result.outcome=input_problems`；run 仍 `succeeded` |
 | Philips 缺少/非法结构化结果 | run `failed`，不从 `reply` 猜 JSON |
+| structured recovery 耗尽 | middleware `jump_to: "end"` → harness 报 `structured_response missing` → `failed` |
 | 大 payload | `SqliteRunLedger._store_blob` 超 `max_inline_bytes=262_144` 外溢到 `data/internal/run-events/{uuid}.json` |
 | Oracle 配置缺失/查询失败/未命中 | 主数据工具写入 `problems`，保留 PDF/Tracking 数据并形成 `partial_success` |
 | 真实错误 | 透传异常文本；不吞掉 stack 语义（`raw` 保留 `repr`） |

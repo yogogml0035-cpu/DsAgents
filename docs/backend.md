@@ -22,7 +22,7 @@
 
 - `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
 - `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy/工具裁剪、两个 Tecan extractor SubAgent 与 middleware 装配。
-- `backend/runtime/middleware.py`：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`。
+- `backend/runtime/middleware.py`：`StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`。
 - `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、结构化响应捕获/复验、协作式 cancel 和默认 harness 工厂。
 - `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢。
 - `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由；缺失时 seed 共享操作手册 `/memories/AGENTS.md`。
@@ -35,7 +35,7 @@
 - `backend/data/` 按需创建 `dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db`；新 schema 无迁移，部署切换需清空整个数据目录。
 - 同一 `session_id` 的单飞锁只在进程内有效；多 worker 不提供跨进程互斥。
 - `POST /runs/{run_id}/cancel` 是协作式 drain，不回滚已经生成的文件，也不提供跨进程强杀。
-- Philips 的业务问题使用 `result.outcome=input_problems`（run 仍 `succeeded`）；Tecan 工具继续返回 `code=input_problems`。下一 run 均重新显式传入所需 artifact 路径。
+- Philips 的业务问题使用 `result.outcome=input_problems`（`data=null`，run 仍 `succeeded`）；结构化响应缺失/非法或运行时异常才令 run `failed`。Tecan 工具继续返回 `code=input_problems`。下一 run 均重新显式传入所需 artifact 路径。
 - Philips 主数据优先 Tracking、Oracle 只补缺失稳定字段；配置缺失、查询失败或未命中写 `problems`，已有 PDF/Tracking 数据不丢失。
 
 完整接口、provider 和存储边界见根级 `INTERFACES.md` §5；系统级风险见 `ARCHITECTURE.md` §7 与 `backend/.planning/codebase/CONCERNS.md`；测试入口见 `backend/.planning/codebase/TESTING.md` 与 `docs/commands.md`。

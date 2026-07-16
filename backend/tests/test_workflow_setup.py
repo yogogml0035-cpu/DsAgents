@@ -56,6 +56,7 @@ def run() -> None:
     assert len(memory_items) == 1
     assert memory_items[0].sources == [RUNTIME_AGENTS_PATH]
     assert memory_items[0].system_prompt == RUNTIME_MEMORY_SYSTEM_PROMPT
+    assert memory_items[0]._add_cache_control is True
     assert "Learning from feedback" not in RUNTIME_MEMORY_SYSTEM_PROMPT
     assert "{agent_memory}" in RUNTIME_MEMORY_SYSTEM_PROMPT
     assert "edit_file" in RUNTIME_MEMORY_SYSTEM_PROMPT

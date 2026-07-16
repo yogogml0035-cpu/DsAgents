@@ -26,6 +26,8 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
+改 `StructuredOutputRecovery` / `after_model` / `jump_to` 时务必跑 `python -m tests.test_harness`，确认重试次数封顶且耗尽时 `jump_to: "end"`（禁止只返回 `None`）。
+
 `python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机与 usage 聚合的本地 assert 脚本。
 
 ## 真实外部集成（默认跳过，不进普通门禁）
