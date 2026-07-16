@@ -38,30 +38,29 @@ DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2
 _RECOVERY_MODEL_SNIPPET_CHARS = 3000
 _RECOVERY_ERROR_CHARS = 1500
 
-# Restricted MemoryMiddleware prompt: auto-load handbook; append only after tool failures.
+# 受限 MemoryMiddleware 提示：自动加载手册；仅在工具失败后追加。
 RUNTIME_MEMORY_SYSTEM_PROMPT = """\
 <agent_memory>
 {agent_memory}
 </agent_memory>
 
 <memory_guidelines>
-The handbook above is shared runtime tool-use guidance. Follow it for document/result consumption.
+上方手册是共享的运行时工具使用指引。处理文档与结果时请遵循。
 
-After a tool call fails and the failure is a reusable tool-misuse pattern, append one short entry to
-`/memories/AGENTS.md` with `edit_file` using this shape:
+工具调用失败且属于可复用的工具误用模式时，用 `edit_file` 向 `/memories/AGENTS.md` 追加一条短记录，格式如下：
 
 ### <tool_name>
-- Error: <what failed>
-- Next: <correct next step>
+- 错误: <失败现象>
+- 下一步: <正确下一步>
 
-Only append verified tool-misuse patterns. Do not write business data, user preferences, secrets,
-private paths, full file contents, or unverified guesses. Do not update the handbook for one-off
-environment glitches or when no tool failed.
+只追加已验证的工具误用模式。不要写业务数据、用户偏好、密钥、私有路径、完整文件内容或未验证猜测。
+一次性环境故障或未发生工具失败时，不要更新手册。
 </memory_guidelines>
 """
 
 __all__ = [
     "DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES",
+    "EMPTY_DATA_SHELL_HINT",
     "NO_PROGRESS_WINDOW",
     "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
@@ -70,8 +69,21 @@ __all__ = [
     "StructuredOutputRecovery",
     "StructuredOutputRecoveryState",
     "ToolTelemetry",
+    "is_empty_recognition_data_shell",
+    "philips_structured_output_error_message",
     "runtime_middlewares",
 ]
+
+# 模型提交 success/partial 却 data:{} 或缺 shipment/header/items 时的共享纠错文案。
+# 供 ToolStrategy handle_errors 与 recovery 重试使用。
+EMPTY_DATA_SHELL_HINT = (
+    "PhilipsWgqRecognitionResult 无效：data 不能是 {}，也不能省略 shipment/header/items。"
+    "outcome 为 success 或 partial_success 时，请用结构化工具重新提交完整嵌套对象："
+    "shipment（pieces、total_gross_weight）、header（全部固定英文字段）、"
+    "items（非空数组，每项为完整商品对象）。未知值填 null。"
+    "outcome 为 input_problems 时，data 必须为 null（不能是 {}），且至少一条 problem。"
+    "不要编造业务值；复用已从 PDF 与主数据查询得到的字段。禁止重复提交相同的空 data 壳。"
+)
 
 _FENCED_JSON = re.compile(
     r"```(?:json)?\s*(\{.*?\})\s*```",
@@ -195,6 +207,11 @@ class StructuredOutputRecovery(AgentMiddleware):
     ToolStrategy re-generation loop; the harness then fails with
     ``structured_response missing``.
 
+    Also intercepts empty ``data: {}`` structured tool attempts (ToolStrategy
+    validation failures that only produce a generic ToolMessage). When the
+    latest tool-error turn is an empty recognition shell, append a specific
+    correction and jump back to the model (bounded by the same retry budget).
+
     Does not rewrite business outcome fields. Does not invent schema values.
     """
 
@@ -222,9 +239,20 @@ class StructuredOutputRecovery(AgentMiddleware):
             return None
         latest = messages[-1]
         if not _is_ai_message(latest):
+            # ToolStrategy validation failures end with ToolMessage(s). When the
+            # rejected structured args were an empty data shell, coach a full
+            # resubmit. Do not invent field values.
+            empty_shell = _latest_empty_structured_shell(messages, self.schema)
+            if empty_shell is not None:
+                return self._retry_or_give_up(
+                    state,
+                    reason=EMPTY_DATA_SHELL_HINT,
+                    model_text=json.dumps(empty_shell, ensure_ascii=False, default=str),
+                )
             return None
         if observability.tool_calls_of(latest):
-            # Pending or structured tool_calls: leave ToolStrategy / tools path alone.
+            # Pending tool_calls (including structured): leave ToolStrategy path.
+            # Empty shells are handled after ToolStrategy emits the error ToolMessage.
             return None
         text = _message_text(latest)
         if not text or not text.strip():
@@ -232,18 +260,27 @@ class StructuredOutputRecovery(AgentMiddleware):
             # path. Exhausted retries jump_to end so ToolStrategy cannot loop forever.
             return self._retry_or_give_up(
                 state,
-                reason="assistant finished with empty text and no structured_response",
+                reason="助手以空文本结束，且未产生 structured_response",
                 model_text=text or "",
             )
 
         payload = _extract_json_object(text)
         if payload is not None:
+            if is_empty_recognition_data_shell(payload):
+                return self._retry_or_give_up(
+                    state,
+                    reason=EMPTY_DATA_SHELL_HINT,
+                    model_text=text,
+                )
             try:
                 validated = self.schema.model_validate(payload)
             except ValidationError as exc:
+                reason = _format_validation_error(exc)
+                if _validation_indicates_empty_data(exc):
+                    reason = f"{EMPTY_DATA_SHELL_HINT}\n\nValidator detail:\n{reason}"
                 return self._retry_or_give_up(
                     state,
-                    reason=_format_validation_error(exc),
+                    reason=reason,
                     model_text=text,
                 )
             return {
@@ -255,7 +292,7 @@ class StructuredOutputRecovery(AgentMiddleware):
         # via the schema tool or a single valid JSON object.
         return self._retry_or_give_up(
             state,
-            reason="no valid JSON object found in assistant text",
+            reason="助手文本中未找到合法 JSON 对象",
             model_text=text,
         )
 
@@ -426,6 +463,154 @@ def _format_validation_error(exc: ValidationError) -> str:
     return text
 
 
+def is_empty_recognition_data_shell(payload: Any) -> bool:
+    """True when payload claims success/partial but data is {} or missing nested keys.
+
+    Does not invent values. ``input_problems`` with ``data: null`` is not a shell.
+    """
+    if not isinstance(payload, dict):
+        return False
+    outcome = payload.get("outcome")
+    if outcome not in {"success", "partial_success"}:
+        return False
+    data = payload.get("data")
+    if data is None:
+        return True
+    if not isinstance(data, dict):
+        return False
+    if data == {}:
+        return True
+    # Partial shells: missing any required nested section.
+    for key in ("shipment", "header", "items"):
+        if key not in data:
+            return True
+    shipment = data.get("shipment")
+    header = data.get("header")
+    items = data.get("items")
+    if isinstance(shipment, dict) and shipment == {}:
+        return True
+    if isinstance(header, dict) and header == {}:
+        return True
+    if items == [] or items is None:
+        return True
+    return False
+
+
+def _validation_indicates_empty_data(exc: ValidationError) -> bool:
+    """Heuristic: pydantic reported missing data.shipment/header/items on empty dict."""
+    text = str(exc)
+    missing = ("data.shipment" in text, "data.header" in text, "data.items" in text)
+    if sum(1 for hit in missing if hit) >= 2:
+        return True
+    return "input_value={}" in text and "data" in text.lower()
+
+
+def philips_structured_output_error_message(exc: Exception) -> str:
+    """ToolStrategy handle_errors callback for PhilipsWgqRecognitionResult.
+
+    Returns a specific empty-data coaching message when the failed tool args are
+    an empty shell; otherwise the default LangChain-style fix prompt.
+    """
+    args = _structured_validation_error_args(exc)
+    if args is not None and is_empty_recognition_data_shell(args):
+        return f"错误：{EMPTY_DATA_SHELL_HINT}\n请修正后重试。"
+    # 其他 schema 问题仍回传原始解析错误。
+    return f"错误：{exc}\n请修正后重试。"
+
+
+def _structured_validation_error_args(exc: Exception) -> dict[str, Any] | None:
+    """Best-effort extract of rejected tool args from StructuredOutputValidationError."""
+    ai_message = getattr(exc, "ai_message", None)
+    if ai_message is None:
+        return None
+    tool_name = getattr(exc, "tool_name", None)
+    for tool_call in observability.tool_calls_of(ai_message):
+        if not isinstance(tool_call, dict):
+            continue
+        if tool_name is not None and tool_call.get("name") != tool_name:
+            continue
+        args = tool_call.get("args")
+        if isinstance(args, dict):
+            return args
+    return None
+
+
+def _schema_tool_name(schema: type[BaseModel]) -> str:
+    return getattr(schema, "__name__", "structured schema")
+
+
+def _empty_structured_shell_from_ai(
+    message: Any,
+    schema: type[BaseModel],
+) -> dict[str, Any] | None:
+    """Return empty-shell structured tool args from an AI message, if any."""
+    expected = _schema_tool_name(schema)
+    for tool_call in observability.tool_calls_of(message):
+        if not isinstance(tool_call, dict):
+            continue
+        if tool_call.get("name") != expected:
+            continue
+        args = tool_call.get("args")
+        if isinstance(args, dict) and is_empty_recognition_data_shell(args):
+            return args
+    return None
+
+
+def _latest_empty_structured_shell(
+    messages: list[Any],
+    schema: type[BaseModel],
+) -> dict[str, Any] | None:
+    """Find empty Philips structured args in the current turn after a tool error.
+
+    Scans newest-first until a human message. Requires a recent ToolMessage that
+    looks like a structured-output validation error, then the AI tool call shell.
+    """
+    saw_structured_error = False
+    for message in reversed(messages):
+        if _is_human_message(message):
+            break
+        if _is_tool_message(message):
+            text = _message_text(message)
+            name = _tool_message_name(message)
+            if name == _schema_tool_name(schema) or _looks_like_structured_parse_error(text):
+                saw_structured_error = True
+            continue
+        if _is_ai_message(message):
+            if not saw_structured_error:
+                return None
+            return _empty_structured_shell_from_ai(message, schema)
+    return None
+
+
+def _is_tool_message(message: Any) -> bool:
+    if isinstance(message, dict):
+        return message.get("role") == "tool" or message.get("type") == "tool"
+    type_name = type(message).__name__
+    if type_name == "ToolMessage":
+        return True
+    return getattr(message, "type", None) == "tool" or getattr(message, "role", None) == "tool"
+
+
+def _tool_message_name(message: Any) -> str | None:
+    if isinstance(message, dict):
+        name = message.get("name")
+        return name if isinstance(name, str) else None
+    name = getattr(message, "name", None)
+    return name if isinstance(name, str) else None
+
+
+def _looks_like_structured_parse_error(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "failed to parse structured output" in lowered
+        or "please fix your mistakes" in lowered
+        or "请修正后重试" in text
+        or "data 不能是 {}" in text
+        or "data must not be {}" in lowered
+        or "data.shipment" in lowered
+    )
+
+
 def _build_recovery_retry_message(
     *,
     reason: str,
@@ -435,13 +620,27 @@ def _build_recovery_retry_message(
     snippet = model_text.strip()
     if len(snippet) > _RECOVERY_MODEL_SNIPPET_CHARS:
         snippet = snippet[:_RECOVERY_MODEL_SNIPPET_CHARS] + "\n...[truncated]"
+    empty_shell = (
+        "data 不能是 {}" in reason
+        or "data must not be {}" in reason
+        or "data: {}" in reason
+    )
+    if empty_shell:
+        lead = (
+            f"结构化输出被拒绝：`{schema_name}` 使用了空的 `data` 壳。"
+            "请再次调用结构化工具，提交完整嵌套的 `shipment`、`header` 与非空 `items`。"
+            "不要编造业务值；未知填 null。禁止再次提交 data: {}。\n\n"
+        )
+    else:
+        lead = (
+            f"结构化输出被拒绝。请重新提交合法的 `{schema_name}`："
+            "优先调用结构化输出工具，或输出恰好一个符合 schema 的 JSON 对象。"
+            "不要编造字段；未知填 null。仅自然语言摘要不能作为业务结果。\n\n"
+        )
     return (
-        f"Structured output was rejected. Resubmit a valid `{schema_name}` by "
-        "calling the structured-output tool (preferred), or emit exactly one JSON "
-        "object that matches the schema. Do not invent fields; use null for unknowns. "
-        "Natural-language summary alone is not accepted as the business result.\n\n"
-        f"Issue:\n{reason}\n\n"
-        f"Your previous content:\n{snippet}"
+        f"{lead}"
+        f"问题：\n{reason}\n\n"
+        f"你之前的内容：\n{snippet}"
     )
 
 

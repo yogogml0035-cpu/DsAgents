@@ -18,7 +18,7 @@ _TEMPLATE = Path(__file__).resolve().parents[1] / "assets" / "Tecan_进口_发�
 
 
 def generate_invoice_packing(canonical: Mapping[str, Any]) -> str:
-    """Fill Customs invoice + Packing List of the Tecan template from one canonical."""
+    """根据一份 canonical 填写帝肯模板的 Customs invoice 与 Packing List。"""
     workbook = load_workbook(_TEMPLATE, data_only=False)
     try:
         customs = workbook["Customs invoice"]

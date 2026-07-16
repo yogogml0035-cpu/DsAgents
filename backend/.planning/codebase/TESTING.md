@@ -105,9 +105,9 @@ python -m tests.test_minimax_cache_baseline
 - 验证 artifact block 进入 Brain 前全部转为 text block。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage **七类事件**。
 - Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking；独立 fake chat model 还实际经过 `create_agent` 的 `wrap_model_call` 链并保留 `structured_response`，Harness 再从 `updates` 捕获并做 Pydantic 校验。
-- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；`attempts >= max_retries` → `jump_to: "end"`（含空文本路径）；端到端模型调用次数 = 1 + `max_retries` 后退出。
+- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；`attempts >= max_retries` → `jump_to: "end"`（含空文本路径）；端到端模型调用次数 = 1 + `max_retries` 后退出；空 `data: {}` 文本与 ToolMessage 错误路径使用 `EMPTY_DATA_SHELL_HINT`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
 - `test_harness` 验证 `NoProgressMiddleware` 从当前 HumanMessage 之后的消息序列识别连续三次同一 tool+args，新 human turn 与参数变化不会误触发；middleware 不依赖实例级计数；主 Agent 仅一个 `MemoryMiddleware` 且手册进入 system prompt。
-- `test_workflow_setup` 断言 Philips 仅暴露 `parse_documents` 与 `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`；SubAgent middleware 无 `MemoryMiddleware`（各 **4** 个 runtime middleware）；受限记忆提示不含默认用户偏好语义。
+- `test_workflow_setup` 断言 Philips 排除帝肯工具、保留 `parse_documents` / `extract_archives` / `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`；SubAgent middleware 无 `MemoryMiddleware`（各 **4** 个 runtime middleware）；受限记忆提示不含默认用户偏好语义。
 - `test_run_ledger` 断言 `/memories/AGENTS.md` 首次 seed 含 ZIP/`result_path` 基线，人工/追加内容在重开资源后不被覆盖。
 
 ### 3. Philips 确定性业务规则

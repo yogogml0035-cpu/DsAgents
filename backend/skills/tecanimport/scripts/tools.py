@@ -60,7 +60,7 @@ def save_tecan_extraction(
     logistics: dict[str, dict[str, Any]],
     items: list[dict[str, Any]],
 ) -> dict[str, str]:
-    """Validate and immutably save one Tecan logistics extraction artifact."""
+    """校验并以不可变方式保存一份帝肯物流抽取 artifact。"""
     if not resolve_artifact_path(source_artifact).is_file():
         raise ValueError(f"source_artifact not found: {source_artifact}")
     payload = _validate_extraction(
@@ -82,9 +82,9 @@ def generate_tecan_import(
     information_artifacts: list[str],
     decisions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """One-shot: reconcile logistics + decisions → canonical → 发票箱单.
+    """一站式：汇总物流与裁决 → canonical → 发票箱单。
 
-    Returns one of:
+    返回二者之一：
       {"status": "generated", "canonical_artifact", "artifacts", "manual_checks"}
       {"code": "input_problems", "problems": [{source, location, issue, action}]}
     """

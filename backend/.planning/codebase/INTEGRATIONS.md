@@ -169,7 +169,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | 包路径 | `skills/philipswgqinboundrecognition/` |
 | API workflow | `workflow="philips_wgq_inbound_recognition"`（`WORKFLOW` 常量） |
 | 外部依赖 | MinerU（PDF）+ 可选 Tracking Excel（openpyxl）+ 可选 Oracle |
-| 工具 | `parse_documents`、`lookup_philips_wgq_master_data`（workflow 下仅此二工具暴露给 Brain） |
+| 工具 | `parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`（workflow 排除帝肯工具，保留共享 MinerU 工具） |
 | 输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` → `run.result`；业务失败形态 `input_problems` |
 | SubAgent | **禁用**（workflow 时 `subagents=[]`） |
 | 文档 | `SKILL.md` 约束 1–10 PDF、可选 1 Tracking；不解析 ZIP/DOCX/图片作为业务主路径 |

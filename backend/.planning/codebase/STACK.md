@@ -201,7 +201,7 @@ init_chat_model(
 4. `save_tecan_extraction`
 5. `generate_tecan_import`
 
-Philips workflow 下 Brain 仅暴露 `parse_documents` 与 `lookup_philips_wgq_master_data`，并启用 `ToolStrategy(PhilipsWgqRecognitionResult)` + 结构化输出中间件。
+Philips workflow 下 Brain 排除帝肯工具，保留共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`，并启用 `ToolStrategy(PhilipsWgqRecognitionResult)` + 结构化输出中间件。
 
 ## Platform Requirements
 

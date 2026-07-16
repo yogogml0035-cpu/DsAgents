@@ -79,8 +79,10 @@ scope: backend/
   - 解析/校验失败或空文本：`jump_to: "model"`，计数 `structured_recovery_attempts`，默认 `max_retries=2`
   - 耗尽重试：**必须** `return {"jump_to": "end"}`（注释明确禁止只返回 `None`）
   - 源码注释：`Returning None would infinite-loop; jump to end instead.`
-- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`，以及 graph 上 `initial + max_retries` 次调用后封顶。
-- **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
+  - 空 `data: {}` / 缺 `shipment|header|items`：专用 `EMPTY_DATA_SHELL_HINT` + `philips_structured_output_error_message`（ToolStrategy `handle_errors`）；不编造业务字段
+  - Skill / `PHILIPS_WORKFLOW_PROMPT` 硬约束禁止空壳提交
+- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径专用纠错。
+- **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。模型仍可能在专用提示后重复空壳，最终由 `NoProgressMiddleware` 或 recovery 耗尽结束。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
 - **关联**：耗尽后 harness 仍可能 `structured_response missing` → run `failed`（`runtime/execution.py`），属预期失败路径，不是挂死。
 
 ### 2. 单飞锁仅进程内有效（已确认）

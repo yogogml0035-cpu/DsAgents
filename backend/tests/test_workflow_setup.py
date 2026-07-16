@@ -26,6 +26,7 @@ from runtime.agent import (
 from runtime.execution import _update_events
 from runtime.middleware import RUNTIME_MEMORY_SYSTEM_PROMPT, runtime_middlewares
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
+from runtime.tools import default_tool_catalog
 
 
 def run() -> None:
@@ -39,8 +40,9 @@ def run() -> None:
     assert "两个以上真实票次" in philips
     assert "同一个主模型回合并行" in tecan
     assert "普通 PDF" in philips and "普通 PDF" in tecan
-    assert "ordinary PDF extraction request is not enough" in DEFAULT_SYSTEM_PROMPT
+    assert "普通 PDF 抽取请求不够" in DEFAULT_SYSTEM_PROMPT
     assert "Persist important notes under /memories/" not in DEFAULT_SYSTEM_PROMPT
+    assert "业务 Skill" in DEFAULT_SYSTEM_PROMPT
     assert "philipswgqinboundrecognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
 
     # Subagents get recovery + telemetry stack — no shared handbook.
@@ -96,11 +98,21 @@ def run() -> None:
         api_key="test-key",
         thinking={"type": "adaptive"},
     )
+    # Use the real static catalog so denylist drift vs tools.py is caught.
+    catalog_tools = default_tool_catalog().as_list()
+    catalog_names = {tool.__name__ for tool in catalog_tools}
+    assert catalog_names == {
+        "parse_documents",
+        "extract_archives",
+        "lookup_philips_wgq_master_data",
+        "save_tecan_extraction",
+        "generate_tecan_import",
+    }
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         assert DeepAgentsBrainFactory(model=model).create(
             resources=resources,
             middleware=[],
-            tools=[],
+            tools=catalog_tools,
             workflow="philips_wgq_inbound_recognition",
         ) is sentinel
     kwargs = create.call_args.kwargs
@@ -110,8 +122,27 @@ def run() -> None:
     assert kwargs["permissions"] == [
         FilesystemPermission(operations=["write"], paths=["/skills/**"], mode="deny")
     ]
+    philips_tool_names = {getattr(tool, "__name__", "") for tool in kwargs["tools"]}
+    assert philips_tool_names == {
+        "parse_documents",
+        "extract_archives",
+        "lookup_philips_wgq_master_data",
+    }
+    assert philips_tool_names.isdisjoint(
+        {"save_tecan_extraction", "generate_tecan_import"}
+    )
+    assert "extract_archives" in philips_tool_names
     assert isinstance(kwargs["response_format"], ToolStrategy)
     assert PHILIPS_WORKFLOW_PROMPT in kwargs["system_prompt"]
+    assert "data: {}" in kwargs["system_prompt"]
+    assert "shipment" in kwargs["system_prompt"]
+    assert callable(kwargs["response_format"].handle_errors)
+    empty_shell_msg = kwargs["response_format"].handle_errors(
+        Exception("placeholder")
+    )
+    # Without ai_message args, still returns a fix prompt; empty-shell path is
+    # covered in test_harness. Ensure handle_errors is our custom callable.
+    assert "请修正后重试" in empty_shell_msg
     assert kwargs["model"] is model
     compatibility = next(
         middleware

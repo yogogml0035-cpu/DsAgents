@@ -119,7 +119,7 @@ emit status=running
     → Philips：ToolStrategy(PhilipsWgqRecognitionResult)，注册
       StructuredOutputCompatibility（ToolStrategy 请求关闭 thinking），
       StructuredOutputRecovery（after_model 有界重试 + jump_to end），
-      仅暴露 parse_documents + lookup_philips_wgq_master_data，无 SubAgent
+      排除帝肯工具，保留 parse_documents + extract_archives + lookup_philips_wgq_master_data，无 SubAgent
     → 通用：default tools + workflow_subagents()（Tecan A/B）
   → brain.stream(
        {"messages": normalized},          # artifact block → 文本提示
@@ -227,9 +227,11 @@ Philips 只暴露 1 个业务 Tool，且工具结果不含历史数量、价格�
 
 | 要点 | 行为 |
 |------|------|
-| 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含 **空文本** 结束） |
+| 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含 **空文本** 结束）；或 ToolStrategy 校验失败后最新消息为 ToolMessage 且结构化参数是空 `data` 壳 |
 | 成功路径 | 从 fenced/raw 文本解析 JSON → `schema.model_validate` → 写入 `structured_response`，计数归零 |
-| 失败重试 | 无合法 JSON、校验失败或空文本：追加校正 `HumanMessage`，`jump_to: "model"`，`structured_recovery_attempts += 1` |
+| 失败重试 | 无合法 JSON、校验失败、空文本、或空 `data: {}` 壳：追加校正 `HumanMessage`，`jump_to: "model"`，`structured_recovery_attempts += 1` |
+| 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺 `shipment`/`header`/`items`、或 `items` 空；专用中文 `EMPTY_DATA_SHELL_HINT`，**不**编造业务字段 |
+| ToolStrategy | Philips 使用 `handle_errors=philips_structured_output_error_message`，空壳时 ToolMessage 也返回同一专用中文提示 |
 | 上限 | 默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`（总模型轮次约 `1 + max_retries`） |
 | 耗尽/放行 | `attempts >= max_retries` 时返回 `{"jump_to": "end"}`，**禁止**只返回 `None` |
 | 钩子声明 | `@hook_config(can_jump_to=["model", "end"])` — 必须同时声明 `"end"` |

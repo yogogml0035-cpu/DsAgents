@@ -101,7 +101,7 @@ brain.stream(
 - `text` 原样；`artifact` → `ARTIFACT_REFERENCE_HINT` 后再入 Brain。
 - 三 channel 全部消费（见 §1）；raw v2 chunk 整体落库（可 spill）。
 - `BrainFactory.create(..., workflow=workflow)` 明确接收 workflow。Philips 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`，从 `updates` 捕获后再次 Pydantic 校验；缺失/非法即 `failed`。
-- Philips invocation 仅暴露 `parse_documents` / `lookup_philips_wgq_master_data`、不装 SubAgent；`runtime/middleware.py` 的 `StructuredOutputCompatibility.wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。兼容 middleware 不写 graph state。
+- Philips invocation 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），保留共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`，不装 SubAgent；`runtime/middleware.py` 的 `StructuredOutputCompatibility.wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。兼容 middleware 不写 graph state。
 - **`StructuredOutputRecovery`（硬性约定）**：`after_model` 从纯文本 JSON 恢复 `structured_response`；失败则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）；耗尽或无法继续时**必须** `jump_to: "end"`，且 `@hook_config(can_jump_to=["model", "end"])`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。验证：`cd backend && python -m tests.test_harness`。
 - `control=RunControl()`：`request_cancel` → drain → `GraphDrained` → `cancelled`。
 - 生产工厂：`DeepAgentsBrainFactory`（MiniMax via `init_chat_model("anthropic:...")` + `create_deep_agent`）；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。

@@ -134,13 +134,16 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 - **声明式 SubAgent**：`workflow_subagents()` 返回两个 Tecan `SubAgent`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（无 `memory_backend`；声明式 SubAgent 不继承主 Agent middleware）——共 **4** 个：`StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`。Philips workflow 显式使用空 `subagents`。
 - **主 Agent middleware**：`runtime_middlewares(memory_backend=...)` 在上述 4 个之上再挂一个受限 `MemoryMiddleware`（共 **5** 个；`add_cache_control=True`）；handbook 路径 `/memories/AGENTS.md`。
 - **运行时操作手册**：`AgentResources` 在 `/memories/AGENTS.md` 缺失时写入 ZIP/`result_path` 消费基线；主 Agent 经 `MemoryMiddleware` 自动注入，不依赖模型先 `read_file`；失败后追加由提示词约束 + `edit_file`，不做自动写回。
-- **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
+- **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
+- **Philips 结构化提交硬约束**：禁止 `data: {}`；`success`/`partial_success` 必须带齐 `shipment`/`header`/`items`（未知填 `null`）；`input_problems` 才允许 `data=null`。Skill 与 `PHILIPS_WORKFLOW_PROMPT` 双写。
+- **智能体可见文案**：system prompt、Skill、`RUNTIME_AGENTS_BASELINE`、工具 docstring/`Annotated` 参数说明、结构化纠错提示统一**简体中文**；代码标识符、工具名、schema 英文字段名、路径与 API 名保持英文。
 - **StructuredOutputRecovery 有界重试（硬约定）**：
   - `@hook_config(can_jump_to=["model", "end"])` 必须同时声明 `"end"`。
-  - 解析/校验失败或空文本：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
+  - 解析/校验失败、空文本、或空 `data` 壳：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
+  - 空壳用 `EMPTY_DATA_SHELL_HINT`；**不**在 recovery 中编造业务字段。
   - 达到 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
   - **禁止**只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
-  - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`）。
+  - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`、空壳专用纠错）。
   - 共享列表顺序只改 `runtime_middlewares()`；Philips 工厂仅在缺失时 `insert(0)` Recovery / append Compatibility，勿破坏「Recovery 在列表最前」约定。
 - **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
 - **Brain stream 契约**（`runtime/execution.py`）：

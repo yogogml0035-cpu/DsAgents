@@ -84,7 +84,7 @@ POST /upload → /artifacts/uploads/...
 POST /runs   → 校验 workflow/session → create_run(queued, workflow) → daemon → execute_run
   → status=running；artifact block → 文本路径提示
   → brain_factory.create(..., workflow)；主 Agent 装 runtime_middlewares(memory_backend=...)
-  → Philips：ToolStrategy + 仅 parse_documents/lookup_philips_wgq_master_data；无 SubAgent
+  → Philips：ToolStrategy + 排除帝肯工具（保留 parse_documents/extract_archives/lookup_philips_wgq_master_data）；无 SubAgent
   → 通用/Tecan：default tools + tecan-extractor-a/b（各装无 memory 的 middleware，共 4 个）
   → brain.stream(messages/custom/updates, v2, subgraphs, RunControl)
   → messages → model_usage（含 subagent）/ thinking / text_delta（仅主 agent 文本）

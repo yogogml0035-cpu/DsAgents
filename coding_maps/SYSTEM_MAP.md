@@ -87,7 +87,8 @@ HarnessRuntime.execute_run(...)   # runtime/execution.py
   │    │    顺序：StructuredOutputRecovery → ToolTelemetry → NoProgressMiddleware
   │    │           → StructuredOutputCompatibility → MemoryMiddleware（仅主 Agent，add_cache_control=True）
   │    ├─ Philips：ToolStrategy(PhilipsWgqRecognitionResult)；
-  │    │    仅 parse_documents + lookup_philips_wgq_master_data；subagents=[]；
+  │    │    排除帝肯工具，保留 parse_documents + extract_archives +
+  │    │    lookup_philips_wgq_master_data；subagents=[]；
   │    │    工厂缺则补齐：Recovery insert(0)、Compatibility append
   │    └─ 通用/Tecan：default tools + workflow_subagents()（tecan-extractor-a/b，
   │         各装无 memory 的 runtime_middlewares()，共 4 个 middleware）
@@ -186,7 +187,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - Brain 调用固定：`BrainFactory.create(..., workflow)` 后使用 `stream_mode=["messages","custom","updates"]`，`subgraphs=True`，`version="v2"`，`control=RunControl()`，`thread_id=session_id`。
 - 主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`；`register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12`）。
 - **5 工具清单**：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
-- Philips 仅暴露 `parse_documents` + `lookup_philips_wgq_master_data`；无 SubAgent。
+- Philips 排除帝肯工具，保留 `parse_documents` + `extract_archives` + `lookup_philips_wgq_master_data`；无 SubAgent。
 - `StructuredOutputCompatibility.wrap_model_call`：仅在 `ToolStrategy` 请求上用 `request.override(model=...)` 关闭该次 Anthropic thinking；工厂原始模型与通用/Tecan adaptive thinking 不变。
 - **`StructuredOutputRecovery`（硬性约定）**：`after_model` 从纯文本 JSON 恢复 `structured_response`；失败则 `jump_to: "model"`（默认最多 2 次，`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`）；耗尽或无法继续时**必须** `jump_to: "end"`，且 `can_jump_to` 须含 `"end"`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。验证：`cd backend && python -m tests.test_harness`。
 - 声明式 Tecan SubAgent **不继承**主 Agent middleware，须经无 memory 的 `runtime_middlewares()` 显式注入；主 Agent 手册用 `memory_backend=` 打开，勿同时使用 `create_deep_agent(memory=...)`。
