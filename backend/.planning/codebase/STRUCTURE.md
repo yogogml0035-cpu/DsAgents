@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Codebase Structure
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 > 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。
 
@@ -17,7 +17,8 @@ backend/
 ├── uv.lock
 ├── runtime/
 │   ├── __init__.py                     # 稳定导出：Resources / harness / ledger
-│   ├── agent.py                        # Brain Protocol、工厂、middleware、SubAgent
+│   ├── agent.py                        # Brain Protocol、工厂、SubAgent 装配
+│   ├── middleware.py                   # runtime middleware 与兼容性 hook
 │   ├── execution.py                    # HarnessRuntime.execute_run / cancel
 │   ├── observability.py                # chunk → 载荷纯函数
 │   ├── resources.py                    # AgentResources + ResourceConfig + CompositeBackend
@@ -209,7 +210,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 新 HTTP 路由/契约 | `api.py` | 保持 run-first；轮询非 SSE；可注入 `harness_factory` 便于测 |
 | 改 stream→事件映射 | `runtime/execution.py` | 保持 harness 薄；业务不下沉到此 |
 | 新 chunk 字段解析 | `runtime/observability.py` | 保持纯函数、无 I/O |
-| 新 middleware | `runtime/agent.py` + `runtime_middlewares()` | SubAgent 需各自注入实例 |
+| 新 middleware | `runtime/middleware.py` + `runtime_middlewares()` | `agent.py` 导入/装配；SubAgent 需各自注入实例 |
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
 | 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |
@@ -238,4 +239,4 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 不要把密钥或 `.env` 内容写入文档或测试断言字符串。
 
 ---
-*Structure analysis: 2026-07-15*
+*Structure analysis: 2026-07-16*

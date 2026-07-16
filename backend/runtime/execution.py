@@ -6,7 +6,8 @@ from langgraph.errors import GraphDrained
 from langgraph.runtime import RunControl
 
 from runtime import observability
-from runtime.agent import BrainFactory, NoProgressLoop, runtime_middlewares
+from runtime.agent import BrainFactory
+from runtime.middleware import NoProgressLoop, runtime_middlewares
 from runtime.resources import AgentResources
 from runtime.runs import RunEvent
 from runtime.tools import ToolCatalog

@@ -4,15 +4,23 @@ import os
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from dotenv import load_dotenv
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain.agents.structured_output import ToolStrategy
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
+from pydantic import BaseModel
 
 from runtime.agent import (
     BACKEND_ENV_PATH,
     DeepAgentsBrainFactory,
+    NoProgressLoop,
+    NoProgressMiddleware,
     StructuredOutputCompatibility,
     ToolTelemetry,
 )
@@ -55,10 +63,12 @@ def run() -> None:
         "thinking": "new",
         "text": "answer",
     }
+    _check_structured_output_integration()
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
         _check_tool_telemetry_middleware()
+        _check_no_progress_middleware()
         _check_harness(tmp)
 
 
@@ -109,6 +119,62 @@ def _check_model_env_loading(tmp: str) -> None:
         assert factory.model.thinking == {"type": "adaptive"}
 
 
+class _StructuredOutputResult(BaseModel):
+    value: str
+
+
+class _StructuredOutputModel(BaseChatModel):
+    thinking: dict[str, str] | None = {"type": "adaptive"}
+    bound_thinking: dict[str, str] | None = None
+
+    @property
+    def _llm_type(self) -> str:
+        return "test-structured-output"
+
+    def _generate(
+        self,
+        messages: list[Any],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        del messages, stop, run_manager, kwargs
+        raise AssertionError("the unbound model must not be invoked")
+
+    def bind_tools(self, tools: list[Any], **kwargs: Any) -> RunnableLambda:
+        del kwargs
+        self.bound_thinking = self.thinking
+        output_tool = tools[-1]
+        tool_name = getattr(output_tool, "name", None)
+        assert isinstance(tool_name, str)
+        return RunnableLambda(
+            lambda _input: AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "structured-call-1",
+                        "name": tool_name,
+                        "args": {"value": "ok"},
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        )
+
+
+def _check_structured_output_integration() -> None:
+    model = _StructuredOutputModel()
+    agent = create_agent(
+        model=model,
+        middleware=[StructuredOutputCompatibility()],
+        response_format=ToolStrategy(_StructuredOutputResult),
+    )
+    result = agent.invoke({"messages": [HumanMessage(content="return a result")]})
+    assert result["structured_response"].value == "ok"
+    assert model.bound_thinking is None
+    assert model.thinking == {"type": "adaptive"}
+
+
 def _check_tool_telemetry_middleware() -> None:
     middleware = ToolTelemetry()
     emitted: list[dict[str, object]] = []
@@ -116,7 +182,7 @@ def _check_tool_telemetry_middleware() -> None:
         tool_call={"name": "demo", "args": {"value": 1}},
         runtime=SimpleNamespace(config={"metadata": {"langgraph_node": "agent"}}),
     )
-    with patch("runtime.agent.get_stream_writer", return_value=emitted.append):
+    with patch("runtime.middleware.get_stream_writer", return_value=emitted.append):
         result = middleware.wrap_tool_call(request, lambda _request: {"ok": True})
     assert result == {"ok": True}
     statuses = [event["status"] for event in emitted]
@@ -128,7 +194,7 @@ def _check_tool_telemetry_middleware() -> None:
     assert "result" in emitted[1]
 
     emitted = []
-    with patch("runtime.agent.get_stream_writer", return_value=emitted.append):
+    with patch("runtime.middleware.get_stream_writer", return_value=emitted.append):
         try:
             middleware.wrap_tool_call(
                 SimpleNamespace(
@@ -142,6 +208,53 @@ def _check_tool_telemetry_middleware() -> None:
         else:
             raise AssertionError("tool errors must be passed through")
     assert [event["status"] for event in emitted] == ["started", "error"]
+
+
+def _check_no_progress_middleware() -> None:
+    middleware = NoProgressMiddleware()
+
+    def loop_messages(count: int, *, second_arg: int = 1) -> list[object]:
+        messages: list[object] = [HumanMessage(content="repeat this")]
+        for index in range(count):
+            call_id = f"call-{index}"
+            messages.extend(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": call_id,
+                                "name": "demo",
+                                "args": {"value": second_arg},
+                            }
+                        ],
+                    ),
+                    ToolMessage(
+                        content="ok",
+                        tool_call_id=call_id,
+                        name="demo",
+                    ),
+                ]
+            )
+        return messages
+
+    middleware.before_model({"messages": loop_messages(2)}, None)
+    try:
+        middleware.before_model({"messages": loop_messages(3)}, None)
+    except NoProgressLoop as exc:
+        assert "repeated demo" in str(exc)
+    else:
+        raise AssertionError("repeated tool calls must be detected")
+
+    # A new human turn resets the derived window without mutable middleware
+    # state, and different arguments are not considered the same call.
+    middleware.before_model(
+        {"messages": loop_messages(3) + [HumanMessage(content="new turn")]},
+        None,
+    )
+    different = loop_messages(3)
+    different[-2].tool_calls[0]["args"] = {"value": 2}
+    middleware.before_model({"messages": different}, None)
 
 
 def _check_model_usage_helper() -> None:

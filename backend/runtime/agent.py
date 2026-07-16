@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
-from collections import deque
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence
 
@@ -16,16 +13,20 @@ from deepagents import (
 )
 from deepagents.middleware.subagents import SubAgent
 from dotenv import load_dotenv
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.structured_output import ToolStrategy
 from langchain.chat_models import init_chat_model
-from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage
-from langgraph.config import get_stream_writer
 from pydantic import BaseModel
 
-from runtime import observability
+from runtime.middleware import (
+    NO_PROGRESS_WINDOW,
+    NoProgressLoop,
+    NoProgressMiddleware,
+    StructuredOutputCompatibility,
+    ToolTelemetry,
+    runtime_middlewares,
+)
 from runtime.observability import MAIN_AGENT_NAME
 from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
 
@@ -52,7 +53,23 @@ PHILIPS_WORKFLOW_PROMPT = (
 )
 
 SKILLS_SOURCE = "/skills/"
-NO_PROGRESS_WINDOW = 3
+
+__all__ = [
+    "BACKEND_ENV_PATH",
+    "Brain",
+    "BrainFactory",
+    "DEFAULT_SYSTEM_PROMPT",
+    "DeepAgentsBrainFactory",
+    "MAIN_AGENT_NAME",
+    "NO_PROGRESS_WINDOW",
+    "NoProgressLoop",
+    "NoProgressMiddleware",
+    "PHILIPS_WORKFLOW_PROMPT",
+    "SKILLS_SOURCE",
+    "StructuredOutputCompatibility",
+    "ToolTelemetry",
+    "workflow_subagents",
+]
 
 
 # deepagents 0.6.12 exposes profile registration, not a create_deep_agent
@@ -84,127 +101,6 @@ class BrainFactory(Protocol):
         tools: Sequence[Any],
         workflow: str | None = None,
     ) -> Brain: ...
-
-
-class NoProgressLoop(Exception):
-    """Raised by NoProgressMiddleware when the agent repeats the same tool call."""
-
-
-class ToolTelemetry(AgentMiddleware):
-    """wrap_tool_call: emit tool_execution start/complete/error with timing and
-    a scope path so run queries can reconstruct 主 Agent → SubAgent → Tool."""
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Any,
-    ) -> Any:
-        call = request.tool_call
-        name = call.get("name")
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        agent_name = _runtime_agent_name(request)
-        writer = _safe_writer()
-        started_at = time.monotonic()
-        _emit(
-            writer,
-            {
-                "name": name,
-                "agent_name": agent_name,
-                "status": "started",
-                "args": args,
-            },
-        )
-        try:
-            result = handler(request)
-        except Exception:
-            _emit(
-                writer,
-                {
-                    "name": name,
-                    "agent_name": agent_name,
-                    "status": "error",
-                    "duration_ms": int((time.monotonic() - started_at) * 1000),
-                },
-            )
-            raise
-        _emit(
-            writer,
-            {
-                "name": name,
-                "agent_name": agent_name,
-                "status": "completed",
-                "duration_ms": int((time.monotonic() - started_at) * 1000),
-                "result": str(result)[:200],
-            },
-        )
-        return result
-
-
-class NoProgressMiddleware(AgentMiddleware):
-    """before_model: detect a no-progress loop.
-
-    After the most recent HumanMessage, if the same tool + normalized args
-    appears NO_PROGRESS_WINDOW times in a row, raise NoProgressLoop.
-    """
-
-    def __init__(self) -> None:
-        self._recent: deque[str] = deque(maxlen=NO_PROGRESS_WINDOW)
-
-    def before_model(self, state: Any, runtime: Any) -> None:
-        messages = state["messages"] if isinstance(state, dict) else getattr(state, "messages", [])
-        for message in messages:
-            if isinstance(message, HumanMessage):
-                self._recent.clear()
-                return
-        # No new human turn since last check: inspect the trailing tool calls.
-        for message in reversed(messages):
-            tool_calls = observability.tool_calls_of(message)
-            for tool_call in reversed(tool_calls):
-                token = _tool_call_token(tool_call)
-                if token is None:
-                    continue
-                self._recent.appendleft(token)
-                if (
-                    len(self._recent) == NO_PROGRESS_WINDOW
-                    and len(set(self._recent)) == 1
-                ):
-                    raise NoProgressLoop(
-                        f"no_progress_loop: repeated {self._recent[0]} "
-                        f"{NO_PROGRESS_WINDOW} times"
-                    )
-                return  # only the most recent tool call is new per model turn
-
-
-class StructuredOutputCompatibility(AgentMiddleware):
-    """Keep structured-output calls compatible with Anthropic-style models.
-
-    LangChain's ToolStrategy forces a structured-output tool choice during
-    model binding. Some Anthropic-compatible endpoints reject or perform
-    poorly with that combination when thinking is enabled, so only the
-    affected request receives a copied model with thinking disabled. The
-    factory's original model remains unchanged for other workflows and calls.
-    """
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
-    ) -> ModelResponse:
-        if (
-            isinstance(request.response_format, ToolStrategy)
-            and isinstance(request.model, BaseChatModel)
-            and getattr(request.model, "thinking", None) is not None
-        ):
-            request = request.override(
-                model=request.model.model_copy(update={"thinking": None})
-            )
-        return handler(request)
-
-
-def runtime_middlewares() -> list[AgentMiddleware]:
-    """Fresh middleware instances. Each SubAgent must install its own because
-    declarative SubAgents do not inherit the main agent's middleware."""
-    return [ToolTelemetry(), NoProgressMiddleware()]
 
 
 class DeepAgentsBrainFactory:
@@ -284,8 +180,8 @@ _READ_ONLY_FILES = [FilesystemPermission(operations=["write"], paths=["/**"], mo
 def workflow_subagents() -> list[SubAgent]:
     """Return the two stateless Tecan extractors registered on the main agent.
 
-    Each installs its own runtime middleware (telemetry + no-progress) since
-    declarative SubAgents do not inherit the main agent's middleware.
+    Each installs its own runtime middleware since declarative SubAgents do not
+    inherit the main agent's middleware.
     """
     return [
         _extractor(
@@ -333,34 +229,3 @@ high/medium/low confidence, and keep items as an empty list. Call save_tecan_ext
 using extractor={extractor}; use null+low for missing values. After the save tool returns, emit
 ExtractionReference with that exact extractor and artifact_path. If structured output fails, the
 final text must still be the same two-field JSON object."""
-
-
-def _runtime_agent_name(request: ToolCallRequest) -> str:
-    runtime = getattr(request, "runtime", None)
-    config = getattr(runtime, "config", None)
-    metadata = config.get("metadata") if isinstance(config, dict) else None
-    name = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
-    return name if isinstance(name, str) and name else MAIN_AGENT_NAME
-
-
-def _safe_writer() -> Any:
-    try:
-        return get_stream_writer()
-    except (KeyError, RuntimeError):
-        return None
-
-
-def _emit(writer: Any, payload: dict[str, Any]) -> None:
-    if writer is None:
-        return
-    writer(payload)
-
-
-def _tool_call_token(tool_call: dict[str, Any]) -> str | None:
-    name = tool_call.get("name")
-    args = tool_call.get("args")
-    if not isinstance(name, str) or not isinstance(args, dict):
-        return None
-    import json
-
-    return f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)}"

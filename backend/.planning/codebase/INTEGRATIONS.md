@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # External Integrations
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 > 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。文档只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部允许测试/程序内 `allow_local` 路径，业务 Tool 只接受显式 `/artifacts/...`。
 
@@ -43,7 +43,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 | 通用/Tecan 用 `thinking={"type":"adaptive"}`；Philips 主 Agent 追加 `StructuredOutputCompatibility`，在 `wrap_model_call` 中仅为 `ToolStrategy` 请求复制模型并关闭 thinking，以支持强制 tool choice | `runtime/agent.py` `DeepAgentsBrainFactory` |
+| 生产 | 通用/Tecan 用 `thinking={"type":"adaptive"}`；`runtime_middlewares()` 为每个 agent graph 装配 `StructuredOutputCompatibility`，仅为 `ToolStrategy` 请求复制模型并关闭 thinking，以保留强制 tool choice 和结构化响应 | `runtime/middleware.py`、`runtime/agent.py` |
 | 测试 | `FakeBrain` / `FakeBrainFactory`（v2 stream，不触达网络） | `tests/test_support.py` |
 | prompt-cache | DeepAgents 尾栈 `AnthropicPromptCachingMiddleware`；固定前缀勿注入 run_id/时间等动态内容 | 库行为 + `DEFAULT_SYSTEM_PROMPT` / tool schema |
 | usage 观测 | 从 stream `messages` chunk 的 `usage_metadata` 提取 → `model_usage` 事件；不入库专用表 | `runtime/observability.py`、`runtime/execution.py` |
@@ -152,7 +152,7 @@ brain.stream(
 | 模型用量 | `model_usage` 事件 + `usage` 汇总 | token + cache + 可选 CNY 估算 |
 | 工具遥测 | `ToolTelemetry.wrap_tool_call` | custom stream → `tool_execution`（started/completed/error + duration） |
 | 解析进度 | `parse_documents` / `extract_archives` 自发 custom | → `tool_progress` |
-| 无进展熔断 | `NoProgressMiddleware` | 连续相同 tool 调用 `NO_PROGRESS_WINDOW` 次 → `NoProgressLoop` |
+| 无进展熔断 | `NoProgressMiddleware` | 从当前 HumanMessage 之后的消息状态计算连续相同 tool 调用 `NO_PROGRESS_WINDOW` 次 → `NoProgressLoop`；不保存实例级状态 |
 | 结构化输出兼容 | `StructuredOutputCompatibility.wrap_model_call` | `ToolStrategy` 且模型启用 thinking 时，`request.override(model=...)` 生成一次性 `thinking=None` 模型；不写 graph state、不改变 `structured_response` 合同 |
 | 结构化日志 / OpenTelemetry / Prometheus | **未接入** | 无 APM SDK |
 | 错误上报 SaaS | **未接入** | 失败写入 run `error` 字段 |
@@ -232,4 +232,4 @@ DeepAgents 内置文件工具（如 `read_file`）经 `CompositeBackend` 访问�
 > 交叉引用：Oracle 配置不全或不可用时 Philips 保留 PDF/Tracking 数据并把问题纳入 `partial_success`；Tecan 不读 `ORACLE_*`。MinerU 必填键缺失时工具快速失败，不静默跳过。
 
 ---
-*Integrations analysis: 2026-07-15*
+*Integrations analysis: 2026-07-16*

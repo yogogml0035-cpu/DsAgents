@@ -44,9 +44,13 @@ def run() -> None:
         "tecan-extractor-b",
     ]
     assert all(len(spec["tools"]) == 1 for spec in specs)
-    # Each declarative SubAgent installs its own runtime middleware (telemetry +
-    # no-progress) since they do not inherit the main agent's middleware.
-    assert all(len(spec["middleware"]) == 2 for spec in specs)
+    # Each declarative SubAgent installs its own runtime middleware because it
+    # does not inherit the main agent's middleware.
+    assert all(len(spec["middleware"]) == 3 for spec in specs)
+    assert all(
+        any(isinstance(item, StructuredOutputCompatibility) for item in spec["middleware"])
+        for spec in specs
+    )
     assert all(isinstance(spec["response_format"], ToolStrategy) for spec in specs)
     assert all(
         spec["permissions"]

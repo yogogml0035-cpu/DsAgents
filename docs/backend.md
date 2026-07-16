@@ -21,7 +21,8 @@
 ## 当前模块职责
 
 - `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
-- `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy/工具裁剪、两个 Tecan extractor SubAgent、`ToolTelemetry` 与 `NoProgressMiddleware`。
+- `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy/工具裁剪、两个 Tecan extractor SubAgent 与 middleware 装配。
+- `backend/runtime/middleware.py`：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 及 `runtime_middlewares()`。
 - `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、结构化响应捕获/复验、协作式 cancel 和默认 harness 工厂。
 - `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢。
 - `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由。

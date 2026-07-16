@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单、工具入参）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-15）对齐固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、5 个静态工具与仅保留的 2 个 Tecan SubAgent；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
+> 本轮刷新（2026-07-16）对齐固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、5 个静态工具、独立 `runtime/middleware.py` 与仅保留的 2 个 Tecan SubAgent；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
 
 HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`parse_documents` 的程序内调用为测试便利保留 `allow_local`，不改变对外 API 契约。
 
@@ -101,10 +101,10 @@ brain.stream(
 - `text` 原样；`artifact` → `ARTIFACT_REFERENCE_HINT` 后再入 Brain。
 - 三 channel 全部消费（见 §1）；raw v2 chunk 整体落库（可 spill）。
 - `BrainFactory.create(..., workflow=workflow)` 明确接收 workflow。Philips 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`，从 `updates` 捕获后再次 Pydantic 校验；缺失/非法即 `failed`。
-- Philips invocation 仅暴露 `parse_documents` / `lookup_philips_wgq_master_data`、不装 SubAgent，并追加 `StructuredOutputCompatibility`：`wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。
+- Philips invocation 仅暴露 `parse_documents` / `lookup_philips_wgq_master_data`、不装 SubAgent；`runtime/middleware.py` 的 `StructuredOutputCompatibility.wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。兼容 middleware 不写 graph state。
 - `control=RunControl()`：`request_cancel` → drain → `GraphDrained` → `cancelled`。
 - 生产工厂：`DeepAgentsBrainFactory`（MiniMax via `init_chat_model("anthropic:...")` + `create_deep_agent`）；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
-- 通用/Tecan 主路径的 `runtime_middlewares()` 含 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外含 `StructuredOutputCompatibility`。两个 Tecan 声明式 SubAgent 仍须经 `runtime_middlewares()` 显式注入。
+- `runtime_middlewares()` 每次返回新建的 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`；后者在非 `ToolStrategy` 请求上 no-op。两个 Tecan 声明式 SubAgent 仍须经 `runtime_middlewares()` 显式注入；`runtime.agent` 保留 middleware 符号导入兼容性。
 - `register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12` 无构造参数式 `harness_profile`）。
 - 旧 `Hands` / `ToolStatus*` 已删除；工具遥测由 `ToolTelemetry` → `tool_execution` 三态承担。
 
@@ -145,7 +145,7 @@ brain.stream(
 
 | 边界 | 实现 | 键名（仅名） | 证据 |
 |------|------|--------------|------|
-| 生产 LLM | MiniMax via Anthropic 兼容 `ChatAnthropic` + `create_deep_agent` | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | `runtime/agent.py` |
+| 生产 LLM | MiniMax via Anthropic 兼容 `ChatAnthropic` + `create_deep_agent` | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | `runtime/agent.py`、`runtime/middleware.py` |
 | 测试 LLM | `FakeBrain` / `FakeBrainFactory` | — | `tests/test_support.py` |
 | MinerU | `requests`：提交任务 → 轮询 → JSON/ZIP | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS`（必需）；`MINERU_EFFORT`（可空） | `integrations/mineru.py` |
 | Oracle（可选） | `oracledb` thick mode；缺配置/失败优雅降级 | `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | Philips `scripts/tools.py`；Tecan 不消费 |

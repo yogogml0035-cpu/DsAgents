@@ -17,7 +17,7 @@
 
 ## 源码阅读入口
 
-- 运行时主链：`backend/runtime/execution.py`（`HarnessRuntime.execute_run`）、`backend/runtime/agent.py`（Brain/SubAgent/middleware）
+- 运行时主链：`backend/runtime/execution.py`（`HarnessRuntime.execute_run`）、`backend/runtime/agent.py`（Brain/SubAgent 装配）、`backend/runtime/middleware.py`（middleware hook）
 - Philips 识别：`backend/skills/philipswgqinboundrecognition/`（`SKILL.md` + `schema.py` + `scripts/tools.py`）及 [`philips-wgq-inbound-recognition-prd.md`](philips-wgq-inbound-recognition-prd.md)
 - Tecan：`backend/skills/tecanimport/`（`SKILL.md` + `scripts/{tools.py,documents.py}` + `references/` + `assets/`）
 - artifact 基础设施：`backend/integrations/artifacts.py` — 文件名清洗、artifact 虚拟路径与物理路径互转、原子落盘

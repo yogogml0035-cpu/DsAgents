@@ -2,13 +2,13 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-15）对齐 backend 全部事实文档与 `SYSTEM_MAP`：新增固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道和严格 Tracking/Oracle 主数据补齐；旧 Philips A/B/C、Excel 生成及兼容语义已删除。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-16）对齐 backend 全部事实文档与 `SYSTEM_MAP`：新增固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道和独立 `runtime/middleware.py`；旧 Philips A/B/C、Excel 生成及兼容语义已删除。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
 
 ## 1. 系统定位
 
 `DsAgents` 是一个 **agent 运行时底座**：把能力做成可插拔，而不绑定具体 runner、容器、模型或工作流。整个产品收口在 `backend/` 顶层源码布局（`api.py`、`runtime/`、`integrations/`、`skills/`；绝对导入 `from runtime import ...`），发行名仍为 `dsagents`。
 
-- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；工具保持普通 callable + `ToolCatalog`；资源 / ledger 保持具体类。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
+- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；middleware 实现集中在 `runtime/middleware.py`，由 agent 工厂装配；工具保持普通 callable + `ToolCatalog`；资源 / ledger 保持具体类。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
 - **工具静态注册**：`default_tool_catalog()` 静态注册 5 个工具（2 个 MinerU 通用、Philips 1 个主数据工具、Tecan 2 个业务工具）；普通 Python import，不自动扫描、无插件平台。
 - **业务能力按 Skill 打包**：`skills/philipswgqinboundrecognition/` 提供固定响应合同、专用 Skill 与 `lookup_philips_wgq_master_data`；`skills/tecanimport/` 保留抽取保存与 Excel 生成。`workflow_subagents()` 当前只注册 2 个 Tecan extractor，Philips workflow 不使用 SubAgent。
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为事件投影快照。`session_id` 仅作 LangGraph `thread_id` 与进程内单飞锁键，不是一等持久化对象。
@@ -43,7 +43,8 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 | 模块 | 系统级职责 |
 |------|-----------|
 | `api.py` | FastAPI HTTP 适配层（四端点）+ workflow/session 校验 + 同 session 单飞锁 + 启动恢复 + 顶层 `workflow`/`result`/`usage` |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy 路由、Tecan SubAgent、运行时 middleware（含 Philips 结构化输出兼容） |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy 路由、Tecan SubAgent 与 middleware 装配 |
+| `runtime/middleware.py` | `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 与 `runtime_middlewares()` |
 | `runtime/execution.py` | `HarnessRuntime.execute_run`（stream → `RunEvent`）、结构化响应捕获/复验、`create_harness`、协作 cancel |
 | `runtime/observability.py` | 纯函数：chunk → `model_usage` / thinking / text / assistant payload（按 `lc_agent_name` 区分主 agent 与 subagent） |
 | `runtime/resources.py` | `AgentResources` + `ResourceConfig` + `CompositeBackend`（`/memories/` `/artifacts/` `/large_tool_results/` `/skills/`） |
@@ -116,7 +117,7 @@ running → cancelling → cancelled
 
 | 面 | 约定 |
 |----|------|
-| Middleware | 通用/Tecan 主路径为 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外使用 `StructuredOutputCompatibility.wrap_model_call`；Tecan SubAgent **不继承**主 Agent middleware，须各自注入 |
+| Middleware | `runtime/middleware.py` 统一实现并由 `runtime/agent.py` 导入；每个 agent graph 使用 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`，Tecan SubAgent **不继承**主 Agent middleware，须各自注入 |
 | Skill | Philips：结构化 `success|partial_success|input_problems` + 单一主数据 Tool；Tecan：2 Tool + `status=generated|input_problems`；无跨 run 状态机 |
 | 工具注册 | 新增 Skill = 新包目录 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |
 | Provider | 生产 LLM：MiniMax via Anthropic 兼容；文档解析：MinerU HTTP；可选 Oracle（仅 Philips） |

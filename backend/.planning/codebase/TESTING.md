@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Testing Patterns
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 ## Test Framework
 
@@ -72,7 +72,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_support.py` | 无独立 `run()` | `FakeBrain` / `FakeBrainFactory`、消息构造、轮询 helper、结构化结果 fixture |
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 5 工具 |
 | `tests/test_run_ledger.py` | `run()` | 资源、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
-| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、Philips `StructuredOutputCompatibility` 请求替换、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
+| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility` 请求替换、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
 | `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞等 HTTP 契约 |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具裁剪/无 SubAgent、Tecan 两个 SubAgent、middleware、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
@@ -100,7 +100,8 @@ python -m tests.test_minimax_cache_baseline
 - `FakeBrain` 硬断言 `stream_mode=["messages","custom","updates"]`、`subgraphs=True`、`version="v2"` 和 `thread_id=session_id`。
 - 验证 artifact block 进入 Brain 前全部转为 text block。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage 七类事件。
-- Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking，并从 `updates` 捕获嵌套 `structured_response` 后再次 Pydantic 校验。
+- Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking；独立 fake chat model 还实际经过 `create_agent` 的 `wrap_model_call` 链并保留 `structured_response`，Harness 再从 `updates` 捕获并做 Pydantic 校验。
+- `test_harness` 验证 `NoProgressMiddleware` 从当前 HumanMessage 之后的消息序列识别连续三次同一 tool+args，新 human turn 与参数变化不会误触发；middleware 不依赖实例级计数。
 - `test_workflow_setup` 断言 Philips 仅暴露 `parse_documents` 与 `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`。
 
 ### 3. Philips 确定性业务规则
@@ -169,7 +170,7 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 - Harness 的结构化响应捕获、七类事件和通用行为；
 - HTTP 四端点、workflow 校验、新 session、result 投影、cancel、usage；
 - Philips Pydantic 合同、严格 Tracking、Oracle 补缺与降级、交易字段隔离；
-- Tecan SubAgent 与 Excel 行为未回归。
+- Tecan SubAgent 与 Excel 行为未回归；两个 SubAgent 均包含 3 个 runtime middleware，且结构化输出兼容 hook 仍在场。
 
 明确不在普通回归内：真实模型抽取质量、真实 MinerU 内容、真实 Oracle 命中、prompt-cache 数值、跨进程锁和 SQLite 压力。
 
@@ -184,4 +185,4 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 7. 真实外部测试单独建文件、默认 skip，并在 `docs/commands.md` 标明开关、服务和样例依赖。
 
 ---
-*Testing analysis: 2026-07-15*
+*Testing analysis: 2026-07-16*

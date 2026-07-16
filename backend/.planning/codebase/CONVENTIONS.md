@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Coding Conventions
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 ## Naming Patterns
 
@@ -46,7 +46,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 - **源码顶层**（安装根 = `backend/`）：
   - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）
-  - `runtime/` — 运行时：`agent.py`（Brain/middleware/SubAgent）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）
+  - `runtime/` — 运行时：`agent.py`（Brain/工厂/SubAgent 装配）、`middleware.py`（可复用 middleware）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）
   - `integrations/` — 外部集成：`artifacts.py`（路径/JSON）、`mineru.py`（解析与解压）
   - `skills/` — 内置 Skill 包：`philipswgqinboundrecognition/`（`SKILL.md`、`schema.py`、`scripts/tools.py`）与 `tecanimport/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
 - **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Philips 打包 `SKILL.md`，Tecan 另打包 `references/*.md` / `assets/*`。
@@ -141,9 +141,9 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
   - `thinking` / `text_delta` — 主 Agent 流式内容（SubAgent 文本经 `lc_agent_name` 过滤）
   - `assistant_message` — 终态助手消息（可带 `thinking`）
   - `model_usage` — 成本/缓存事实；**不**进入 `latest_content_event`；HTTP 顶层 `usage` 由 `aggregate_model_usage` + `api._usage_summary` 汇总计价
-- **middleware 观测**：
+- **middleware 观测**（实现集中于 `runtime/middleware.py`，由 `runtime/agent.py` 导入）：
   - `ToolTelemetry.wrap_tool_call`：`started` / `completed` / `error` + `duration_ms` + `agent_name`
-  - `NoProgressMiddleware.before_model`：连续 `NO_PROGRESS_WINDOW=3` 次同一 tool+args → `NoProgressLoop`
+  - `NoProgressMiddleware.before_model`：从当前消息状态派生连续 `NO_PROGRESS_WINDOW=3` 次同一 tool+args → `NoProgressLoop`；不把调用历史写入 graph state 或 middleware 实例
 - **stream writer 安全**：`_safe_writer` / MinerU 侧对 `get_stream_writer` 的 `KeyError`/`RuntimeError` 静默降级为 no-op，避免无 graph 上下文时炸工具。
 - **大 payload 外溢**：默认 `max_inline_bytes=262_144`，超限写入 `data/internal/run-events/*.json`，行内留指针；用户可见物仍在 `data/artifacts/{uploads,downloads}/`。
 - **SubAgent 隔离**：SubAgent `messages` 文本不写公开 thinking/text_delta；其 `model_usage` 仍以 `scope="subagent"` 计入。
@@ -160,4 +160,4 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - **禁止模式**：不从 `backend.xxx` 导入；不在约定层依赖相对跨包 `from ...` 穿透 Skill 边界以外的随意路径；工具目录不动态 `importlib` 扫描。
 
 ---
-*Conventions analysis: 2026-07-15*
+*Conventions analysis: 2026-07-16*

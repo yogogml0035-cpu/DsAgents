@@ -4,7 +4,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 # Architecture
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 > 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,observability,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` 及其 `scripts/`、`tests/`。结论以源码为准。
 
@@ -47,7 +47,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│  能力层  runtime/agent.py + runtime/tools.py                 │
+│  能力层  runtime/agent.py + runtime/middleware.py + tools.py │
 │  Brain/BrainFactory · DeepAgentsBrainFactory                 │
 │  middleware / workflow_subagents()                           │
 │  ToolCatalog（5 callables）                                  │
@@ -72,7 +72,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 |----|------|----------|
 | HTTP | 契约校验、run 创建/轮询/取消、上传落盘、usage 汇总 | `api.py` |
 | Harness | 装配 Brain、stream 消费、事件写入、协作取消 | `runtime/execution.py` |
-| 能力 | 模型工厂、middleware、SubAgent、工具目录 | `runtime/agent.py`、`runtime/tools.py` |
+| 能力 | 模型工厂、middleware、SubAgent、工具目录 | `runtime/agent.py`、`runtime/middleware.py`、`runtime/tools.py` |
 | 可观测提取 | 纯函数：chunk → usage/thinking/text/assistant payload | `runtime/observability.py` |
 | 业务 Skill | Philips 识别合同/主数据补齐；Tecan 抽取与 Excel 生成 | `skills/*/` |
 | 集成 | `/artifacts/` 安全路径、MinerU HTTP | `integrations/` |
@@ -179,10 +179,10 @@ tool_progress / assistant_message / model_usage / ... → status(succeeded)
 | `SqliteRunLedger` | `runtime/runs.py` | runs / run_events；大 payload 外溢；`aggregate_model_usage`；`fail_incomplete_runs` |
 | `RunEvent` / `RunSnapshot` | `runtime/runs.py` | frozen dataclass |
 | `ToolCatalog` / `default_tool_catalog` | `runtime/tools.py` | 5 个静态注册 callable |
-| `ToolTelemetry` | `runtime/agent.py` | `wrap_tool_call` → custom `tool_execution` 三态 |
-| `NoProgressMiddleware` | `runtime/agent.py` | `before_model`：同 tool+args 连续 3 次 → `NoProgressLoop` |
-| `StructuredOutputCompatibility` | `runtime/agent.py` | Philips 主 Agent 的 `wrap_model_call`：仅当 `ToolStrategy` + thinking 时用 `request.override(model=...)` 复制模型并关闭 thinking，不增加 graph state |
-| `workflow_subagents()` | `runtime/agent.py` | 2 个声明式 Tecan extractor；各装 middleware + 只读 FS；Philips 不使用 SubAgent |
+| `ToolTelemetry` | `runtime/middleware.py` | `wrap_tool_call` → custom `tool_execution` 三态 |
+| `NoProgressMiddleware` | `runtime/middleware.py` | `before_model`：从当前消息状态计算同 tool+args 连续 3 次 → `NoProgressLoop`；不保存实例级调用状态 |
+| `StructuredOutputCompatibility` | `runtime/middleware.py` | `wrap_model_call`：仅当 `ToolStrategy` + thinking 时用 `request.override(model=...)` 复制模型并关闭 thinking，不增加 graph state |
+| `workflow_subagents()` | `runtime/agent.py` + `runtime/middleware.py` | 2 个声明式 Tecan extractor；各装 3 个 runtime middleware + 只读 FS；Philips 不使用 SubAgent |
 | `observability.*` | `runtime/observability.py` | 无 I/O 的 chunk 载荷提取 |
 | artifact helpers | `integrations/artifacts.py` | 路径解析、唯一下载名、不可覆盖 JSON |
 | MinerU tools | `integrations/mineru.py` | `parse_documents` / `extract_archives` + progress custom 事件 |
@@ -204,9 +204,10 @@ Philips 只暴露 1 个业务 Tool，且工具结果不含历史数量、价格�
 
 ### 中间件约束
 
-- 通用/Tecan 主路径的 `runtime_middlewares()` 每次返回两个新实例：`ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 在此基础上追加 `StructuredOutputCompatibility`。
-- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`。
-- `StructuredOutputCompatibility` 只改本次 `ModelRequest`，不使用 `state_schema`、`ExtendedModelResponse` 或 `Command`；其余路径不使用 `ToolCallLimitMiddleware`、v3 stream、沙箱执行。
+- `runtime/middleware.py` 集中放置运行时 middleware；`runtime/agent.py` 只负责导入、工厂装配与 SubAgent 声明。
+- `runtime_middlewares()` 每次返回三个新实例：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`。兼容 middleware 在非结构化输出请求上是 no-op，因此通用/Tecan/Philips 可共用同一装配函数。
+- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`；Philips 工厂对直接调用方传入的 middleware 仍补齐兼容实例。
+- `StructuredOutputCompatibility` 只改本次 `ModelRequest`，不使用 `state_schema`、`ExtendedModelResponse` 或 `Command`；`NoProgressMiddleware` 也从既有 `messages` 派生判断，不增加自定义 graph state。
 
 ### run 状态机
 
@@ -308,4 +309,4 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 - 单函数 one-shot 入口（必须组合 Resources + harness + execute_run）
 
 ---
-*Architecture analysis: 2026-07-15*
+*Architecture analysis: 2026-07-16*

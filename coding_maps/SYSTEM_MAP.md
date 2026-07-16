@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-15）对齐 backend 全部事实文档：加入固定 Philips workflow、`run.result` 结构化通道、严格 Tracking/Oracle 主数据补齐与真实 HTTP 验收入口；删除旧 Philips A/B/C、Excel 和兼容语义。run-first、四 HTTP 端点、7 类事件及通用/Tecan 边界保持。
+> 本轮刷新（2026-07-16）对齐 backend 全部事实文档：加入固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`、严格 Tracking/Oracle 主数据补齐与真实 HTTP 验收入口；删除旧 Philips A/B/C、Excel 和兼容语义。run-first、四 HTTP 端点、7 类事件及通用/Tecan 边界保持。
 
 ## 1. 系统目的和仓库形态
 
@@ -11,7 +11,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 - **形态**：单子项目仓库，唯一产品子项目是 `backend/`（发行名 `dsagents`，包管理器 `uv`）。**无前端子项目**（当前源文档未确认任何前端代码归属本仓库）。
 - **架构**：run-first。run 是唯一的执行单位与查询单位；`run_events` 表 append-only，`runs` 表是事件投影出的快照；不再有 session 模块 / session 持久化层。
 - **短期上下文**：完全交给 LangGraph `checkpointer` + `thread_id=session_id`。`session_id` 标识符保留，但用途已收窄为 checkpointer 键和进程内串行保护键，不再是一等持久化对象。
-- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；工具保持普通 callable + `ToolCatalog`（`runtime/tools.py`）。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
+- **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；middleware 实现集中在 `runtime/middleware.py` 并由 agent 工厂装配；工具保持普通 callable + `ToolCatalog`（`runtime/tools.py`）。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
 - **工具静态注册**：`default_tool_catalog()` 静态注册 5 个工具（2 个 MinerU 通用 + Philips 1 个 + Tecan 2 个），普通 Python import；不自动扫描、无插件平台、无动态模块加载器。
 - **业务能力按 Skill 打包**：`skills/philipswgqinboundrecognition/` 提供专用 Skill、Pydantic 合同与单一主数据工具；`skills/tecanimport/` 保留 2 个业务 Tool。声明式 SubAgent 仅 `tecan-extractor-a/b`，各自装 middleware。
 - **入口形态**：HTTP（`POST /runs` 创建 run、立即返回 `queued`；纯轮询获取增量事件，无 SSE；含 cancel）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无单函数 one-shot API。
@@ -36,7 +36,7 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 ```text
 HTTP (api.py)
   → Harness (runtime/execution.py)          # stream → RunEvent；cancel
-    → 能力 (runtime/agent.py + tools.py)    # Brain / middleware / SubAgent / ToolCatalog
+    → 能力 (runtime/agent.py + middleware.py + tools.py)  # Brain / middleware / SubAgent / ToolCatalog
       → 业务 Skill (skills/*/)              # Philips schema/lookup；Tecan save/generate
       → 集成 (integrations/)                # artifacts 路径、MinerU
     → 持久化 (runtime/resources.py + runs.py)  # ledger / checkpointer / store / CompositeBackend
@@ -151,7 +151,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 - Brain 调用固定：`BrainFactory.create(..., workflow)` 后使用 `stream_mode=["messages","custom","updates"]`，`subgraphs=True`，`version="v2"`，`control=RunControl()`，`thread_id=session_id`。
 - Philips：主 Agent `ToolStrategy(PhilipsWgqRecognitionResult)`，无 SubAgent，仅两个允许工具；`StructuredOutputCompatibility.wrap_model_call` 只为该 `ToolStrategy` 请求用 `request.override(model=...)` 复制模型并关闭 thinking；Harness 捕获/复验 `structured_response`；tool 与 `run.result` 统一英文字段名（OMS 中文表单由调用方映射）。`input_problems` 是业务 outcome，不是 run 失败。
-- 通用/Tecan 主路径的 `runtime_middlewares()` 含 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外追加 `StructuredOutputCompatibility`。两个 Tecan SubAgent **不继承**主 Agent middleware，须经 `runtime_middlewares()` 显式注入；该兼容 middleware 不增加 `state_schema` 或 LangGraph 自定义状态。
+- `runtime/middleware.py` 的 `runtime_middlewares()` 每次返回 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 三个新实例；后者在非 `ToolStrategy` 请求上 no-op。两个 Tecan SubAgent **不继承**主 Agent middleware，须经 `runtime_middlewares()` 显式注入；兼容 middleware 不增加 `state_schema` 或 LangGraph 自定义状态，no-progress 判断也只从现有消息状态派生。
 - 主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`；`register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12` 无构造参数式 `harness_profile`）。
 - 5 工具清单：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
 
@@ -202,7 +202,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 | 组 | 键（示例） | 消费者 |
 |----|------------|--------|
-| MiniMax | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | `runtime/agent.py` |
+| MiniMax | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | `runtime/agent.py`、`runtime/middleware.py` |
 | MinerU | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS`（必需，fail-fast）；`MINERU_EFFORT` 可空 | `integrations/mineru.py` |
 | Oracle（可选，仅 Philips） | `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | `skills/philipswgqinboundrecognition/scripts/tools.py` |
 
@@ -229,10 +229,10 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 | 任务 | 先读 |
 |------|------|
-| backend 整体 / runtime / 存储 | [`docs/conventions.md`](../docs/conventions.md) → [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) + [`STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md) → `runtime/execution.py` / `agent.py` / `runs.py` / `resources.py` |
+| backend 整体 / runtime / 存储 | [`docs/conventions.md`](../docs/conventions.md) → [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) + [`STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md) → `runtime/execution.py` / `agent.py` / `middleware.py` / `runs.py` / `resources.py` |
 | HTTP 契约 / 入口 | [`INTERFACES.md`](../INTERFACES.md) §1/§2 → [`INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md)（APIs）→ `api.py` |
 | run 状态 / 事件 / 持久化 | backend ARCHITECTURE §Data Flow / 状态机 / 存储 → `runtime/runs.py` + `runtime/execution.py` |
-| 模型流 / Brain / middleware | [`INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) LLM 节 → `runtime/agent.py` + `runtime/observability.py` |
+| 模型流 / Brain / middleware | [`INTEGRATIONS.md`](../backend/.planning/codebase/INTEGRATIONS.md) LLM 节 → `runtime/agent.py` + `runtime/middleware.py` + `runtime/observability.py` |
 | MinerU | INTEGRATIONS MinerU 节 → `integrations/mineru.py` |
 | Oracle | INTEGRATIONS Oracle 节 + [`CONCERNS.md`](../backend/.planning/codebase/CONCERNS.md) Oracle 条 → `skills/philipswgqinboundrecognition/scripts/tools.py` |
 
@@ -327,7 +327,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 - [`INTERFACES.md`](../INTERFACES.md)
 
-子项目事实（backend 实现细节事实来源，Analysis Date: 2026-07-15）：
+子项目事实（backend 实现细节事实来源，Analysis Date: 2026-07-16）：
 
 - [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md)
 - [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md)
@@ -343,4 +343,4 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`docs/commands.md`](../docs/commands.md)
 - [`docs/reading-order.md`](../docs/reading-order.md)
 
-本轮（2026-07-15）在 backend 7 份事实文档同步后更新：固定 Philips workflow、结构化 result、5 个工具、2 个 Tecan SubAgent、严格 Tracking/Oracle 补齐和真实 Philips HTTP 验收；run-first、四端点、7 事件及现有风险清单保持。
+本轮（2026-07-16）在 backend 7 份事实文档同步后更新：固定 Philips workflow、结构化 result、5 个工具、独立 runtime middleware 模块、2 个 Tecan SubAgent、严格 Tracking/Oracle 补齐和真实 Philips HTTP 验收；run-first、四端点、7 事件及现有风险清单保持。

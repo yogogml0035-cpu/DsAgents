@@ -1,12 +1,12 @@
 ---
 last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
-analysis_date: 2026-07-15
+analysis_date: 2026-07-16
 scope: backend/
 ---
 
 # Codebase Concerns
 
-**Analysis Date:** 2026-07-15
+**Analysis Date:** 2026-07-16
 
 > backend 技术债、风险与脆弱点。每条均带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对工作树：`api.py`、`runtime/`、`integrations/`、两个内置 Skill、`tests/`、`pyproject.toml`。不读取 `.env`，不记录任何密钥或连接串值。
 
@@ -30,9 +30,9 @@ scope: backend/
 
 ### 3. MiniMax 强绑 Anthropic 客户端协议（已确认）
 
-- **问题**：`runtime/agent.py` 的 `DeepAgentsBrainFactory` 使用 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})`；模块导入时 `register_harness_profile("anthropic", ...)` 禁用 general-purpose SubAgent。
+- **问题**：`runtime/agent.py` 的 `DeepAgentsBrainFactory` 使用 `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})`；`runtime/middleware.py` 的 `StructuredOutputCompatibility` 只在 `ToolStrategy` 请求中复制模型并关闭 thinking；模块导入时 `register_harness_profile("anthropic", ...)` 禁用 general-purpose SubAgent。
 - **影响**：换 provider / 改 profile 名时，可能自动多出第五个 SubAgent，或 `thinking` / prompt-cache 中间件行为变化。
-- **修复方向**：Brain 工厂参数化 provider profile；切换模型时显式回归 `workflow_subagents()` 数量与 cache 中间件行为。
+- **修复方向**：Brain 工厂参数化 provider profile；切换模型时显式回归 `workflow_subagents()` 数量、`ToolStrategy` 结构化结果与 cache 中间件行为。
 
 ### 4. 持久化只增不删，无 TTL / 归档（已确认）
 
@@ -85,13 +85,13 @@ scope: backend/
 
 ### 5. `NoProgressMiddleware` 仅为启发式（已确认）
 
-- **问题**：`NO_PROGRESS_WINDOW = 3`；仅检测「最近 HumanMessage 之后，同一 `tool + 归一化 args` 连续 3 次」。
+- **问题**：`NO_PROGRESS_WINDOW = 3`；`runtime/middleware.py` 仅检测最近 HumanMessage 之后，同一 `tool + 归一化 args` 连续 3 次，并跳过工具结果消息；它是从既有 message state 派生的启发式，不是业务进度证明。
 - **影响**：A/B 交替失败调用不会触发；args 微调可绕过；阈值不可配置。
-- **修复方向**：可配置窗口；可选总 tool-call 上限；跨工具振荡检测。
+- **修复方向**：可配置窗口；可选总 tool-call 上限；跨工具振荡检测；保持判断基于消息状态，避免并发 run 共享实例级计数。
 
 ### 6. 声明式 SubAgent 不继承主 Agent middleware（已确认）
 
-- **问题**：`workflow_subagents()` 经 `_extractor` 显式注入 `runtime_middlewares()`（`ToolTelemetry` + `NoProgressMiddleware`）。
+- **问题**：`workflow_subagents()` 经 `_extractor` 显式注入 `runtime_middlewares()`（当前为 `ToolTelemetry` + `NoProgressMiddleware` + `StructuredOutputCompatibility`）。
 - **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测。
 - **修复方向**：所有 middleware 变更只改 `runtime_middlewares()`；`tests/test_workflow_setup.py` 继续断言每个 SubAgent 自装 middleware。
 
@@ -252,7 +252,7 @@ scope: backend/
 
 | 依赖 | 证据 | 风险 | 降级 / 备注 |
 |------|------|------|-------------|
-| MiniMax via Anthropic 兼容客户端 | `runtime/agent.py` `init_chat_model("anthropic:...")` | 协议/thinking/cache 变更 | 无本地降级；run `failed` |
+| MiniMax via Anthropic 兼容客户端 | `runtime/agent.py` `init_chat_model("anthropic:...")` + `runtime/middleware.py` ToolStrategy 兼容 hook | 协议/thinking/cache/tool_choice 变更 | 无本地降级；run `failed` |
 | deepagents / langgraph / langchain | `pyproject.toml` `>=` + `uv.lock` | stream 形状、SubAgent、RunControl | 锁文件 + FakeBrain 回归 |
 | MinerU HTTP | `integrations/mineru.py` `requests` | 服务不可用/超时/状态枚举变化 | 工具失败 → 可能整 run failed |
 | Oracle + Instant Client | `skills/philipswgqinboundrecognition/scripts/tools.py` | thick client 缺失、网络、SQL | 写入 `problems`，保留 PDF/Tracking 数据 |
@@ -276,9 +276,9 @@ scope: backend/
 
 ### 3. middleware 与 SubAgent 装配
 
-- 只通过 `runtime_middlewares()` 增删 middleware，并保证 `workflow_subagents()` 的两个 Tecan extractor 各自装配；Philips workflow 必须保持无 SubAgent。
+- 只在 `runtime/middleware.py` 实现并通过 `runtime_middlewares()` 增删 middleware；`runtime/agent.py` 只做导入和 workflow/SubAgent 装配；并保证 `workflow_subagents()` 的两个 Tecan extractor 各自装配；Philips workflow 必须保持无 SubAgent。
 - `register_harness_profile("anthropic", ...)` 为进程级全局副作用；测试或二次 import 需注意。
-- 触达：`runtime/agent.py`、`tests/test_workflow_setup.py`。
+- 触达：`runtime/middleware.py`、`runtime/agent.py`、`tests/test_harness.py`、`tests/test_workflow_setup.py`。
 
 ### 4. artifact 路径安全
 
@@ -308,4 +308,4 @@ scope: backend/
 
 ---
 
-*Concerns analysis: 2026-07-15*
+*Concerns analysis: 2026-07-16*
