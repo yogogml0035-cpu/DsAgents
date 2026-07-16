@@ -142,11 +142,11 @@ DsAgents 的 tool schema 与 `run.result` **统一使用英文字段名**。OMS�
 - Pydantic 模型使用英文字段名与 `extra="forbid"`；`data` 非空时 `items` 至少一行。
 - 所有固定字段必须出现；未识别值为 JSON `null`，不返回“未找到”“需确认”、`//` 或 `N/A` 等占位字符串。
 - 数量、金额和重量使用无千分位十进制字符串，避免 JSON 浮点误差；`etd` 明确时为 `YYYY-MM-DD`。
-- `success`：形成唯一票次且无问题，`data` 非空、`problems=[]`。
-- `partial_success`：形成唯一票次且有可回填数据，但存在无关附件、个别 PDF/字段问题、Tracking/Oracle 失败或未命中；`data` 非空且 `problems` 至少一项。
+- `success`：形成唯一票次且 `data` 非空。`problems` 可为空，也可记录非阻断提示（字段缺失、主数据未命中等）；不必因有 problems 而改成 `partial_success`。
+- `partial_success`：可选；形成唯一票次且有可回填数据，并至少一项 `problems`（调用方希望显式标记“部分完成”时使用）。
 - `input_problems`：无法安全形成唯一票次；`data=null` 且 `problems` 至少一项。
 - `input_problems` 是业务结果，仍对应 `run.status=succeeded`。只有模型、运行时或结构化响应缺失/非法才对应 `run.status=failed`。
-- `reply` 仅作人类摘要，不参与业务 JSON 解析。
+- `reply` 仅作人类摘要，不参与业务 JSON 解析。若模型误将完整 JSON 写进文本而未调用 schema 工具，运行时 `StructuredOutputRecovery` 可从文本恢复 `structured_response`（仍以 Pydantic 校验为准，不改写 outcome）。
 
 ## 4. 单据识别与票次规则
 

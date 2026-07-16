@@ -11,6 +11,8 @@ from langchain.chat_models import init_chat_model
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage
 
+from deepagents.middleware.memory import MemoryMiddleware
+
 from runtime.agent import (
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
@@ -18,10 +20,12 @@ from runtime.agent import (
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
     StructuredOutputCompatibility,
+    StructuredOutputRecovery,
     workflow_subagents,
 )
 from runtime.execution import _update_events
-from runtime.resources import AgentResources, ResourceConfig
+from runtime.middleware import RUNTIME_MEMORY_SYSTEM_PROMPT, runtime_middlewares
+from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 
 
 def run() -> None:
@@ -36,7 +40,25 @@ def run() -> None:
     assert "同一个主模型回合并行" in tecan
     assert "普通 PDF" in philips and "普通 PDF" in tecan
     assert "ordinary PDF extraction request is not enough" in DEFAULT_SYSTEM_PROMPT
+    assert "Persist important notes under /memories/" not in DEFAULT_SYSTEM_PROMPT
     assert "philipswgqinboundrecognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
+
+    # Subagents get recovery + telemetry stack — no shared handbook.
+    sub_middleware = runtime_middlewares()
+    assert len(sub_middleware) == 4
+    assert isinstance(sub_middleware[0], StructuredOutputRecovery)
+    assert not any(isinstance(item, MemoryMiddleware) for item in sub_middleware)
+
+    main_backend = object()
+    main_middleware = runtime_middlewares(memory_backend=main_backend)
+    assert isinstance(main_middleware[0], StructuredOutputRecovery)
+    memory_items = [item for item in main_middleware if isinstance(item, MemoryMiddleware)]
+    assert len(memory_items) == 1
+    assert memory_items[0].sources == [RUNTIME_AGENTS_PATH]
+    assert memory_items[0].system_prompt == RUNTIME_MEMORY_SYSTEM_PROMPT
+    assert "Learning from feedback" not in RUNTIME_MEMORY_SYSTEM_PROMPT
+    assert "{agent_memory}" in RUNTIME_MEMORY_SYSTEM_PROMPT
+    assert "edit_file" in RUNTIME_MEMORY_SYSTEM_PROMPT
 
     specs = workflow_subagents()
     assert [spec["name"] for spec in specs] == [
@@ -45,8 +67,16 @@ def run() -> None:
     ]
     assert all(len(spec["tools"]) == 1 for spec in specs)
     # Each declarative SubAgent installs its own runtime middleware because it
-    # does not inherit the main agent's middleware.
-    assert all(len(spec["middleware"]) == 3 for spec in specs)
+    # does not inherit the main agent's middleware. Handbook is main-agent only.
+    assert all(len(spec["middleware"]) == 4 for spec in specs)
+    assert all(
+        not any(isinstance(item, MemoryMiddleware) for item in spec["middleware"])
+        for spec in specs
+    )
+    assert all(
+        any(isinstance(item, StructuredOutputRecovery) for item in spec["middleware"])
+        for spec in specs
+    )
     assert all(
         any(isinstance(item, StructuredOutputCompatibility) for item in spec["middleware"])
         for spec in specs

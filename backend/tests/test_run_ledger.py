@@ -5,7 +5,12 @@ import tempfile
 from pathlib import Path
 
 from api import INTERRUPTED_RUN_ERROR
-from runtime.resources import AgentResources, ResourceConfig
+from runtime.resources import (
+    RUNTIME_AGENTS_BASELINE,
+    RUNTIME_AGENTS_PATH,
+    AgentResources,
+    ResourceConfig,
+)
 from runtime.runs import SqliteRunLedger
 from tests.test_support import messages_json, text_block, user_message
 
@@ -13,6 +18,7 @@ from tests.test_support import messages_json, text_block, user_message
 def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_resources_and_ledger(tmp)
+        _check_runtime_agents_handbook(tmp)
         _check_model_usage_aggregation(tmp)
 
 
@@ -133,6 +139,32 @@ def _check_resources_and_ledger(tmp: str) -> None:
     # Reopening the same DB is idempotent: no migration, fresh schema stable.
     reopened = SqliteRunLedger(data_dir / "dsagents_runs.db", data_dir / "internal" / "run-events")
     assert reopened.get_run("workflow-run").result["outcome"] == "input_problems"
+
+
+def _check_runtime_agents_handbook(tmp: str) -> None:
+    """Shared /memories/AGENTS.md is seeded once and never overwritten on reopen."""
+    data_dir = Path(tmp) / "data" / "handbook"
+    with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
+        first = resources.backend.read(RUNTIME_AGENTS_PATH)
+        assert first.error is None and first.file_data is not None
+        content = first.file_data["content"]
+        assert "result_path" in content
+        assert "extract_archives" in content
+        assert "do **not** call `read_file` on the zip" in content
+        assert content.strip() == RUNTIME_AGENTS_BASELINE.strip()
+        resources.backend.edit(
+            RUNTIME_AGENTS_PATH,
+            "## Tool-misuse notes (append-only)",
+            "## Tool-misuse notes (append-only)\n\n### read_file\n"
+            "- Error: binary zip as text\n"
+            "- Next: extract_archives then read text\n",
+        )
+
+    with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
+        second = resources.backend.read(RUNTIME_AGENTS_PATH)
+        assert second.error is None and second.file_data is not None
+        assert "### read_file" in second.file_data["content"]
+        assert "binary zip as text" in second.file_data["content"]
 
 
 def _check_model_usage_aggregation(tmp: str) -> None:

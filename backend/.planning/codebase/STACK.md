@@ -69,7 +69,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 | `api.py` | FastAPI run-first HTTP 层；`_usage_summary` 价格估算 |
 | `runtime/__init__.py` | 对外稳定入口：`AgentResources` / `create_harness` / 相关类型 |
 | `runtime/agent.py` | `Brain`/`BrainFactory` Protocol、`DeepAgentsBrainFactory`、`workflow_subagents()`、middleware 装配入口 |
-| `runtime/middleware.py` | `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 与 `runtime_middlewares()` |
+| `runtime/middleware.py` | `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent `MemoryMiddleware` 装配与 `runtime_middlewares()` |
 | `runtime/execution.py` | `HarnessRuntime.execute_run`、`create_harness`、消息归一化、stream → RunEvent |
 | `runtime/observability.py` | `model_usage`、thinking/text delta、subagent 过滤、`MAIN_AGENT_NAME` |
 | `runtime/resources.py` | `AgentResources`、`ResourceConfig`、`CompositeBackend` 路由 |
@@ -102,7 +102,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 - 生产 brain：`DeepAgentsBrainFactory` → `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `create_deep_agent(...)`。
 - `skills=["/skills/"]`；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
-- `runtime_middlewares()` 每个 agent graph 返回新建的 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`；两个声明式 Tecan SubAgent（`tecan-extractor-a/b`）各自注入该函数的结果并使用只读文件系统权限；Philips workflow 不装 SubAgent。
+- `runtime_middlewares(*, memory_backend=None)` 每个 agent graph 返回新建的 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`；主 Agent（`execution.py`）传 `memory_backend=resources.backend` 时追加内置 `MemoryMiddleware(sources=["/memories/AGENTS.md"], system_prompt=RUNTIME_MEMORY_SYSTEM_PROMPT)`。两个声明式 Tecan SubAgent（`tecan-extractor-a/b`）各自注入无 memory 的 `runtime_middlewares()` 并使用只读文件系统权限；Philips workflow 不装 SubAgent。
 - Philips workflow 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；`StructuredOutputCompatibility.wrap_model_call` 在本次 `ToolStrategy` 请求绑定前用 `request.override(model=...)` 复制模型并关闭 `ChatAnthropic.thinking`，规避 Anthropic-compatible endpoint 在强制 tool choice + thinking 下的兼容性/性能问题；工厂持有的 adaptive thinking 模型不被修改，同时只暴露 `parse_documents` 和 `lookup_philips_wgq_master_data`。直接调用工厂且传入空 middleware 时，工厂会补齐该兼容 middleware。
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))` 禁用默认 general-purpose subagent（锁版本 0.6.12 无 `harness_profile=` 构造参数）。
 - `/skills/**` 写权限 deny；SubAgent 对 `/**` write deny。
@@ -114,7 +114,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 虚拟前缀 | 实现 | 说明 |
 |---|---|---|
-| `/memories/` | `StoreBackend` → SQLite store，namespace `("dsagents",)` | 跨会话长期记忆 |
+| `/memories/` | `StoreBackend` → SQLite store，namespace `("dsagents",)` | 共享运行时操作手册 `/memories/AGENTS.md`（缺失时 seed，不覆盖） |
 | `/artifacts/` | `FilesystemBackend(artifacts_dir, virtual_mode=True)` | 上传与产物 |
 | `/large_tool_results/` | 同上 disk backend | 大工具结果 |
 | `/skills/` | `FilesystemBackend(skills_dir, virtual_mode=True)` | Skill 只读源 |

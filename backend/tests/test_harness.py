@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from deepagents.middleware.memory import MemoryMiddleware
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse
@@ -22,19 +24,23 @@ from runtime.agent import (
     NoProgressLoop,
     NoProgressMiddleware,
     StructuredOutputCompatibility,
+    StructuredOutputRecovery,
     ToolTelemetry,
 )
 from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from runtime.middleware import runtime_middlewares
 from runtime.observability import (
     assistant_message_payload,
     is_subagent_message,
     model_usage,
     thinking_delta,
 )
-from runtime.resources import AgentResources, ResourceConfig
+from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import ToolCatalog
+from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult
 from tests.test_support import (
     FakeBrainFactory,
+    _recognition_result,
     artifact_block,
     messages_json,
     text_block,
@@ -64,10 +70,12 @@ def run() -> None:
         "text": "answer",
     }
     _check_structured_output_integration()
+    _check_structured_output_recovery()
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
         _check_tool_telemetry_middleware()
+        _check_main_agent_memory_middleware()
         _check_no_progress_middleware()
         _check_harness(tmp)
 
@@ -175,6 +183,122 @@ def _check_structured_output_integration() -> None:
     assert model.thinking == {"type": "adaptive"}
 
 
+def _check_structured_output_recovery() -> None:
+    """Text JSON without schema tool_call is recovered into structured_response."""
+    recovery = StructuredOutputRecovery()
+    payload = _recognition_result("success")
+    payload["problems"] = [
+        {
+            "source": "pdf",
+            "location": "header",
+            "issue": "OM missing",
+            "action": "leave null",
+        }
+    ]
+    fenced = (
+        "识别完成。\n\n```json\n"
+        + json.dumps(payload, ensure_ascii=False)
+        + "\n```\n"
+    )
+    update = recovery.after_model(
+        {"messages": [AIMessage(content=fenced)], "structured_response": None},
+        None,
+    )
+    assert update is not None
+    recovered = update["structured_response"]
+    assert isinstance(recovered, PhilipsWgqRecognitionResult)
+    assert recovered.outcome == "success"
+    assert len(recovered.problems) == 1
+    assert recovered.data is not None
+    assert recovered.data.header.original_waybill_number == "9198153694"
+
+    # Already present: no-op.
+    assert (
+        recovery.after_model(
+            {
+                "messages": [AIMessage(content=fenced)],
+                "structured_response": recovered,
+            },
+            None,
+        )
+        is None
+    )
+    # Tool call pending: do not steal from ToolStrategy path.
+    assert (
+        recovery.after_model(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "c1",
+                                "name": "parse_documents",
+                                "args": {"paths": []},
+                                "type": "tool_call",
+                            }
+                        ],
+                    )
+                ]
+            },
+            None,
+        )
+        is None
+    )
+    # Invalid JSON / schema: leave missing for harness failure.
+    assert (
+        recovery.after_model(
+            {"messages": [AIMessage(content="no json here")]},
+            None,
+        )
+        is None
+    )
+
+    # End-to-end create_agent: plain-text model + recovery middleware.
+    class _TextJsonModel(BaseChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "test-text-json"
+
+        def _generate(
+            self,
+            messages: list[Any],
+            stop: list[str] | None = None,
+            run_manager: Any = None,
+            **kwargs: Any,
+        ) -> Any:
+            del messages, stop, run_manager, kwargs
+            from langchain_core.outputs import ChatGeneration, ChatResult
+
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        message=AIMessage(
+                            content=(
+                                "done\n```json\n"
+                                + json.dumps(payload, ensure_ascii=False)
+                                + "\n```"
+                            )
+                        )
+                    )
+                ]
+            )
+
+        def bind_tools(self, tools: list[Any], **kwargs: Any) -> Any:
+            del tools, kwargs
+            return self
+
+    agent = create_agent(
+        model=_TextJsonModel(),
+        middleware=[StructuredOutputRecovery()],
+        response_format=ToolStrategy(PhilipsWgqRecognitionResult),
+    )
+    e2e = agent.invoke({"messages": [HumanMessage(content="recognize")]})
+    assert isinstance(e2e["structured_response"], PhilipsWgqRecognitionResult)
+    assert e2e["structured_response"].outcome == "success"
+    assert e2e["structured_response"].problems
+
+
 def _check_tool_telemetry_middleware() -> None:
     middleware = ToolTelemetry()
     emitted: list[dict[str, object]] = []
@@ -208,6 +332,40 @@ def _check_tool_telemetry_middleware() -> None:
         else:
             raise AssertionError("tool errors must be passed through")
     assert [event["status"] for event in emitted] == ["started", "error"]
+
+
+def _check_main_agent_memory_middleware() -> None:
+    """Main-agent middleware stack has exactly one restricted MemoryMiddleware."""
+    from langchain_core.messages import SystemMessage
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with AgentResources(ResourceConfig(data_dir=Path(tmp) / "data")) as resources:
+            middleware = runtime_middlewares(memory_backend=resources.backend)
+            memory_items = [item for item in middleware if isinstance(item, MemoryMiddleware)]
+            assert len(memory_items) == 1
+            mm = memory_items[0]
+            assert mm.sources == [RUNTIME_AGENTS_PATH]
+            update = mm.before_agent(
+                {},
+                SimpleNamespace(context=None, stream_writer=None, store=resources.store),
+                {},
+            )
+            assert update is not None
+            contents = update["memory_contents"]
+            assert RUNTIME_AGENTS_PATH in contents
+            assert "extract_archives" in contents[RUNTIME_AGENTS_PATH]
+            request = ModelRequest(
+                model=object(),
+                messages=[],
+                system_message=SystemMessage(content="base"),
+                state={"memory_contents": contents},
+            )
+            modified = mm.modify_request(request)
+            text = modified.system_message.content
+            if not isinstance(text, str):
+                text = str(text)
+            assert "extract_archives" in text
+            assert "Learning from feedback" not in text
 
 
 def _check_no_progress_middleware() -> None:

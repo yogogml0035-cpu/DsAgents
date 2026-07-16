@@ -64,7 +64,7 @@ HarnessRuntime.execute_run(...)   # runtime/execution.py
   │    └─ artifact → "Uploaded artifact: /artifacts/..."  (ARTIFACT_REFERENCE_HINT)
   ├─ brain_factory.create(resources, middleware, tools, workflow)
   │    └─ Philips：ToolStrategy 结构化合同；仅 parse_documents + lookup 工具；无 SubAgent；追加
-  │       StructuredOutputCompatibility，在本次模型请求中关闭 thinking
+  │       StructuredOutputCompatibility（关 thinking）+ StructuredOutputRecovery（文本 JSON 兜底）
   ├─ brain.stream({"messages": normalized_messages},
   │                config={"configurable":{"thread_id":session_id}},
   │                stream_mode=["messages","custom","updates"],
@@ -150,8 +150,8 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 ### 4.3 Brain / middleware / Skill 调用边界
 
 - Brain 调用固定：`BrainFactory.create(..., workflow)` 后使用 `stream_mode=["messages","custom","updates"]`，`subgraphs=True`，`version="v2"`，`control=RunControl()`，`thread_id=session_id`。
-- Philips：主 Agent `ToolStrategy(PhilipsWgqRecognitionResult)`，无 SubAgent，仅两个允许工具；`StructuredOutputCompatibility.wrap_model_call` 只为该 `ToolStrategy` 请求用 `request.override(model=...)` 复制模型并关闭 thinking；Harness 捕获/复验 `structured_response`；tool 与 `run.result` 统一英文字段名（OMS 中文表单由调用方映射）。`input_problems` 是业务 outcome，不是 run 失败。
-- `runtime/middleware.py` 的 `runtime_middlewares()` 每次返回 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 三个新实例；后者在非 `ToolStrategy` 请求上 no-op。两个 Tecan SubAgent **不继承**主 Agent middleware，须经 `runtime_middlewares()` 显式注入；兼容 middleware 不增加 `state_schema` 或 LangGraph 自定义状态，no-progress 判断也只从现有消息状态派生。
+- Philips：主 Agent `ToolStrategy(PhilipsWgqRecognitionResult)`，无 SubAgent，仅两个允许工具；`StructuredOutputCompatibility.wrap_model_call` 只为该 `ToolStrategy` 请求用 `request.override(model=...)` 复制模型并关闭 thinking；`StructuredOutputRecovery.after_model` 在模型把合法 JSON 写进文本、未产生 schema tool_call 时补写 `structured_response`（不改写 outcome；`success` 允许非空 `problems`）。Harness 捕获/复验 `structured_response`；tool 与 `run.result` 统一英文字段名（OMS 中文表单由调用方映射）。`input_problems` 是业务 outcome，不是 run 失败。
+- `runtime/middleware.py` 的 `runtime_middlewares(*, memory_backend=None)` 始终返回 `StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`（Recovery 置前，使 `after_model` 在 after 链末位执行）；主 Agent 经 `execution.py` 传 `memory_backend=resources.backend` 时再追加内置 `MemoryMiddleware`（`/memories/AGENTS.md` + 受限提示，不走 `memory=` 默认语义）。两个 Tecan SubAgent **不继承**主 Agent middleware，须经无 memory 的 `runtime_middlewares()` 显式注入；兼容/recovery middleware 不增加 `state_schema` 或 LangGraph 自定义状态，no-progress 判断也只从现有消息状态派生。
 - 主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`；`register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12` 无构造参数式 `harness_profile`）。
 - 5 工具清单：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
 
@@ -180,7 +180,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 | `data/internal/run-events/` | 大 payload spill | ledger（`max_inline_bytes=262_144`，按需创建） |
 | `backend/skills/` | Skill 源（非 data） | 只读挂载为 `/skills/` |
 
-`CompositeBackend` 路由摘要：`/memories/` → Store；`/artifacts/` 与 `/large_tool_results/` → 磁盘；`/skills/` → 只读 Skill 源；其它 → `StateBackend`。详表见 backend ARCHITECTURE。
+`CompositeBackend` 路由摘要：`/memories/` → Store（共享手册 `/memories/AGENTS.md` 缺失时 seed）；`/artifacts/` 与 `/large_tool_results/` → 磁盘；`/skills/` → 只读 Skill 源；其它 → `StateBackend`。详表见 backend ARCHITECTURE。
 
 ### 5.3 事件边界
 

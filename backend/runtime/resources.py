@@ -13,6 +13,33 @@ from runtime.runs import SqliteRunLedger
 # 数据目录固定在 backend/ 下，与 CWD 无关。
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 
+# Shared runtime operations handbook (StoreBackend under /memories/).
+RUNTIME_AGENTS_PATH = "/memories/AGENTS.md"
+
+# Seeded once when missing; never overwrite human or agent appends.
+RUNTIME_AGENTS_BASELINE = """# Runtime operations handbook
+
+Shared across all runs. Follow these tool-use patterns.
+
+## parse_documents ZIP / result consumption
+
+- After `parse_documents`, prefer JSON `result_path` when present; read that file with `read_file`.
+- When the tool returns `archive_path` (a `.zip`), do **not** call `read_file` on the zip as UTF-8 text.
+- For zip outputs: call `extract_archives` on `archive_path`, then `read_file` on extracted text/markdown paths.
+
+## Tool-misuse notes (append-only)
+
+After a tool failure that is a reusable misuse pattern, append one short entry:
+
+```
+### <tool_name>
+- Error: <what failed>
+- Next: <correct next step>
+```
+
+Write only verified tool-misuse patterns. Do not write business data, user preferences, secrets, private paths, full file contents, or unverified guesses.
+"""
+
 
 @dataclass(frozen=True)
 class ResourceConfig:
@@ -72,7 +99,18 @@ class AgentResources:
                 "/skills/": skills,
             },
         )
+        _ensure_runtime_agents(self.backend)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self._stack.close()
+
+
+def _ensure_runtime_agents(backend: CompositeBackend) -> None:
+    """Write the baseline handbook only when the shared file is missing."""
+    existing = backend.read(RUNTIME_AGENTS_PATH)
+    if existing.error is None and existing.file_data is not None:
+        content = existing.file_data.get("content")
+        if isinstance(content, str) and content.strip():
+            return
+    backend.write(RUNTIME_AGENTS_PATH, RUNTIME_AGENTS_BASELINE)

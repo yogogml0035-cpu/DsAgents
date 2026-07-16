@@ -111,7 +111,8 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
   默认实现：`DeepAgentsBrainFactory`；测试实现：`FakeBrain` / `FakeBrainFactory`（`tests/test_support.py`）。**不为工具、ledger、资源再加 Protocol/ABC**。
 - **工具**：普通 callable + 冻结 `ToolCatalog(handlers: tuple[ToolHandler, ...])`，经 `.as_list()` 交给 Brain。
 - **资源与 ledger**：具体类 `AgentResources`、`ResourceConfig`、`SqliteRunLedger`；上下文管理器用 `ExitStack` 管理 store/checkpointer。
-- **声明式 SubAgent**：`workflow_subagents()` 返回两个 Tecan `SubAgent`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（声明式 SubAgent 不继承主 Agent middleware）；Philips workflow 显式使用空 `subagents`。
+- **声明式 SubAgent**：`workflow_subagents()` 返回两个 Tecan `SubAgent`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（无 `memory_backend`；声明式 SubAgent 不继承主 Agent middleware）；Philips workflow 显式使用空 `subagents`。
+- **运行时操作手册**：`AgentResources` 在 `/memories/AGENTS.md` 缺失时写入 ZIP/`result_path` 消费基线；主 Agent 经 `runtime_middlewares(memory_backend=...)` 自动注入，不依赖模型先 `read_file`；失败后追加由提示词约束 + `edit_file`，不做自动写回。
 - **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
 - **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
 - **Brain stream 契约**（`runtime/execution.py`）：

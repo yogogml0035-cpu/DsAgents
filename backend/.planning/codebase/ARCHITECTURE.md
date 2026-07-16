@@ -139,7 +139,7 @@ emit status=running
 
 | 虚拟前缀 | 后端 | 落盘 |
 |----------|------|------|
-| `/memories/` | `StoreBackend` | `dsagents_store.db`，`namespace=("dsagents",)` |
+| `/memories/` | `StoreBackend` | `dsagents_store.db`，`namespace=("dsagents",)`；启动时若缺 `/memories/AGENTS.md` 则写入 ZIP/result 消费基线，已有内容不覆盖 |
 | `/artifacts/` | `FilesystemBackend` | `data/artifacts/`（`virtual_mode=True`） |
 | `/large_tool_results/` | 同上 disk 实例 | 同上 |
 | `/skills/` | `FilesystemBackend` | `backend/skills/`（主 Agent 写权限 deny `/skills/**`） |
@@ -179,10 +179,11 @@ tool_progress / assistant_message / model_usage / ... → status(succeeded)
 | `SqliteRunLedger` | `runtime/runs.py` | runs / run_events；大 payload 外溢；`aggregate_model_usage`；`fail_incomplete_runs` |
 | `RunEvent` / `RunSnapshot` | `runtime/runs.py` | frozen dataclass |
 | `ToolCatalog` / `default_tool_catalog` | `runtime/tools.py` | 5 个静态注册 callable |
-| `ToolTelemetry` | `runtime/middleware.py` | `wrap_tool_call` → custom `tool_execution` 三态 |
+| `ToolTelemetry` | `runtime/middleware.py` | `wrap_tool_call` → custom `tool_execution` 三态；不自动写手册 |
 | `NoProgressMiddleware` | `runtime/middleware.py` | `before_model`：从当前消息状态计算同 tool+args 连续 3 次 → `NoProgressLoop`；不保存实例级调用状态 |
 | `StructuredOutputCompatibility` | `runtime/middleware.py` | `wrap_model_call`：仅当 `ToolStrategy` + thinking 时用 `request.override(model=...)` 复制模型并关闭 thinking，不增加 graph state |
-| `workflow_subagents()` | `runtime/agent.py` + `runtime/middleware.py` | 2 个声明式 Tecan extractor；各装 3 个 runtime middleware + 只读 FS；Philips 不使用 SubAgent |
+| `MemoryMiddleware`（内置） | DeepAgents + `runtime/middleware.py` | 主 Agent 仅：`sources=["/memories/AGENTS.md"]` + 受限 `RUNTIME_MEMORY_SYSTEM_PROMPT`；不走 `memory=[]` 默认提示 |
+| `workflow_subagents()` | `runtime/agent.py` + `runtime/middleware.py` | 2 个声明式 Tecan extractor；各装 3 个 runtime middleware（无 Memory）+ 只读 FS；Philips 不使用 SubAgent |
 | `observability.*` | `runtime/observability.py` | 无 I/O 的 chunk 载荷提取 |
 | artifact helpers | `integrations/artifacts.py` | 路径解析、唯一下载名、不可覆盖 JSON |
 | MinerU tools | `integrations/mineru.py` | `parse_documents` / `extract_archives` + progress custom 事件 |
@@ -205,9 +206,10 @@ Philips 只暴露 1 个业务 Tool，且工具结果不含历史数量、价格�
 ### 中间件约束
 
 - `runtime/middleware.py` 集中放置运行时 middleware；`runtime/agent.py` 只负责导入、工厂装配与 SubAgent 声明。
-- `runtime_middlewares()` 每次返回三个新实例：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`。兼容 middleware 在非结构化输出请求上是 no-op，因此通用/Tecan/Philips 可共用同一装配函数。
-- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`；Philips 工厂对直接调用方传入的 middleware 仍补齐兼容实例。
+- `runtime_middlewares(*, memory_backend=None)`：始终返回 `ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`；主 Agent 传入 `memory_backend=resources.backend` 时再追加一个内置 `MemoryMiddleware`。不使用 `create_deep_agent(memory=...)`，以免默认用户偏好记忆语义与重复加载。
+- 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`（无 handbook）；Philips 工厂对直接调用方传入的 middleware 仍补齐兼容实例。
 - `StructuredOutputCompatibility` 只改本次 `ModelRequest`，不使用 `state_schema`、`ExtendedModelResponse` 或 `Command`；`NoProgressMiddleware` 也从既有 `messages` 派生判断，不增加自定义 graph state。
+- 操作经验沉淀：基线预置 + 自动注入 system prompt；工具失败后由模型按模板 `edit_file` 追加；无审批/去重/自动拦截写手册。
 
 ### run 状态机
 

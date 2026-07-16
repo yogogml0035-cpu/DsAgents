@@ -46,8 +46,10 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 
 ## outcome
 
-- `success`：形成唯一票次且没有需提示的问题，`problems=[]`。
-- `partial_success`：形成唯一票次并有可回填数据，但存在无关附件、PDF 个别失败、Tracking/Oracle 失败或未命中、非核心字段问题。
+- `success`：形成唯一票次且 `data` 可回填。`problems` 可为空，也可记录非阻断提示（字段缺失、主数据未命中、PDF 仅有 LBS 小计等）；**不必**为了有 problems 而改成 `partial_success`。
+- `partial_success`：可选；形成唯一票次且有可回填数据，并**至少**一条 `problems`（例如希望显式标记“部分完成”时使用）。
 - `input_problems`：无法安全形成唯一票次；`data=null`，不得返回可能混票的数据。
 
 补充源失败不能丢弃 PDF 结果。`problems` 每项都填写 `source/location/issue/action`。
+
+最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交结果；自然语言 `reply` 只作简短摘要。若误把完整 JSON 写进文本，运行时会尝试从文本恢复，但仍以 schema 校验为准。

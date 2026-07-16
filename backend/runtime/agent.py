@@ -24,6 +24,7 @@ from runtime.middleware import (
     NoProgressLoop,
     NoProgressMiddleware,
     StructuredOutputCompatibility,
+    StructuredOutputRecovery,
     ToolTelemetry,
     runtime_middlewares,
 )
@@ -43,8 +44,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "outcome; a filename or an ordinary PDF extraction request is not enough. "
     "Business tools accept only explicit artifact paths and never search for "
     "a recent file or prior task. "
-    "Persist important notes under /memories/ and write large outputs under "
-    "/artifacts/."
+    "Write large outputs under /artifacts/."
 )
 
 PHILIPS_WORKFLOW_PROMPT = (
@@ -67,6 +67,7 @@ __all__ = [
     "PHILIPS_WORKFLOW_PROMPT",
     "SKILLS_SOURCE",
     "StructuredOutputCompatibility",
+    "StructuredOutputRecovery",
     "ToolTelemetry",
     "workflow_subagents",
 ]
@@ -124,11 +125,18 @@ class DeepAgentsBrainFactory:
         workflow: str | None = None,
     ) -> Brain:
         configured_middleware = list(middleware)
-        if workflow == WORKFLOW and not any(
-            isinstance(item, StructuredOutputCompatibility)
-            for item in configured_middleware
-        ):
-            configured_middleware.append(StructuredOutputCompatibility())
+        if workflow == WORKFLOW:
+            if not any(
+                isinstance(item, StructuredOutputCompatibility)
+                for item in configured_middleware
+            ):
+                configured_middleware.append(StructuredOutputCompatibility())
+            if not any(
+                isinstance(item, StructuredOutputRecovery)
+                for item in configured_middleware
+            ):
+                # Recovery first so after_model runs last among after_* hooks.
+                configured_middleware.insert(0, StructuredOutputRecovery())
 
         kwargs: dict[str, Any] = {
             "model": self.model,

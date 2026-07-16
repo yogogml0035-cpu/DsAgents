@@ -91,9 +91,9 @@ scope: backend/
 
 ### 6. 声明式 SubAgent 不继承主 Agent middleware（已确认）
 
-- **问题**：`workflow_subagents()` 经 `_extractor` 显式注入 `runtime_middlewares()`（当前为 `ToolTelemetry` + `NoProgressMiddleware` + `StructuredOutputCompatibility`）。
-- **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测。
-- **修复方向**：所有 middleware 变更只改 `runtime_middlewares()`；`tests/test_workflow_setup.py` 继续断言每个 SubAgent 自装 middleware。
+- **问题**：`workflow_subagents()` 经 `_extractor` 显式注入 `runtime_middlewares()`（无 handbook：`ToolTelemetry` + `NoProgressMiddleware` + `StructuredOutputCompatibility`）。主 Agent 另传 `memory_backend` 追加 `MemoryMiddleware`。
+- **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测；若误给 SubAgent 传 `memory_backend` 会重复注入手册。
+- **修复方向**：共享 middleware 只改 `runtime_middlewares()`；主 Agent 在 `execution.py` 传 `memory_backend`；`tests/test_workflow_setup.py` 继续断言 SubAgent 无 `MemoryMiddleware`。
 
 ### 7. Oracle 初始化与整批查询异常合并为一个问题（已确认）
 
@@ -276,9 +276,10 @@ scope: backend/
 
 ### 3. middleware 与 SubAgent 装配
 
-- 只在 `runtime/middleware.py` 实现并通过 `runtime_middlewares()` 增删 middleware；`runtime/agent.py` 只做导入和 workflow/SubAgent 装配；并保证 `workflow_subagents()` 的两个 Tecan extractor 各自装配；Philips workflow 必须保持无 SubAgent。
+- 只在 `runtime/middleware.py` 实现并通过 `runtime_middlewares()` 增删 middleware；主 Agent 手册加载在 `execution.py` 用 `memory_backend=` 打开，勿同时使用 `create_deep_agent(memory=...)`。
+- `runtime/agent.py` 只做导入和 workflow/SubAgent 装配；`workflow_subagents()` 的两个 Tecan extractor 各自装配无 memory 的 middleware；Philips workflow 必须保持无 SubAgent。
 - `register_harness_profile("anthropic", ...)` 为进程级全局副作用；测试或二次 import 需注意。
-- 触达：`runtime/middleware.py`、`runtime/agent.py`、`tests/test_harness.py`、`tests/test_workflow_setup.py`。
+- 触达：`runtime/middleware.py`、`runtime/execution.py`、`runtime/resources.py`、`runtime/agent.py`、`tests/test_harness.py`、`tests/test_workflow_setup.py`、`tests/test_run_ledger.py`。
 
 ### 4. artifact 路径安全
 

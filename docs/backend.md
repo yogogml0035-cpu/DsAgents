@@ -22,10 +22,10 @@
 
 - `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
 - `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy/工具裁剪、两个 Tecan extractor SubAgent 与 middleware 装配。
-- `backend/runtime/middleware.py`：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 及 `runtime_middlewares()`。
+- `backend/runtime/middleware.py`：`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`。
 - `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、结构化响应捕获/复验、协作式 cancel 和默认 harness 工厂。
 - `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢。
-- `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由。
+- `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由；缺失时 seed 共享操作手册 `/memories/AGENTS.md`。
 - `backend/runtime/tools.py`：静态注册 5 个工具；不自动扫描 Skill，不提供插件平台。
 - `backend/integrations/`：artifact 路径/唯一命名/JSON helper 与 MinerU HTTP/ZIP 集成。
 - `backend/skills/`：Philips 响应 schema/主数据规则与 Tecan 字段合同/模板/Excel 实现。

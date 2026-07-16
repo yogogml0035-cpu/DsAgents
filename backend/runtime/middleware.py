@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from typing import Any
 
+from deepagents.middleware.memory import MemoryMiddleware
 from langchain.agents.middleware import (
     AgentMiddleware,
     ModelRequest,
@@ -17,21 +19,53 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_stream_writer
+from pydantic import BaseModel, ValidationError
 
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
+from runtime.resources import RUNTIME_AGENTS_PATH
+from skills.philipswgqinboundrecognition import PhilipsWgqRecognitionResult
 
 
 NO_PROGRESS_WINDOW = 3
 
+# Restricted MemoryMiddleware prompt: auto-load handbook; append only after tool failures.
+RUNTIME_MEMORY_SYSTEM_PROMPT = """\
+<agent_memory>
+{agent_memory}
+</agent_memory>
+
+<memory_guidelines>
+The handbook above is shared runtime tool-use guidance. Follow it for document/result consumption.
+
+After a tool call fails and the failure is a reusable tool-misuse pattern, append one short entry to
+`/memories/AGENTS.md` with `edit_file` using this shape:
+
+### <tool_name>
+- Error: <what failed>
+- Next: <correct next step>
+
+Only append verified tool-misuse patterns. Do not write business data, user preferences, secrets,
+private paths, full file contents, or unverified guesses. Do not update the handbook for one-off
+environment glitches or when no tool failed.
+</memory_guidelines>
+"""
+
 __all__ = [
     "NO_PROGRESS_WINDOW",
+    "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
     "NoProgressMiddleware",
     "StructuredOutputCompatibility",
+    "StructuredOutputRecovery",
     "ToolTelemetry",
     "runtime_middlewares",
 ]
+
+_FENCED_JSON = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 class NoProgressLoop(Exception):
@@ -128,13 +162,76 @@ class StructuredOutputCompatibility(AgentMiddleware):
         return handler(request)
 
 
-def runtime_middlewares() -> list[AgentMiddleware]:
-    """Return fresh middleware instances for each agent graph."""
-    return [
+class StructuredOutputRecovery(AgentMiddleware):
+    """Recover ToolStrategy structured_response from plain-text JSON.
+
+    MiniMax and similar models sometimes finish with a fenced JSON body instead
+    of calling the schema tool. Harness only accepts ``structured_response`` from
+    stream updates, so this middleware parses the latest AI text, validates it
+    against the configured schema, and writes ``structured_response`` into state.
+
+    Does not rewrite outcome (e.g. success + problems stays success). Does not
+    invent fields. If parse/validation fails, returns None and lets the harness
+    fail with ``structured_response missing``.
+    """
+
+    def __init__(self, schema: type[BaseModel] | None = None) -> None:
+        super().__init__()
+        self.schema = schema or PhilipsWgqRecognitionResult
+
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        del runtime
+        if _state_get(state, "structured_response") is not None:
+            return None
+        messages = _messages_of(state)
+        if not messages:
+            return None
+        latest = messages[-1]
+        if not _is_ai_message(latest):
+            return None
+        if observability.tool_calls_of(latest):
+            # Pending or structured tool_calls: leave ToolStrategy / tools path alone.
+            return None
+        text = _message_text(latest)
+        if not text or not text.strip():
+            return None
+        payload = _extract_json_object(text)
+        if payload is None:
+            return None
+        try:
+            validated = self.schema.model_validate(payload)
+        except ValidationError:
+            return None
+        return {"structured_response": validated}
+
+
+def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddleware]:
+    """Return fresh middleware instances for each agent graph.
+
+    When ``memory_backend`` is set (main agent), attach built-in MemoryMiddleware
+    with a restricted prompt so ``/memories/AGENTS.md`` is auto-loaded without the
+    default user-preference memory semantics. Subagents omit memory_backend.
+
+    Order notes (onion model):
+    - Recovery is listed first so its ``after_model`` runs last among after hooks
+      and can still fill ``structured_response`` after other layers run.
+    - Compatibility wraps model calls (thinking off for ToolStrategy).
+    """
+    middleware: list[AgentMiddleware] = [
+        StructuredOutputRecovery(),
         ToolTelemetry(),
         NoProgressMiddleware(),
         StructuredOutputCompatibility(),
     ]
+    if memory_backend is not None:
+        middleware.append(
+            MemoryMiddleware(
+                backend=memory_backend,
+                sources=[RUNTIME_AGENTS_PATH],
+                system_prompt=RUNTIME_MEMORY_SYSTEM_PROMPT,
+            )
+        )
+    return middleware
 
 
 def _runtime_agent_name(request: ToolCallRequest) -> str:
@@ -217,3 +314,87 @@ def _is_ai_message(message: Any) -> bool:
         getattr(message, "type", None) == "ai"
         or getattr(message, "role", None) == "assistant"
     )
+
+
+def _state_get(state: Any, key: str) -> Any:
+    if isinstance(state, dict):
+        return state.get(key)
+    return getattr(state, key, None)
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                # Some providers put body under type=text with nested fields only.
+                if block.get("type") == "text" and isinstance(block.get("content"), str):
+                    parts.append(block["content"])
+        return "".join(parts)
+    return "" if content is None else str(content)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Pull the first valid JSON object from fenced or raw assistant text."""
+    candidates: list[str] = []
+    for match in _FENCED_JSON.finditer(text):
+        candidates.append(match.group(1))
+    # Prefer the largest balanced {...} slice when fences are missing or partial.
+    balanced = _largest_json_object_slice(text)
+    if balanced is not None:
+        candidates.append(balanced)
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _largest_json_object_slice(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    last_end: int | None = None
+    for index in range(start, len(text)):
+        ch = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                last_end = index
+                # Keep scanning for a later top-level close only if nested restarts;
+                # first complete object from the first '{' is usually the payload.
+                break
+    if last_end is None:
+        return None
+    return text[start : last_end + 1]

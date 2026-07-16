@@ -210,7 +210,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 新 HTTP 路由/契约 | `api.py` | 保持 run-first；轮询非 SSE；可注入 `harness_factory` 便于测 |
 | 改 stream→事件映射 | `runtime/execution.py` | 保持 harness 薄；业务不下沉到此 |
 | 新 chunk 字段解析 | `runtime/observability.py` | 保持纯函数、无 I/O |
-| 新 middleware | `runtime/middleware.py` + `runtime_middlewares()` | `agent.py` 导入/装配；SubAgent 需各自注入实例 |
+| 新 middleware | `runtime/middleware.py` + `runtime_middlewares()` | `execution.py` / `agent.py` 装配；主 Agent 手册用 `memory_backend=`；SubAgent 各自注入无 memory 实例 |
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
 | 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |

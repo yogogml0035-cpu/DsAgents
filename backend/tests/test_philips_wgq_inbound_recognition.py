@@ -63,9 +63,17 @@ def _check_result_contract() -> None:
     extra = copy.deepcopy(payload)
     extra["unexpected"] = True
     _assert_invalid(extra)
-    bad_success = copy.deepcopy(payload)
-    bad_success["problems"] = partial["problems"]
-    _assert_invalid(bad_success)
+    # success may carry non-empty problems (field gaps / master-data misses).
+    success_with_problems = copy.deepcopy(payload)
+    success_with_problems["problems"] = partial["problems"]
+    assert (
+        PhilipsWgqRecognitionResult.model_validate(success_with_problems).outcome
+        == "success"
+    )
+    bad_partial = copy.deepcopy(payload)
+    bad_partial["outcome"] = "partial_success"
+    bad_partial["problems"] = []
+    _assert_invalid(bad_partial)
     bad_input = _recognition_result("input problems")
     bad_input["data"] = payload["data"]
     _assert_invalid(bad_input)

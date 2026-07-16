@@ -88,8 +88,8 @@ class PhilipsWgqRecognitionResult(_ContractModel):
                 raise ValueError("input_problems requires data=null and at least one problem")
         elif self.data is None:
             raise ValueError(f"{self.outcome} requires data")
-        if self.outcome == "success" and self.problems:
-            raise ValueError("success requires an empty problems list")
+        # success may carry non-empty problems (field gaps, master-data misses, etc.).
+        # partial_success still requires at least one problem when the model chooses it.
         if self.outcome == "partial_success" and not self.problems:
             raise ValueError("partial_success requires at least one problem")
         return self
