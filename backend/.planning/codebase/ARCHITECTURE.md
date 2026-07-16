@@ -246,7 +246,7 @@ Philips workflow 用 **denylist** 排除帝肯业务工具，**保留**共享 Mi
 | 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含空文本结束）；或 ToolStrategy 校验失败后最新消息为 ToolMessage 且结构化参数是空 `data` 壳 |
 | 成功路径 | 从 fenced/raw 文本解析 JSON → `schema.model_validate` → 写入 `structured_response`，计数归零 |
 | 失败重试 | 无合法 JSON、校验失败、空文本、或空 `data: {}` 壳：追加校正 `HumanMessage`，`jump_to: "model"`，`structured_recovery_attempts += 1` |
-| 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺嵌套字段或 `items` 空；专用中文 `EMPTY_DATA_SHELL_HINT` |
+| 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺嵌套字段或 `items` 空；专用中文 `EMPTY_DATA_SHELL_HINT`；纠错 HumanMessage 附 `PHILIPS_MINIMAL_DATA_SKELETON`（全 null 形状）并优先「完整 JSON 文本 → 同内容 tool args」；**重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（非 `data:{}` / 非 `data:null`），避免 `structured_response missing` |
 | ToolStrategy | Philips 使用 `handle_errors=philips_structured_output_error_message` |
 | 上限 | 默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`（总模型轮次约 `1 + max_retries`） |
 | 耗尽/放行 | `attempts >= max_retries` 时返回 `{"jump_to": "end"}`，**禁止**只返回 `None` |

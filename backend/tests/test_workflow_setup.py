@@ -136,6 +136,8 @@ def run() -> None:
     assert PHILIPS_WORKFLOW_PROMPT in kwargs["system_prompt"]
     assert "data: {}" in kwargs["system_prompt"]
     assert "shipment" in kwargs["system_prompt"]
+    assert "```json" in kwargs["system_prompt"]
+    assert "consolidated" in kwargs["system_prompt"]
     assert callable(kwargs["response_format"].handle_errors)
     empty_shell_msg = kwargs["response_format"].handle_errors(
         Exception("placeholder")

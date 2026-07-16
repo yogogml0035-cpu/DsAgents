@@ -11,7 +11,7 @@
 - **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
 - **简单性约束**：优先删减范围而非增加旋钮。
 - **源码顶层布局稳定**：产品代码落在 `backend/` 的 `api.py` + `runtime/` + `integrations/` + `skills/`；业务逻辑归属对应 Skill 包，不要再引入已删除的顶层辅助模块或 `backend/dsagents/` 包壳。
-- **middleware 与有界 structured recovery**：实现集中在 `runtime/middleware.py`；`runtime_middlewares()` 固定顺序（`StructuredOutputRecovery` 最前）；`after_model` + `jump_to: "model"` 的重试必须同时声明 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。空 `data: {}` 壳（`success`/`partial_success` 但缺嵌套字段或 `items` 空）走专属 `EMPTY_DATA_SHELL_HINT` 纠错，不按业务 `input_problems` 提前终态。改动后跑 `python -m tests.test_harness`。
+- **middleware 与有界 structured recovery**：实现集中在 `runtime/middleware.py`；`runtime_middlewares()` 固定顺序（`StructuredOutputRecovery` 最前）；`after_model` + `jump_to: "model"` 的重试必须同时声明 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。空 `data: {}` 壳（`success`/`partial_success` 但缺嵌套字段或 `items` 空）走专属 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状纠错（优先完整 JSON 文本再同内容 tool args）；**空壳重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON，不编造业务字段值。其他解析失败仍无 `structured_response` 退出。改动后跑 `python -m tests.test_harness`。
 - **Philips 业务结果 vs 执行失败**：业务 JSON 走 `run.result`（`outcome` 为 `success` / `partial_success` / `input_problems`）。`input_problems` 时 `data=null` 且 **run 仍 `succeeded`**；仅 `structured_response` 缺失/非法或运行时异常才令 run **`failed`**。不要用 `reply` 解析业务 JSON。
 - **workflow 工具收窄用 denylist**：为固定 workflow 收窄工具表时，用 denylist 排除**其他业务**工具（如帝肯的 `save_tecan_extraction` / `generate_tecan_import`），必须保留共享 MinerU 工具 `parse_documents` / `extract_archives` 以及本业务工具；禁止业务-only allowlist（会与 `/memories/AGENTS.md`、Skill 手册中的 ZIP/解析指引脱节）。验证：`python -m tests.test_workflow_setup`。
 

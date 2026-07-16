@@ -29,6 +29,12 @@ from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
 from runtime.resources import RUNTIME_AGENTS_PATH
 from skills.philipswgqinboundrecognition import PhilipsWgqRecognitionResult
+from skills.philipswgqinboundrecognition.schema import (
+    OrderHeader,
+    OrderItem,
+    RecognitionData,
+    Shipment,
+)
 
 
 NO_PROGRESS_WINDOW = 3
@@ -62,6 +68,7 @@ __all__ = [
     "DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES",
     "EMPTY_DATA_SHELL_HINT",
     "NO_PROGRESS_WINDOW",
+    "PHILIPS_MINIMAL_DATA_SKELETON",
     "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
     "NoProgressMiddleware",
@@ -74,6 +81,22 @@ __all__ = [
     "runtime_middlewares",
 ]
 
+
+def _null_fields(model_cls: type[BaseModel]) -> dict[str, None]:
+    return {name: None for name in model_cls.model_fields}
+
+
+# 最小合法 data 骨架：从 schema 字段推导，全 null；仅形状提示，不编造业务值。
+PHILIPS_MINIMAL_DATA_SKELETON: dict[str, Any] = PhilipsWgqRecognitionResult(
+    outcome="success",
+    data=RecognitionData(
+        shipment=Shipment(**_null_fields(Shipment)),
+        header=OrderHeader(**_null_fields(OrderHeader)),
+        items=[OrderItem(**_null_fields(OrderItem))],
+    ),
+    problems=[],
+).model_dump(mode="json")
+
 # 模型提交 success/partial 却 data:{} 或缺 shipment/header/items 时的共享纠错文案。
 # 供 ToolStrategy handle_errors 与 recovery 重试使用。
 EMPTY_DATA_SHELL_HINT = (
@@ -83,6 +106,9 @@ EMPTY_DATA_SHELL_HINT = (
     "items（非空数组，每项为完整商品对象）。未知值填 null。"
     "outcome 为 input_problems 时，data 必须为 null（不能是 {}），且至少一条 problem。"
     "不要编造业务值；复用已从 PDF 与主数据查询得到的字段。禁止重复提交相同的空 data 壳。"
+    "只补 problems 而 data 仍为 {} 不算修正。"
+    "推荐：先输出完整 ```json```（形状见纠错消息中的最小合法骨架，把 null 换成已识别值；"
+    "多商品复制 items[] 元素），再调用结构化工具且 args 与该 JSON 相同。"
 )
 
 _FENCED_JSON = re.compile(
@@ -203,16 +229,21 @@ class StructuredOutputRecovery(AgentMiddleware):
 
     On parse/validation failure, append a correction HumanMessage and
     ``jump_to: "model"`` up to ``max_retries`` times (default 2). Exhausted
-    retries use ``jump_to: "end"`` so the agent graph exits without an infinite
-    ToolStrategy re-generation loop; the harness then fails with
+    non-shell failures use ``jump_to: "end"`` so the agent graph exits without
+    an infinite ToolStrategy re-generation loop; the harness then fails with
     ``structured_response missing``.
 
     Also intercepts empty ``data: {}`` structured tool attempts (ToolStrategy
     validation failures that only produce a generic ToolMessage). When the
     latest tool-error turn is an empty recognition shell, append a specific
-    correction and jump back to the model (bounded by the same retry budget).
+    correction (with minimal legal data skeleton) and jump back to the model
+    (bounded by the same retry budget).
 
-    Does not rewrite business outcome fields. Does not invent schema values.
+    When empty-shell retries are exhausted on the Philips schema, emit a
+    schema-valid all-null ``data`` skeleton (not ``data: {}`` / not ``data:
+    null``) plus a runtime problem, so the run can still return JSON. Does not
+    invent business field values. Other failure modes still exit without
+    structured_response.
     """
 
     state_schema = StructuredOutputRecoveryState
@@ -248,6 +279,7 @@ class StructuredOutputRecovery(AgentMiddleware):
                     state,
                     reason=EMPTY_DATA_SHELL_HINT,
                     model_text=json.dumps(empty_shell, ensure_ascii=False, default=str),
+                    empty_shell=True,
                 )
             return None
         if observability.tool_calls_of(latest):
@@ -271,17 +303,22 @@ class StructuredOutputRecovery(AgentMiddleware):
                     state,
                     reason=EMPTY_DATA_SHELL_HINT,
                     model_text=text,
+                    empty_shell=True,
                 )
             try:
                 validated = self.schema.model_validate(payload)
             except ValidationError as exc:
                 reason = _format_validation_error(exc)
-                if _validation_indicates_empty_data(exc):
+                # Only success/partial empty shells get skeleton fallback; other
+                # validation failures (e.g. input_problems with illegal data) do not.
+                empty_shell = is_empty_recognition_data_shell(payload)
+                if empty_shell or _validation_indicates_empty_data(exc):
                     reason = f"{EMPTY_DATA_SHELL_HINT}\n\nValidator detail:\n{reason}"
                 return self._retry_or_give_up(
                     state,
                     reason=reason,
                     model_text=text,
+                    empty_shell=empty_shell,
                 )
             return {
                 "structured_response": validated,
@@ -302,12 +339,22 @@ class StructuredOutputRecovery(AgentMiddleware):
         *,
         reason: str,
         model_text: str,
+        empty_shell: bool = False,
     ) -> dict[str, Any]:
         attempts = _recovery_attempts(state)
         if attempts >= self.max_retries:
             # Critical: with ToolStrategy and no tools, create_agent's
             # model_to_model edge re-enters the model whenever structured_response
             # is missing. Returning None would infinite-loop; jump to end instead.
+            # Empty-shell exhaustion on Philips: prefer a legal all-null skeleton
+            # over run-level structured_response missing.
+            if empty_shell and self.schema is PhilipsWgqRecognitionResult:
+                rejected = _payload_dict_from_text(model_text)
+                return {
+                    "structured_response": _empty_shell_fallback_result(rejected),
+                    "jump_to": "end",
+                    "structured_recovery_attempts": attempts,
+                }
             return {"jump_to": "end"}
         schema_name = getattr(self.schema, "__name__", "structured schema")
         return {
@@ -463,6 +510,65 @@ def _format_validation_error(exc: ValidationError) -> str:
     return text
 
 
+_EMPTY_SHELL_FALLBACK_PROBLEM: dict[str, str] = {
+    "source": "runtime",
+    "location": "structured_response",
+    "issue": "model kept submitting empty data shell after recovery retries",
+    "action": "returned schema-valid all-null skeleton so run can complete",
+}
+
+
+def _payload_dict_from_text(text: str) -> dict[str, Any] | None:
+    """Best-effort parse of rejected tool args or fenced JSON text."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _extract_json_object(raw)
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _empty_shell_fallback_result(
+    rejected: dict[str, Any] | None,
+) -> PhilipsWgqRecognitionResult:
+    """Build a legal Philips result after empty-shell retries are exhausted.
+
+    Uses full nested ``data`` with null fields (not ``data: {}`` / not
+    ``data: null``). Keeps model ``problems`` when shape-valid; always appends a
+    runtime degradation problem. Does not invent business field values.
+    """
+    problems: list[dict[str, str]] = []
+    if isinstance(rejected, dict):
+        raw_problems = rejected.get("problems")
+        if isinstance(raw_problems, list):
+            for item in raw_problems:
+                if not isinstance(item, dict):
+                    continue
+                source = item.get("source")
+                location = item.get("location")
+                issue = item.get("issue")
+                action = item.get("action")
+                if all(isinstance(v, str) and v for v in (source, location, issue, action)):
+                    problems.append(
+                        {
+                            "source": source,
+                            "location": location,
+                            "issue": issue,
+                            "action": action,
+                        }
+                    )
+    problems.append(dict(_EMPTY_SHELL_FALLBACK_PROBLEM))
+    payload = {
+        **PHILIPS_MINIMAL_DATA_SKELETON,
+        # partial_success: structure is returnable but values were not filled.
+        "outcome": "partial_success",
+        "problems": problems,
+    }
+    return PhilipsWgqRecognitionResult.model_validate(payload)
+
+
 def is_empty_recognition_data_shell(payload: Any) -> bool:
     """True when payload claims success/partial but data is {} or missing nested keys.
 
@@ -513,7 +619,17 @@ def philips_structured_output_error_message(exc: Exception) -> str:
     """
     args = _structured_validation_error_args(exc)
     if args is not None and is_empty_recognition_data_shell(args):
-        return f"错误：{EMPTY_DATA_SHELL_HINT}\n请修正后重试。"
+        skeleton = json.dumps(
+            PHILIPS_MINIMAL_DATA_SKELETON,
+            ensure_ascii=False,
+            indent=2,
+        )
+        return (
+            f"错误：{EMPTY_DATA_SHELL_HINT}\n"
+            "最小合法形状（把 null 换成真实值；多行复制 items 元素）：\n"
+            f"```json\n{skeleton}\n```\n"
+            "请修正后重试。"
+        )
     # 其他 schema 问题仍回传原始解析错误。
     return f"错误：{exc}\n请修正后重试。"
 
@@ -626,15 +742,26 @@ def _build_recovery_retry_message(
         or "data: {}" in reason
     )
     if empty_shell:
+        skeleton = json.dumps(
+            PHILIPS_MINIMAL_DATA_SKELETON,
+            ensure_ascii=False,
+            indent=2,
+        )
         lead = (
             f"结构化输出被拒绝：`{schema_name}` 使用了空的 `data` 壳。"
-            "请再次调用结构化工具，提交完整嵌套的 `shipment`、`header` 与非空 `items`。"
-            "不要编造业务值；未知填 null。禁止再次提交 data: {}。\n\n"
+            "请按顺序修正：① 在文本中输出恰好一个完整 ```json``` 对象"
+            "（含 data.shipment / data.header / 非空 data.items；未知 null）；"
+            "② 再调用结构化工具，args 与该 JSON 相同。"
+            "不要编造业务值；复用 PDF 与主数据已识别字段。禁止再次提交 data: {}；"
+            "只补 problems 不算修正。\n\n"
+            f"最小合法形状（把 null 换成真实值；多行复制 items 元素）：\n"
+            f"```json\n{skeleton}\n```\n\n"
         )
     else:
         lead = (
             f"结构化输出被拒绝。请重新提交合法的 `{schema_name}`："
-            "优先调用结构化输出工具，或输出恰好一个符合 schema 的 JSON 对象。"
+            "优先在文本中输出恰好一个符合 schema 的完整 JSON 对象，"
+            "再调用结构化输出工具（args 与 JSON 相同）。"
             "不要编造字段；未知填 null。仅自然语言摘要不能作为业务结果。\n\n"
         )
     return (
