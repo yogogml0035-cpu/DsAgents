@@ -154,6 +154,7 @@ brain.stream(
 | 解析进度 | `parse_documents` / `extract_archives` 自发 custom | → `tool_progress` |
 | 无进展熔断 | `NoProgressMiddleware` | 从当前 HumanMessage 之后的消息状态计算连续相同 tool 调用 `NO_PROGRESS_WINDOW` 次 → `NoProgressLoop`；不保存实例级状态 |
 | 结构化输出兼容 | `StructuredOutputCompatibility.wrap_model_call` | `ToolStrategy` 且模型启用 thinking 时，`request.override(model=...)` 生成一次性 `thinking=None` 模型；不写 graph state、不改变 `structured_response` 合同 |
+| 结构化输出恢复 | `StructuredOutputRecovery.after_model` | 文本 JSON → 校验后写 `structured_response`；失败则纠错消息 + `jump_to: "model"`（默认 `max_retries=2`）；耗尽/`jump_to: "end"` 退出，避免 ToolStrategy 无 `structured_response` 时 model↔model 死循环；不改写业务 outcome |
 | 结构化日志 / OpenTelemetry / Prometheus | **未接入** | 无 APM SDK |
 | 错误上报 SaaS | **未接入** | 失败写入 run `error` 字段 |
 

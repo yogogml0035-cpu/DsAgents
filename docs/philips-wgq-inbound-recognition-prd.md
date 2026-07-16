@@ -146,7 +146,7 @@ DsAgents 的 tool schema 与 `run.result` **统一使用英文字段名**。OMS�
 - `partial_success`：可选；形成唯一票次且有可回填数据，并至少一项 `problems`（调用方希望显式标记“部分完成”时使用）。
 - `input_problems`：无法安全形成唯一票次；`data=null` 且 `problems` 至少一项。
 - `input_problems` 是业务结果，仍对应 `run.status=succeeded`。只有模型、运行时或结构化响应缺失/非法才对应 `run.status=failed`。
-- `reply` 仅作人类摘要，不参与业务 JSON 解析。若模型误将完整 JSON 写进文本而未调用 schema 工具，运行时 `StructuredOutputRecovery` 可从文本恢复 `structured_response`（仍以 Pydantic 校验为准，不改写 outcome）。
+- `reply` 仅作人类摘要，不参与业务 JSON 解析。若模型误将完整 JSON 写进文本而未调用 schema 工具，运行时 `StructuredOutputRecovery` 可从文本恢复 `structured_response`（仍以 Pydantic 校验为准，不改写 outcome）。解析或校验失败时会注入纠错提示并有限次回跳模型（默认最多 2 次）；仍失败则 run 以结构化响应缺失失败，不无限重试。
 
 ## 4. 单据识别与票次规则
 

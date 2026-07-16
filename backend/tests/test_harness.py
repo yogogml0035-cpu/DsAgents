@@ -184,8 +184,8 @@ def _check_structured_output_integration() -> None:
 
 
 def _check_structured_output_recovery() -> None:
-    """Text JSON without schema tool_call is recovered into structured_response."""
-    recovery = StructuredOutputRecovery()
+    """Text JSON without schema tool_call is recovered; validation failures retry."""
+    recovery = StructuredOutputRecovery(max_retries=2)
     payload = _recognition_result("success")
     payload["problems"] = [
         {
@@ -211,6 +211,7 @@ def _check_structured_output_recovery() -> None:
     assert len(recovered.problems) == 1
     assert recovered.data is not None
     assert recovered.data.header.original_waybill_number == "9198153694"
+    assert update.get("structured_recovery_attempts") == 0
 
     # Already present: no-op.
     assert (
@@ -245,20 +246,120 @@ def _check_structured_output_recovery() -> None:
         )
         is None
     )
-    # Invalid JSON / schema: leave missing for harness failure.
-    assert (
-        recovery.after_model(
-            {"messages": [AIMessage(content="no json here")]},
-            None,
-        )
-        is None
+
+    # No JSON: jump back to model with a correction message (attempt 1).
+    no_json = recovery.after_model(
+        {"messages": [AIMessage(content="no json here")]},
+        None,
+    )
+    assert no_json is not None
+    assert no_json["jump_to"] == "model"
+    assert no_json["structured_recovery_attempts"] == 1
+    assert isinstance(no_json["messages"][0], HumanMessage)
+    assert "Structured output was rejected" in no_json["messages"][0].content
+    assert "no valid JSON object" in no_json["messages"][0].content
+
+    # Invalid schema JSON: also jump_to model with validation error.
+    bad_payload = {"outcome": "input_problems", "data": {"not": "allowed"}, "problems": []}
+    bad_fenced = "```json\n" + json.dumps(bad_payload) + "\n```"
+    invalid = recovery.after_model(
+        {"messages": [AIMessage(content=bad_fenced)], "structured_recovery_attempts": 0},
+        None,
+    )
+    assert invalid is not None
+    assert invalid["jump_to"] == "model"
+    assert invalid["structured_recovery_attempts"] == 1
+    assert "validation" in invalid["messages"][0].content.lower() or "Issue:" in (
+        invalid["messages"][0].content
     )
 
-    # End-to-end create_agent: plain-text model + recovery middleware.
-    class _TextJsonModel(BaseChatModel):
+    # Exhausted retries: exit graph (jump_to end) so ToolStrategy does not loop.
+    exhausted = recovery.after_model(
+        {
+            "messages": [AIMessage(content=bad_fenced)],
+            "structured_recovery_attempts": 2,
+        },
+        None,
+    )
+    assert exhausted is not None
+    assert exhausted.get("jump_to") == "end"
+    assert "structured_response" not in exhausted
+
+    # Empty assistant text: first failure still retries (same budget as parse fail).
+    empty_retry = recovery.after_model(
+        {"messages": [AIMessage(content="")], "structured_recovery_attempts": 0},
+        None,
+    )
+    assert empty_retry is not None
+    assert empty_retry.get("jump_to") == "model"
+    assert empty_retry.get("structured_recovery_attempts") == 1
+    empty_exit = recovery.after_model(
+        {"messages": [AIMessage(content="")], "structured_recovery_attempts": 2},
+        None,
+    )
+    assert empty_exit is not None
+    assert empty_exit.get("jump_to") == "end"
+
+    # End-to-end: first reply invalid JSON text, second reply valid → structured.
+    class _RetryThenOkModel(BaseChatModel):
+        calls: int = 0
+
         @property
         def _llm_type(self) -> str:
-            return "test-text-json"
+            return "test-retry-text-json"
+
+        def _generate(
+            self,
+            messages: list[Any],
+            stop: list[str] | None = None,
+            run_manager: Any = None,
+            **kwargs: Any,
+        ) -> Any:
+            del stop, run_manager, kwargs
+            from langchain_core.outputs import ChatGeneration, ChatResult
+
+            self.calls += 1
+            if self.calls == 1:
+                content = "almost done but not json yet"
+            else:
+                # Retry prompt must have been appended as a human message.
+                assert any(
+                    isinstance(message, HumanMessage)
+                    and "Structured output was rejected" in str(message.content)
+                    for message in messages
+                )
+                content = (
+                    "done\n```json\n"
+                    + json.dumps(payload, ensure_ascii=False)
+                    + "\n```"
+                )
+            return ChatResult(
+                generations=[ChatGeneration(message=AIMessage(content=content))]
+            )
+
+        def bind_tools(self, tools: list[Any], **kwargs: Any) -> Any:
+            del tools, kwargs
+            return self
+
+    retry_model = _RetryThenOkModel()
+    agent = create_agent(
+        model=retry_model,
+        middleware=[StructuredOutputRecovery(max_retries=2)],
+        response_format=ToolStrategy(PhilipsWgqRecognitionResult),
+    )
+    e2e = agent.invoke({"messages": [HumanMessage(content="recognize")]})
+    assert retry_model.calls == 2
+    assert isinstance(e2e["structured_response"], PhilipsWgqRecognitionResult)
+    assert e2e["structured_response"].outcome == "success"
+    assert e2e["structured_response"].problems
+
+    # Exhaust retries end-to-end: no structured_response key.
+    class _AlwaysBadModel(BaseChatModel):
+        calls: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "test-always-bad"
 
         def _generate(
             self,
@@ -270,33 +371,25 @@ def _check_structured_output_recovery() -> None:
             del messages, stop, run_manager, kwargs
             from langchain_core.outputs import ChatGeneration, ChatResult
 
+            self.calls += 1
             return ChatResult(
-                generations=[
-                    ChatGeneration(
-                        message=AIMessage(
-                            content=(
-                                "done\n```json\n"
-                                + json.dumps(payload, ensure_ascii=False)
-                                + "\n```"
-                            )
-                        )
-                    )
-                ]
+                generations=[ChatGeneration(message=AIMessage(content="still no json"))]
             )
 
         def bind_tools(self, tools: list[Any], **kwargs: Any) -> Any:
             del tools, kwargs
             return self
 
-    agent = create_agent(
-        model=_TextJsonModel(),
-        middleware=[StructuredOutputRecovery()],
+    always_bad = _AlwaysBadModel()
+    fail_agent = create_agent(
+        model=always_bad,
+        middleware=[StructuredOutputRecovery(max_retries=2)],
         response_format=ToolStrategy(PhilipsWgqRecognitionResult),
     )
-    e2e = agent.invoke({"messages": [HumanMessage(content="recognize")]})
-    assert isinstance(e2e["structured_response"], PhilipsWgqRecognitionResult)
-    assert e2e["structured_response"].outcome == "success"
-    assert e2e["structured_response"].problems
+    failed = fail_agent.invoke({"messages": [HumanMessage(content="recognize")]})
+    assert "structured_response" not in failed or failed.get("structured_response") is None
+    # initial model + max_retries correction loops (2) = 3 calls, then jump_to end
+    assert always_bad.calls == 3
 
 
 def _check_tool_telemetry_middleware() -> None:

@@ -72,7 +72,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_support.py` | 无独立 `run()` | `FakeBrain` / `FakeBrainFactory`、消息构造、轮询 helper、结构化结果 fixture |
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 5 工具 |
 | `tests/test_run_ledger.py` | `run()` | 资源、`/memories/AGENTS.md` seed/不覆盖、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
-| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware 自动加载、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility` 请求替换、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
+| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware 自动加载、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility` 请求替换、`StructuredOutputRecovery` 文本 JSON 恢复/校验失败 `jump_to` 重试与耗尽 `jump_to: end`、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
 | `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞等 HTTP 契约 |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具裁剪/无 SubAgent、Tecan 两个 SubAgent、主/Sub middleware 差异、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |

@@ -145,7 +145,7 @@ emit status=running
 | `/skills/` | `FilesystemBackend` | `backend/skills/`（主 Agent 写权限 deny `/skills/**`） |
 | 其它（默认） | `StateBackend` | 同 `thread_id` 图状态，不跨 session |
 
-业务工作流不增加自定义图状态字段。Philips 从 `updates` 读取 LangChain 已有 `structured_response`，结果投影到 `runs.result_json` 和终态 `status.payload.result`；`result.outcome=input_problems` 仍是 `run.status=succeeded`。无暂停/恢复/跨 run 游标。
+业务工作流不增加对外业务图状态字段。Philips 从 `updates` 读取 LangChain 已有 `structured_response`，结果投影到 `runs.result_json` 和终态 `status.payload.result`；`result.outcome=input_problems` 仍是 `run.status=succeeded`。`StructuredOutputRecovery` 仅增加内部重试计数 `structured_recovery_attempts`（对 invoke 输入/输出 schema 隐藏）。无暂停/恢复/跨 run 游标。
 
 ### 事件源与投影
 

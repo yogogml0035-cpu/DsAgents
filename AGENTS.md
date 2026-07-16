@@ -9,6 +9,7 @@ DsAgents 是单子项目的 agent 运行时底座：产品代码位于 `backend/
 - HTTP 入口是 `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`；程序内入口是 `AgentResources` + `create_harness(...).execute_run(...)`。
 - `typing.Protocol` 只用于可注入的 `Brain` / `BrainFactory` 边界；工具使用 callable + `ToolCatalog`，资源与 ledger 使用具体类。
 - 工具静态注册、事件固定 7 类、业务问题统一 `input_problems`；不要重新引入已删除的 session API、SSE 或旧顶层辅助模块。
+- 当实现 `after_model` + `jump_to: "model"` 的有界重试时，必须同时声明 `can_jump_to` 含 `"end"`，并在达到 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`；禁止只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。用 `cd backend && python -m tests.test_harness` 验证重试次数封顶。
 - backend 代码改动后先同步 `backend/.planning/codebase/`，再按影响更新根级系统文档与 `coding_maps/SYSTEM_MAP.md`；文档变更至少运行 `git diff --check`。
 - 测试采用可执行 assert 脚本（`cd backend && python -m tests.<name>`，非 pytest）；真实模型、MinerU、Oracle 或外部 HTTP 测试必须与普通本地回归分开。
 - 长期文档使用简体中文，保留代码标识符、路径、命令、配置键和 API 名称；不写密钥、本地 `.env` 值或私有连接串。

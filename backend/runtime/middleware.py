@@ -6,20 +6,24 @@ import json
 import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
 from deepagents.middleware.memory import MemoryMiddleware
 from langchain.agents.middleware import (
     AgentMiddleware,
+    AgentState,
     ModelRequest,
     ModelResponse,
     ToolCallRequest,
+    hook_config,
 )
+from langchain.agents.middleware.types import OmitFromSchema
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ValidationError
+from typing_extensions import NotRequired
 
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
@@ -28,6 +32,11 @@ from skills.philipswgqinboundrecognition import PhilipsWgqRecognitionResult
 
 
 NO_PROGRESS_WINDOW = 3
+# How many after_model correction loops are allowed when text JSON fails validation
+# or cannot be parsed. Each attempt jumps back to the model once.
+DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2
+_RECOVERY_MODEL_SNIPPET_CHARS = 3000
+_RECOVERY_ERROR_CHARS = 1500
 
 # Restricted MemoryMiddleware prompt: auto-load handbook; append only after tool failures.
 RUNTIME_MEMORY_SYSTEM_PROMPT = """\
@@ -52,12 +61,14 @@ environment glitches or when no tool failed.
 """
 
 __all__ = [
+    "DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES",
     "NO_PROGRESS_WINDOW",
     "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
     "NoProgressMiddleware",
     "StructuredOutputCompatibility",
     "StructuredOutputRecovery",
+    "StructuredOutputRecoveryState",
     "ToolTelemetry",
     "runtime_middlewares",
 ]
@@ -66,6 +77,14 @@ _FENCED_JSON = re.compile(
     r"```(?:json)?\s*(\{.*?\})\s*```",
     re.DOTALL | re.IGNORECASE,
 )
+
+
+class StructuredOutputRecoveryState(AgentState):
+    """Agent state extension for structured-output recovery retries."""
+
+    structured_recovery_attempts: NotRequired[
+        Annotated[int, OmitFromSchema(input=True, output=True)]
+    ]
 
 
 class NoProgressLoop(Exception):
@@ -170,15 +189,30 @@ class StructuredOutputRecovery(AgentMiddleware):
     stream updates, so this middleware parses the latest AI text, validates it
     against the configured schema, and writes ``structured_response`` into state.
 
-    Does not rewrite outcome (e.g. success + problems stays success). Does not
-    invent fields. If parse/validation fails, returns None and lets the harness
-    fail with ``structured_response missing``.
+    On parse/validation failure, append a correction HumanMessage and
+    ``jump_to: "model"`` up to ``max_retries`` times (default 2). Exhausted
+    retries use ``jump_to: "end"`` so the agent graph exits without an infinite
+    ToolStrategy re-generation loop; the harness then fails with
+    ``structured_response missing``.
+
+    Does not rewrite business outcome fields. Does not invent schema values.
     """
 
-    def __init__(self, schema: type[BaseModel] | None = None) -> None:
+    state_schema = StructuredOutputRecoveryState
+
+    def __init__(
+        self,
+        schema: type[BaseModel] | None = None,
+        *,
+        max_retries: int = DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES,
+    ) -> None:
         super().__init__()
         self.schema = schema or PhilipsWgqRecognitionResult
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        self.max_retries = max_retries
 
+    @hook_config(can_jump_to=["model", "end"])
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         del runtime
         if _state_get(state, "structured_response") is not None:
@@ -194,15 +228,64 @@ class StructuredOutputRecovery(AgentMiddleware):
             return None
         text = _message_text(latest)
         if not text or not text.strip():
-            return None
+            # Empty finish without structured_response: still use the bounded retry
+            # path. Exhausted retries jump_to end so ToolStrategy cannot loop forever.
+            return self._retry_or_give_up(
+                state,
+                reason="assistant finished with empty text and no structured_response",
+                model_text=text or "",
+            )
+
         payload = _extract_json_object(text)
-        if payload is None:
-            return None
-        try:
-            validated = self.schema.model_validate(payload)
-        except ValidationError:
-            return None
-        return {"structured_response": validated}
+        if payload is not None:
+            try:
+                validated = self.schema.model_validate(payload)
+            except ValidationError as exc:
+                return self._retry_or_give_up(
+                    state,
+                    reason=_format_validation_error(exc),
+                    model_text=text,
+                )
+            return {
+                "structured_response": validated,
+                "structured_recovery_attempts": 0,
+            }
+
+        # Text finish without a parseable JSON object — ask the model to resubmit
+        # via the schema tool or a single valid JSON object.
+        return self._retry_or_give_up(
+            state,
+            reason="no valid JSON object found in assistant text",
+            model_text=text,
+        )
+
+    def _retry_or_give_up(
+        self,
+        state: Any,
+        *,
+        reason: str,
+        model_text: str,
+    ) -> dict[str, Any]:
+        attempts = _recovery_attempts(state)
+        if attempts >= self.max_retries:
+            # Critical: with ToolStrategy and no tools, create_agent's
+            # model_to_model edge re-enters the model whenever structured_response
+            # is missing. Returning None would infinite-loop; jump to end instead.
+            return {"jump_to": "end"}
+        schema_name = getattr(self.schema, "__name__", "structured schema")
+        return {
+            "messages": [
+                HumanMessage(
+                    content=_build_recovery_retry_message(
+                        reason=reason,
+                        model_text=model_text,
+                        schema_name=schema_name,
+                    )
+                )
+            ],
+            "jump_to": "model",
+            "structured_recovery_attempts": attempts + 1,
+        }
 
 
 def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddleware]:
@@ -320,6 +403,41 @@ def _state_get(state: Any, key: str) -> Any:
     if isinstance(state, dict):
         return state.get(key)
     return getattr(state, key, None)
+
+
+def _recovery_attempts(state: Any) -> int:
+    raw = _state_get(state, "structured_recovery_attempts")
+    if isinstance(raw, int) and raw >= 0:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return 0
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    text = str(exc).strip()
+    if len(text) > _RECOVERY_ERROR_CHARS:
+        return text[:_RECOVERY_ERROR_CHARS] + "...[truncated]"
+    return text
+
+
+def _build_recovery_retry_message(
+    *,
+    reason: str,
+    model_text: str,
+    schema_name: str,
+) -> str:
+    snippet = model_text.strip()
+    if len(snippet) > _RECOVERY_MODEL_SNIPPET_CHARS:
+        snippet = snippet[:_RECOVERY_MODEL_SNIPPET_CHARS] + "\n...[truncated]"
+    return (
+        f"Structured output was rejected. Resubmit a valid `{schema_name}` by "
+        "calling the structured-output tool (preferred), or emit exactly one JSON "
+        "object that matches the schema. Do not invent fields; use null for unknowns. "
+        "Natural-language summary alone is not accepted as the business result.\n\n"
+        f"Issue:\n{reason}\n\n"
+        f"Your previous content:\n{snippet}"
+    )
 
 
 def _message_text(message: Any) -> str:
