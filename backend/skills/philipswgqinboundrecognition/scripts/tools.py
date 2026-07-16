@@ -12,32 +12,42 @@ from integrations.artifacts import resolve_artifact_path
 
 
 VALID_TRACKING_STATUSES = {"进口", "出1", "出2", "已出"}
+# English keys match PhilipsWgqRecognitionResult item fields (tool + API contract).
 MASTER_FIELDS = (
-    "中文品名",
-    "规格型号",
-    "原产国",
-    "海关编码",
-    "申报要素",
-    "单位",
-    "法一单位",
-    "法二单位",
-    "新旧",
-    "BU",
+    "chinese_name",
+    "specification",
+    "origin_country",
+    "customs_code",
+    "declaration_elements",
+    "unit",
+    "legal_unit_1",
+    "legal_unit_2",
+    "new_or_used",
+    "business_unit",
 )
-ORACLE_FIELDS = ("中文品名", "规格型号", "原产国", "海关编码", "单位", "法一单位", "法二单位")
+ORACLE_FIELDS = (
+    "chinese_name",
+    "specification",
+    "origin_country",
+    "customs_code",
+    "unit",
+    "legal_unit_1",
+    "legal_unit_2",
+)
 
+# Keys are English master-data fields; values are Tracking Excel header aliases.
 _ALIASES = {
-    "12NC": ("飞利浦料号", "料号", "12NC"),
-    "中文品名": ("中文品名",),
-    "规格型号": ("规格型号", "型号"),
-    "原产国": ("原产国",),
-    "海关编码": ("HS code", "HS编码", "海关编码"),
-    "申报要素": ("申报要素",),
-    "单位": ("申报计量单位", "单位"),
-    "法一单位": ("法定第一单位", "法定单位"),
-    "法二单位": ("法定第二单位",),
-    "新旧": ("新旧",),
-    "BU": ("Modality", "BU"),
+    "product_id": ("飞利浦料号", "料号", "12NC"),
+    "chinese_name": ("中文品名",),
+    "specification": ("规格型号", "型号"),
+    "origin_country": ("原产国",),
+    "customs_code": ("HS code", "HS编码", "海关编码"),
+    "declaration_elements": ("申报要素",),
+    "unit": ("申报计量单位", "单位"),
+    "legal_unit_1": ("法定第一单位", "法定单位"),
+    "legal_unit_2": ("法定第二单位",),
+    "new_or_used": ("新旧",),
+    "business_unit": ("Modality", "BU"),
 }
 _DECLARATION_ELEMENT_HEADERS = {
     "用途",
@@ -78,7 +88,7 @@ def lookup_philips_wgq_master_data(
     product_ids: list[str],
     tracking_artifact: str | None = None,
 ) -> dict[str, Any]:
-    """按 12NC 查询合格 Tracking 行，并仅用 Oracle 补齐缺失的稳定字段。"""
+    """按 product_id(12NC) 查询合格 Tracking 行，并仅用 Oracle 补齐缺失的稳定字段。"""
     normalized_ids = list(dict.fromkeys(filter(None, (normalize_product_id(value) for value in product_ids))))
     items = {product_id: {field: None for field in MASTER_FIELDS} for product_id in normalized_ids}
     problems: list[dict[str, str]] = []
@@ -108,7 +118,7 @@ def lookup_philips_wgq_master_data(
                 items[product_id][field] = value
 
     return {
-        "items": [{"12NC": product_id, **items[product_id]} for product_id in normalized_ids],
+        "items": [{"product_id": product_id, **items[product_id]} for product_id in normalized_ids],
         "problems": problems,
     }
 
@@ -128,7 +138,7 @@ def _tracking_data(path: Path, requested_ids: set[str]) -> dict[str, dict[str, s
             raise ValueError("Tracking 缺少 进口 sheet")
         import_header, import_rows = _sheet_rows(workbook["进口"])
         import_indexes = _header_indexes(import_header)
-        product_index = _find_index(import_indexes, _ALIASES["12NC"])
+        product_index = _find_index(import_indexes, _ALIASES["product_id"])
         if product_index is None:
             raise ValueError("进口 sheet 缺少料号列")
 
@@ -145,7 +155,7 @@ def _tracking_data(path: Path, requested_ids: set[str]) -> dict[str, dict[str, s
         if selected and "申报要素" in workbook.sheetnames:
             declaration_header, rows = _sheet_rows(workbook["申报要素"])
             declaration_indexes = _header_indexes(declaration_header)
-            declaration_product_index = _find_index(declaration_indexes, _ALIASES["12NC"])
+            declaration_product_index = _find_index(declaration_indexes, _ALIASES["product_id"])
             if declaration_product_index is not None:
                 for row in rows:
                     product_id = normalize_product_id(_at(row, declaration_product_index))
@@ -202,7 +212,7 @@ def _field_value(
         value = _cell_text(_at(row, index)) if index is not None else None
         if value is not None:
             return value
-    if field != "申报要素":
+    if field != "declaration_elements":
         return None
     elements = []
     for index, name in enumerate(header):

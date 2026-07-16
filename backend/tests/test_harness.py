@@ -7,11 +7,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from dotenv import load_dotenv
+from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from runtime.agent import (
     BACKEND_ENV_PATH,
     DeepAgentsBrainFactory,
+    StructuredOutputCompatibility,
     ToolTelemetry,
 )
 from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
@@ -83,7 +85,28 @@ def _check_model_env_loading(tmp: str) -> None:
                 tools=[],
                 workflow="philips_wgq_inbound_recognition",
             )
-        assert create.call_args.kwargs["model"].thinking is None
+        kwargs = create.call_args.kwargs
+        assert kwargs["model"] is factory.model
+        compatibility = next(
+            middleware
+            for middleware in kwargs["middleware"]
+            if isinstance(middleware, StructuredOutputCompatibility)
+        )
+        request = ModelRequest(
+            model=factory.model,
+            messages=[],
+            response_format=kwargs["response_format"],
+        )
+        seen_requests = []
+
+        def handler(adjusted_request: ModelRequest) -> ModelResponse:
+            seen_requests.append(adjusted_request)
+            return ModelResponse(result=[AIMessage(content="done")])
+
+        compatibility.wrap_model_call(request, handler)
+        assert len(seen_requests) == 1
+        assert seen_requests[0].model.thinking is None
+        assert factory.model.thinking == {"type": "adaptive"}
 
 
 def _check_tool_telemetry_middleware() -> None:
@@ -290,7 +313,7 @@ def _check_harness(tmp: str) -> None:
         workflow_snapshot = resources.runs.get_run("run-workflow")
         assert workflow_snapshot.status == "succeeded"
         assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
-        assert workflow_snapshot.result["data"]["header"]["原运单号"] == "9198153694"
+        assert workflow_snapshot.result["data"]["header"]["original_waybill_number"] == "9198153694"
         assert workflow_events[-1].payload["result"] == workflow_snapshot.result
 
         input_problem_messages = [user_message(text_block("input problems"))]

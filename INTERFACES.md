@@ -20,7 +20,7 @@ HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`p
 
 - **不再支持**旧 `{"message":"..."}` 体；`workflow` 只接受当前固定字面量，不能用自然语言消息猜工作流。
 - Philips workflow 的 `POST /runs` 仍只返回 `queued`。终态业务 JSON 从 GET 顶层 `result`（或 `run.result`）读取，不解析 `reply`。
-- Philips `result` 固定为 `{"outcome":"success|partial_success|input_problems","data":...|null,"problems":[...]}`；所有业务字段固定存在、缺失为 `null`。`input_problems` 要求 `data=null` 且 run 仍 `succeeded`；只有运行时或结构化输出失败才令 run `failed`。
+- Philips `result` 固定为 `{"outcome":"success|partial_success|input_problems","data":...|null,"problems":[...]}`；**字段名为英文**（与 tool schema 一致，如 `original_waybill_number`、`product_id`、`quantity`）；所有业务字段固定存在、缺失为 `null`。OMS 外高桥中文表单 key 由调用方映射。`input_problems` 要求 `data=null` 且 run 仍 `succeeded`；只有运行时或结构化输出失败才令 run `failed`。
 - `artifact` block 是**项目 API 语义**，进入 Brain 前由 `HarnessRuntime` 转为 `ARTIFACT_REFERENCE_HINT` 文本路径提示，再由 agent 决定 `read_file` / `parse_documents`。
 - `after_event_id` **只裁剪** `events[]`，不影响 `latest_content_event` 与顶层 `usage`。
 - 事件类型固定 7 类：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`（`model_usage` 不计入 `latest_content_event`）。
@@ -101,10 +101,10 @@ brain.stream(
 - `text` 原样；`artifact` → `ARTIFACT_REFERENCE_HINT` 后再入 Brain。
 - 三 channel 全部消费（见 §1）；raw v2 chunk 整体落库（可 spill）。
 - `BrainFactory.create(..., workflow=workflow)` 明确接收 workflow。Philips 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`，从 `updates` 捕获后再次 Pydantic 校验；缺失/非法即 `failed`。
-- Philips invocation 仅暴露 `parse_documents` / `lookup_philips_wgq_master_data`、不装 SubAgent，并关闭 Anthropic thinking 以兼容 ToolStrategy 强制 tool choice；通用/Tecan 保持 adaptive thinking。
+- Philips invocation 仅暴露 `parse_documents` / `lookup_philips_wgq_master_data`、不装 SubAgent，并追加 `StructuredOutputCompatibility`：`wrap_model_call` 只在 `ToolStrategy` 请求中通过 `request.override(model=...)` 关闭该次 Anthropic thinking，以兼容强制 tool choice；工厂原始模型与通用/Tecan adaptive thinking 不变。
 - `control=RunControl()`：`request_cancel` → drain → `GraphDrained` → `cancelled`。
 - 生产工厂：`DeepAgentsBrainFactory`（MiniMax via `init_chat_model("anthropic:...")` + `create_deep_agent`）；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
-- 运行时恰好两个 middleware：`ToolTelemetry`、`NoProgressMiddleware`；两个 Tecan 声明式 SubAgent 须经 `runtime_middlewares()` 显式注入。
+- 通用/Tecan 主路径的 `runtime_middlewares()` 含 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外含 `StructuredOutputCompatibility`。两个 Tecan 声明式 SubAgent 仍须经 `runtime_middlewares()` 显式注入。
 - `register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12` 无构造参数式 `harness_profile`）。
 - 旧 `Hands` / `ToolStatus*` 已删除；工具遥测由 `ToolTelemetry` → `tool_execution` 三态承担。
 

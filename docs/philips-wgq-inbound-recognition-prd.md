@@ -53,55 +53,57 @@ OMS 不拼接业务提示词，只传固定 workflow 与本批 artifact：
 
 ## 3. 结构化结果
 
+DsAgents 的 tool schema 与 `run.result` **统一使用英文字段名**。OMS「新增订单 - 外高桥」表单仍使用中文列名；调用方负责英文 key → 外高桥中文 key 映射，本服务不输出中文业务 key。
+
 ```json
 {
   "outcome": "success | partial_success | input_problems",
   "data": {
     "shipment": {
-      "件数": null,
-      "总毛重": null
+      "pieces": null,
+      "total_gross_weight": null
     },
     "header": {
-      "OM": null,
-      "DN": null,
-      "PO": null,
-      "SO": null,
-      "原运单号": null,
-      "买方": null,
-      "卖方": null,
-      "发货人": null,
-      "收货人": null,
-      "付款方式": null,
-      "合同号": null,
-      "业务员": null,
-      "发票号": null,
-      "ETD": null,
-      "启运港": null,
-      "到货港": null
+      "om": null,
+      "dn": null,
+      "po": null,
+      "so": null,
+      "original_waybill_number": null,
+      "buyer": null,
+      "seller": null,
+      "shipper": null,
+      "consignee": null,
+      "payment_terms": null,
+      "contract_number": null,
+      "salesperson": null,
+      "invoice_number": null,
+      "etd": null,
+      "port_of_departure": null,
+      "port_of_arrival": null
     },
     "items": [
       {
-        "SO_ITEM": null,
-        "12NC": null,
-        "新旧": null,
-        "中文品名": null,
-        "规格型号": null,
-        "库存数量": null,
-        "单位": null,
-        "币种": null,
-        "单价": null,
-        "总价": null,
-        "原产国": null,
-        "海关编码": null,
-        "申报要素": null,
-        "法一数量": null,
-        "法一单位": null,
-        "法二数量": null,
-        "法二单位": null,
-        "毛重": null,
-        "净重": null,
-        "BU": null,
-        "售前/售后": null
+        "so_item": null,
+        "product_id": null,
+        "new_or_used": null,
+        "chinese_name": null,
+        "specification": null,
+        "quantity": null,
+        "unit": null,
+        "currency": null,
+        "unit_price": null,
+        "total_price": null,
+        "origin_country": null,
+        "customs_code": null,
+        "declaration_elements": null,
+        "legal_quantity_1": null,
+        "legal_unit_1": null,
+        "legal_quantity_2": null,
+        "legal_unit_2": null,
+        "gross_weight": null,
+        "net_weight": null,
+        "business_unit": null,
+        "pre_or_post_sales": null
       }
     ]
   },
@@ -116,11 +118,30 @@ OMS 不拼接业务提示词，只传固定 workflow 与本批 artifact：
 }
 ```
 
+### 外高桥 OMS 映射（调用方）
+
+| DsAgents | OMS 外高桥 |
+|---|---|
+| `header.om` / `dn` / `po` / `so` | OM / DN / PO / SO |
+| `header.original_waybill_number` | 原运单号 |
+| `header.buyer` / `seller` / `shipper` / `consignee` | 买方 / 卖方 / 发货人 / 收货人 |
+| `header.payment_terms` / `contract_number` / `salesperson` | 付款方式 / 合同号 / 业务员 |
+| `header.invoice_number` / `etd` | 发票号 / ETD |
+| `header.port_of_departure` / `port_of_arrival` | 启运港 / 到货港 |
+| `items[].so_item` / `product_id` | SO_ITEM / 12NC |
+| `items[].new_or_used` / `chinese_name` / `specification` | 新旧 / 中文品名 / 规格型号 |
+| `items[].quantity` | 库存数量 |
+| `items[].unit` / `currency` / `unit_price` / `total_price` | 单位 / 币种 / 单价 / 总价 |
+| `items[].origin_country` / `customs_code` / `declaration_elements` | 原产国 / 海关编码 / 申报要素 |
+| `items[].legal_quantity_1` / `legal_unit_1` / `legal_quantity_2` / `legal_unit_2` | 法一数量 / 法一单位 / 法二数量 / 法二单位 |
+| `items[].gross_weight` / `net_weight` / `business_unit` / `pre_or_post_sales` | 毛重 / 净重 / BU / 售前/售后 |
+| `shipment.pieces` / `total_gross_weight` | 表单无对应列；可展示或忽略，勿分摊到商品行 |
+
 合同规则：
 
-- Pydantic 模型使用固定 JSON alias 与 `extra="forbid"`；`data` 非空时 `items` 至少一行。
+- Pydantic 模型使用英文字段名与 `extra="forbid"`；`data` 非空时 `items` 至少一行。
 - 所有固定字段必须出现；未识别值为 JSON `null`，不返回“未找到”“需确认”、`//` 或 `N/A` 等占位字符串。
-- 数量、金额和重量使用无千分位十进制字符串，避免 JSON 浮点误差；`ETD` 明确时为 `YYYY-MM-DD`。
+- 数量、金额和重量使用无千分位十进制字符串，避免 JSON 浮点误差；`etd` 明确时为 `YYYY-MM-DD`。
 - `success`：形成唯一票次且无问题，`data` 非空、`problems=[]`。
 - `partial_success`：形成唯一票次且有可回填数据，但存在无关附件、个别 PDF/字段问题、Tracking/Oracle 失败或未命中；`data` 非空且 `problems` 至少一项。
 - `input_problems`：无法安全形成唯一票次；`data=null` 且 `problems` 至少一项。
@@ -139,14 +160,14 @@ OMS 不拼接业务提示词，只传固定 workflow 与本批 artifact：
 
 ## 5. 字段来源优先级
 
-| 字段组 | 第一来源 | 第二来源 | 禁止来源 |
+| 字段组（英文 key） | 第一来源 | 第二来源 | 禁止来源 |
 |---|---|---|---|
-| 运单号、件数、总重量、买卖方、收发货方 | 本批运单/其他 PDF | — | Tracking、Oracle |
-| 发票号、PO/SO/DN/OM、数量、单位、币种、单价、总价 | 本批发票/其他 PDF | — | Tracking、Oracle |
-| 中文品名、规格型号、原产国、海关编码、法定单位、新旧 | 合格 Tracking | Oracle 已确认字段 | 不合格历史行 |
-| 申报要素、BU | 合格 Tracking | `null` | 未确认 Oracle 表列、猜测 |
-| 法一/法二数量 | 本批文件明确值或文件内确认的换算依据 | `null` | 仅凭单位推断 |
-| 商品级毛重、净重 | 本批文件明确值 | `null` | 历史重量、shipment 总重量分摊 |
+| `original_waybill_number`、`pieces`、`total_gross_weight`、买卖方/收发货方 | 本批运单/其他 PDF | — | Tracking、Oracle |
+| `invoice_number`、`po`/`so`/`dn`/`om`、`quantity`、`unit`、`currency`、`unit_price`、`total_price` | 本批发票/其他 PDF | — | Tracking、Oracle |
+| `chinese_name`、`specification`、`origin_country`、`customs_code`、法定单位、`new_or_used` | 合格 Tracking | Oracle 已确认字段 | 不合格历史行 |
+| `declaration_elements`、`business_unit` | 合格 Tracking | `null` | 未确认 Oracle 表列、猜测 |
+| `legal_quantity_1` / `legal_quantity_2` | 本批文件明确值或文件内确认的换算依据 | `null` | 仅凭单位推断 |
+| 商品级 `gross_weight`、`net_weight` | 本批文件明确值 | `null` | 历史重量、shipment 总重量分摊 |
 
 外高桥页面没有订单头件数和总毛重字段，因此响应保留 `shipment` 总量。多商品且没有明确行级重量时，不把总重量复制到每个商品行。
 
@@ -170,7 +191,7 @@ lookup_philips_wgq_master_data(product_ids, tracking_artifact?)
 
 ## 7. Oracle 补齐与降级
 
-- Oracle 仅查询 Tracking 仍缺失的中文品名、规格型号、原产国、海关编码、申报计量单位及法定第一/第二单位。
+- Oracle 仅查询 Tracking 仍缺失的 `chinese_name`、`specification`、`origin_country`、`customs_code`、`unit` 及 `legal_unit_1` / `legal_unit_2`。
 - Tracking 已有非空值不得被 Oracle 覆盖；申报要素和 BU 不查未确认表列。
 - 查询使用参数化 `:product_id`；可选配置键为 `ORACLE_DSN`、`ORACLE_USERNAME`、`ORACLE_PASSWORD`、`ORACLE_CLIENT_LIB_DIR`、`ORACLE_TIMEOUT_SECONDS`。
 - 配置缺失、client/查询失败或单个料号未命中均写入 `problems`；保留 PDF/Tracking 数据并由 Agent 返回 `partial_success`。

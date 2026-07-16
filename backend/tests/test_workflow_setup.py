@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from deepagents.middleware.filesystem import FilesystemPermission
+from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.chat_models import init_chat_model
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage
 
@@ -15,6 +17,7 @@ from runtime.agent import (
     PHILIPS_WORKFLOW_PROMPT,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
+    StructuredOutputCompatibility,
     workflow_subagents,
 )
 from runtime.execution import _update_events
@@ -53,8 +56,13 @@ def run() -> None:
 
     sentinel = object()
     resources = SimpleNamespace(backend=object(), checkpointer=object(), store=object())
+    model = init_chat_model(
+        "anthropic:test",
+        api_key="test-key",
+        thinking={"type": "adaptive"},
+    )
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
-        assert DeepAgentsBrainFactory(model="anthropic:test").create(
+        assert DeepAgentsBrainFactory(model=model).create(
             resources=resources,
             middleware=[],
             tools=[],
@@ -69,6 +77,35 @@ def run() -> None:
     ]
     assert isinstance(kwargs["response_format"], ToolStrategy)
     assert PHILIPS_WORKFLOW_PROMPT in kwargs["system_prompt"]
+    assert kwargs["model"] is model
+    compatibility = next(
+        middleware
+        for middleware in kwargs["middleware"]
+        if isinstance(middleware, StructuredOutputCompatibility)
+    )
+    request = ModelRequest(
+        model=model,
+        messages=[],
+        response_format=kwargs["response_format"],
+    )
+    seen_requests = []
+    structured_response = object()
+
+    def handler(adjusted_request: ModelRequest) -> ModelResponse:
+        seen_requests.append(adjusted_request)
+        return ModelResponse(
+            result=[AIMessage(content="done")],
+            structured_response=structured_response,
+        )
+
+    response = compatibility.wrap_model_call(request, handler)
+    assert response.structured_response is structured_response
+    assert len(seen_requests) == 1
+    assert seen_requests[0].model is not model
+    assert seen_requests[0].model.thinking is None
+    assert model.thinking == {"type": "adaptive"}
+    compatibility.wrap_model_call(request.override(response_format=None), handler)
+    assert seen_requests[-1].model is model
 
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         DeepAgentsBrainFactory(model="anthropic:test").create(

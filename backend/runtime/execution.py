@@ -121,7 +121,6 @@ class HarnessRuntime:
                     raise ValueError("structured_response missing for philips_wgq_inbound_recognition")
                 result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
                     mode="json",
-                    by_alias=True,
                 )
         except GraphDrained:
             yield self.resources.runs.emit_run_status(

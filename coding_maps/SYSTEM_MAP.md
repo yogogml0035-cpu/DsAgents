@@ -23,7 +23,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 
 | 子项目 | 目录 | 当前职责 | 技术栈要点 | 边界（不做什么） |
 |--------|------|----------|------------|------------------|
-| backend | `backend/` | 发行名 `dsagents`；源码顶层 `api.py`、`runtime/`、`integrations/`、`skills/`：run-first runtime + Philips/Tecan 两个内置 Skill + 2 个 Tecan SubAgent + 两个 runtime middleware + 5 个静态工具 | Python `>=3.11,<4.0`；`uv`；FastAPI / uvicorn；DeepAgents / LangGraph；SQLite 三库；MinerU；openpyxl；可选 oracledb | 不提供 session/业务状态表、SSE、鉴权/CORS、通用工作流引擎、跨进程队列/锁、沙箱 / 脚本执行、插件平台、健康检查端点 |
+| backend | `backend/` | 发行名 `dsagents`；源码顶层 `api.py`、`runtime/`、`integrations/`、`skills/`：run-first runtime + Philips/Tecan 两个内置 Skill + 2 个 Tecan SubAgent + runtime middleware + 5 个静态工具 | Python `>=3.11,<4.0`；`uv`；FastAPI / uvicorn；DeepAgents / LangGraph；SQLite 三库；MinerU；openpyxl；可选 oracledb | 不提供 session/业务状态表、SSE、鉴权/CORS、通用工作流引擎、跨进程队列/锁、沙箱 / 脚本执行、插件平台、健康检查端点 |
 
 backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md) 与 [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md)。
 
@@ -63,7 +63,8 @@ HarnessRuntime.execute_run(...)   # runtime/execution.py
   │    ├─ text     → 原样保留
   │    └─ artifact → "Uploaded artifact: /artifacts/..."  (ARTIFACT_REFERENCE_HINT)
   ├─ brain_factory.create(resources, middleware, tools, workflow)
-  │    └─ Philips：ToolStrategy 结构化合同；仅 parse_documents + lookup 工具；无 SubAgent；关闭 thinking
+  │    └─ Philips：ToolStrategy 结构化合同；仅 parse_documents + lookup 工具；无 SubAgent；追加
+  │       StructuredOutputCompatibility，在本次模型请求中关闭 thinking
   ├─ brain.stream({"messages": normalized_messages},
   │                config={"configurable":{"thread_id":session_id}},
   │                stream_mode=["messages","custom","updates"],
@@ -149,8 +150,8 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 ### 4.3 Brain / middleware / Skill 调用边界
 
 - Brain 调用固定：`BrainFactory.create(..., workflow)` 后使用 `stream_mode=["messages","custom","updates"]`，`subgraphs=True`，`version="v2"`，`control=RunControl()`，`thread_id=session_id`。
-- Philips：主 Agent `ToolStrategy(PhilipsWgqRecognitionResult)`，无 SubAgent，仅两个允许工具；Harness 捕获/复验 `structured_response`。`input_problems` 是业务 outcome，不是 run 失败。
-- 运行时恰好两个 middleware：`ToolTelemetry`、`NoProgressMiddleware`；两个 Tecan SubAgent **不继承**主 Agent middleware，须经 `runtime_middlewares()` 显式注入。
+- Philips：主 Agent `ToolStrategy(PhilipsWgqRecognitionResult)`，无 SubAgent，仅两个允许工具；`StructuredOutputCompatibility.wrap_model_call` 只为该 `ToolStrategy` 请求用 `request.override(model=...)` 复制模型并关闭 thinking；Harness 捕获/复验 `structured_response`；tool 与 `run.result` 统一英文字段名（OMS 中文表单由调用方映射）。`input_problems` 是业务 outcome，不是 run 失败。
+- 通用/Tecan 主路径的 `runtime_middlewares()` 含 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外追加 `StructuredOutputCompatibility`。两个 Tecan SubAgent **不继承**主 Agent middleware，须经 `runtime_middlewares()` 显式注入；该兼容 middleware 不增加 `state_schema` 或 LangGraph 自定义状态。
 - 主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`；`register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12` 无构造参数式 `harness_profile`）。
 - 5 工具清单：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
 

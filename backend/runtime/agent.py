@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence
 
@@ -15,7 +16,7 @@ from deepagents import (
 )
 from deepagents.middleware.subagents import SubAgent
 from dotenv import load_dotenv
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
 from langchain.chat_models import init_chat_model
 from langchain.tools.tool_node import ToolCallRequest
@@ -174,6 +175,32 @@ class NoProgressMiddleware(AgentMiddleware):
                 return  # only the most recent tool call is new per model turn
 
 
+class StructuredOutputCompatibility(AgentMiddleware):
+    """Keep structured-output calls compatible with Anthropic-style models.
+
+    LangChain's ToolStrategy forces a structured-output tool choice during
+    model binding. Some Anthropic-compatible endpoints reject or perform
+    poorly with that combination when thinking is enabled, so only the
+    affected request receives a copied model with thinking disabled. The
+    factory's original model remains unchanged for other workflows and calls.
+    """
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        if (
+            isinstance(request.response_format, ToolStrategy)
+            and isinstance(request.model, BaseChatModel)
+            and getattr(request.model, "thinking", None) is not None
+        ):
+            request = request.override(
+                model=request.model.model_copy(update={"thinking": None})
+            )
+        return handler(request)
+
+
 def runtime_middlewares() -> list[AgentMiddleware]:
     """Fresh middleware instances. Each SubAgent must install its own because
     declarative SubAgents do not inherit the main agent's middleware."""
@@ -200,11 +227,18 @@ class DeepAgentsBrainFactory:
         tools: Sequence[Any],
         workflow: str | None = None,
     ) -> Brain:
+        configured_middleware = list(middleware)
+        if workflow == WORKFLOW and not any(
+            isinstance(item, StructuredOutputCompatibility)
+            for item in configured_middleware
+        ):
+            configured_middleware.append(StructuredOutputCompatibility())
+
         kwargs: dict[str, Any] = {
             "model": self.model,
             "tools": tools,
             "system_prompt": self.system_prompt,
-            "middleware": list(middleware),
+            "middleware": configured_middleware,
             "backend": resources.backend,
             "checkpointer": resources.checkpointer,
             "store": resources.store,
@@ -220,9 +254,6 @@ class DeepAgentsBrainFactory:
             "name": MAIN_AGENT_NAME,
         }
         if workflow == WORKFLOW:
-            if isinstance(self.model, BaseChatModel) and getattr(self.model, "thinking", None) is not None:
-                # ToolStrategy relies on forced tool use, which Anthropic rejects while thinking is enabled.
-                kwargs["model"] = self.model.model_copy(update={"thinking": None})
             kwargs["system_prompt"] = f"{self.system_prompt}\n\n{PHILIPS_WORKFLOW_PROMPT}"
             kwargs["response_format"] = _PHILIPS_RESPONSE_FORMAT
             kwargs["tools"] = [

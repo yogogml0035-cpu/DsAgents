@@ -50,6 +50,12 @@ python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
 $env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
 # 可选：$env:DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT="<进境样例目录>"
 python -m tests.test_real_philips_wgq_inbound_recognition
+
+# 只验收 UPS 普货测试用例一的两个 PDF（不上传 Tracking）
+# 默认流式打印 thinking / text_delta / tool_execution / tool_progress / assistant_message
+# 可选：$env:DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR="<UPS 样例目录>"
+# 可选：$env:DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS="0.2"
+python -m tests.test_real_philips_wgq_ups
 ```
 
 MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）：

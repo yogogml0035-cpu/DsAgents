@@ -49,7 +49,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 ┌───────────────────────────▼─────────────────────────────────┐
 │  能力层  runtime/agent.py + runtime/tools.py                 │
 │  Brain/BrainFactory · DeepAgentsBrainFactory                 │
-│  ToolTelemetry / NoProgressMiddleware · workflow_subagents() │
+│  middleware / workflow_subagents()                           │
 │  ToolCatalog（5 callables）                                  │
 └───────────────┬─────────────────────────┬───────────────────┘
                 │                         │
@@ -116,7 +116,8 @@ POST /runs/{run_id}/cancel
 emit status=running
   → 注册 RunControl
   → brain_factory.create(resources, middleware, tools, workflow)
-    → Philips：ToolStrategy(PhilipsWgqRecognitionResult)，关闭 thinking，
+    → Philips：ToolStrategy(PhilipsWgqRecognitionResult)，注册
+      StructuredOutputCompatibility，按请求关闭 thinking，
       仅暴露 parse_documents + lookup_philips_wgq_master_data，无 SubAgent
   → brain.stream(
        {"messages": normalized},          # artifact block → 文本提示
@@ -180,6 +181,7 @@ tool_progress / assistant_message / model_usage / ... → status(succeeded)
 | `ToolCatalog` / `default_tool_catalog` | `runtime/tools.py` | 5 个静态注册 callable |
 | `ToolTelemetry` | `runtime/agent.py` | `wrap_tool_call` → custom `tool_execution` 三态 |
 | `NoProgressMiddleware` | `runtime/agent.py` | `before_model`：同 tool+args 连续 3 次 → `NoProgressLoop` |
+| `StructuredOutputCompatibility` | `runtime/agent.py` | Philips 主 Agent 的 `wrap_model_call`：仅当 `ToolStrategy` + thinking 时用 `request.override(model=...)` 复制模型并关闭 thinking，不增加 graph state |
 | `workflow_subagents()` | `runtime/agent.py` | 2 个声明式 Tecan extractor；各装 middleware + 只读 FS；Philips 不使用 SubAgent |
 | `observability.*` | `runtime/observability.py` | 无 I/O 的 chunk 载荷提取 |
 | artifact helpers | `integrations/artifacts.py` | 路径解析、唯一下载名、不可覆盖 JSON |
@@ -202,9 +204,9 @@ Philips 只暴露 1 个业务 Tool，且工具结果不含历史数量、价格�
 
 ### 中间件约束
 
-- 运行时恰好两个 middleware：`ToolTelemetry`、`NoProgressMiddleware`（`runtime_middlewares()` 每次返回新实例）。
+- 通用/Tecan 主路径的 `runtime_middlewares()` 每次返回两个新实例：`ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 在此基础上追加 `StructuredOutputCompatibility`。
 - 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`。
-- 不使用：`ToolCallLimitMiddleware`、`wrap_model_call`、自定义 state schema、v3 stream、沙箱执行。
+- `StructuredOutputCompatibility` 只改本次 `ModelRequest`，不使用 `state_schema`、`ExtendedModelResponse` 或 `Command`；其余路径不使用 `ToolCallLimitMiddleware`、v3 stream、沙箱执行。
 
 ### run 状态机
 

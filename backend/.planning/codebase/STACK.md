@@ -68,7 +68,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 |---|---|
 | `api.py` | FastAPI run-first HTTP 层；`_usage_summary` 价格估算 |
 | `runtime/__init__.py` | 对外稳定入口：`AgentResources` / `create_harness` / 相关类型 |
-| `runtime/agent.py` | `Brain`/`BrainFactory` Protocol、`DeepAgentsBrainFactory`、`workflow_subagents()`、`ToolTelemetry`、`NoProgressMiddleware` |
+| `runtime/agent.py` | `Brain`/`BrainFactory` Protocol、`DeepAgentsBrainFactory`、`workflow_subagents()`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` |
 | `runtime/execution.py` | `HarnessRuntime.execute_run`、`create_harness`、消息归一化、stream → RunEvent |
 | `runtime/observability.py` | `model_usage`、thinking/text delta、subagent 过滤、`MAIN_AGENT_NAME` |
 | `runtime/resources.py` | `AgentResources`、`ResourceConfig`、`CompositeBackend` 路由 |
@@ -102,7 +102,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 - 生产 brain：`DeepAgentsBrainFactory` → `init_chat_model(f"anthropic:{MINIMAX_MODEL}", api_key=..., base_url=..., thinking={"type":"adaptive"})` → `create_deep_agent(...)`。
 - `skills=["/skills/"]`；主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
 - 两个声明式 Tecan SubAgent（`tecan-extractor-a/b`），各自 `runtime_middlewares()` + 只读文件系统权限；Philips workflow 不装 SubAgent。
-- Philips workflow 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；该 invocation 关闭 `ChatAnthropic.thinking`，因为 Anthropic thinking 与 ToolStrategy 强制 tool choice 不兼容；同时只暴露 `parse_documents` 和 `lookup_philips_wgq_master_data`。
+- Philips workflow 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；追加 `StructuredOutputCompatibility`，由 `wrap_model_call` 在本次 `ToolStrategy` 请求绑定前用 `request.override(model=...)` 复制模型并关闭 `ChatAnthropic.thinking`，规避部分 Anthropic-compatible endpoint 在强制 tool choice + thinking 下的兼容性/性能问题；工厂持有的 adaptive thinking 模型不被修改，同时只暴露 `parse_documents` 和 `lookup_philips_wgq_master_data`。
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))` 禁用默认 general-purpose subagent（锁版本 0.6.12 无 `harness_profile=` 构造参数）。
 - `/skills/**` 写权限 deny；SubAgent 对 `/**` write deny。
 - `AnthropicPromptCachingMiddleware` 由 DeepAgents 尾栈自动挂载（非本仓库自定义）；因 MiniMax 走 `ChatAnthropic`，对 MiniMax-M3 生效。
@@ -229,7 +229,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 ### 版本敏感点
 
-- 通用/Tecan 的 `thinking={"type":"adaptive"}` 依赖当前 `langchain-anthropic==1.4.8`；Philips invocation 用 `model_copy(update={"thinking": None})` 配合 ToolStrategy。
+- 通用/Tecan 的 `thinking={"type":"adaptive"}` 依赖当前 `langchain-anthropic==1.4.8`；Philips invocation 通过 `StructuredOutputCompatibility.wrap_model_call` 的 `model_copy(update={"thinking": None})` 配合 ToolStrategy，避免在工厂装配时替换共享模型。
 - `deepagents==0.6.12` 的 harness profile 用注册 API，非 `create_deep_agent(..., harness_profile=...)`。
 - 升级上述依赖时需重测 brain 装配与 prompt-cache 行为。
 

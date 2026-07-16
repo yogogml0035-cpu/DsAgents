@@ -20,7 +20,7 @@
 
 | 子项目 | 目录 | 当前职责 | 边界（不做什么） |
 |--------|------|----------|------------------|
-| backend | `backend/` | 发行名 `dsagents`；源码顶层 `api.py`、`runtime/`、`integrations/`、`skills/`：run-first agent runtime；Brain/BrainFactory、`ToolCatalog`（5 工具）、Philips/Tecan 两个内置 Skill、2 个 Tecan SubAgent、两个运行时 middleware | 不提供 session/业务状态表、SSE、鉴权/CORS、跨进程锁/队列、通用工作流引擎、沙箱 / 脚本执行、插件平台、健康检查端点 |
+| backend | `backend/` | 发行名 `dsagents`；源码顶层 `api.py`、`runtime/`、`integrations/`、`skills/`：run-first agent runtime；Brain/BrainFactory、`ToolCatalog`（5 工具）、Philips/Tecan 两个内置 Skill、2 个 Tecan SubAgent、运行时 middleware | 不提供 session/业务状态表、SSE、鉴权/CORS、跨进程锁/队列、通用工作流引擎、沙箱 / 脚本执行、插件平台、健康检查端点 |
 
 backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARCHITECTURE.md`](backend/.planning/codebase/ARCHITECTURE.md) 与 [`STRUCTURE.md`](backend/.planning/codebase/STRUCTURE.md)。分层调用视图与跨边界数据流见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md) §3。
 
@@ -43,7 +43,7 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 | 模块 | 系统级职责 |
 |------|-----------|
 | `api.py` | FastAPI HTTP 适配层（四端点）+ workflow/session 校验 + 同 session 单飞锁 + 启动恢复 + 顶层 `workflow`/`result`/`usage` |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy 路由、Tecan SubAgent、两个 middleware |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy 路由、Tecan SubAgent、运行时 middleware（含 Philips 结构化输出兼容） |
 | `runtime/execution.py` | `HarnessRuntime.execute_run`（stream → `RunEvent`）、结构化响应捕获/复验、`create_harness`、协作 cancel |
 | `runtime/observability.py` | 纯函数：chunk → `model_usage` / thinking / text / assistant payload（按 `lc_agent_name` 区分主 agent 与 subagent） |
 | `runtime/resources.py` | `AgentResources` + `ResourceConfig` + `CompositeBackend`（`/memories/` `/artifacts/` `/large_tool_results/` `/skills/`） |
@@ -116,7 +116,7 @@ running → cancelling → cancelled
 
 | 面 | 约定 |
 |----|------|
-| Middleware | 恰好两个：`ToolTelemetry`、`NoProgressMiddleware`；Tecan SubAgent **不继承**主 Agent middleware，须各自注入 |
+| Middleware | 通用/Tecan 主路径为 `ToolTelemetry`、`NoProgressMiddleware`；Philips 主 Agent 额外使用 `StructuredOutputCompatibility.wrap_model_call`；Tecan SubAgent **不继承**主 Agent middleware，须各自注入 |
 | Skill | Philips：结构化 `success|partial_success|input_problems` + 单一主数据 Tool；Tecan：2 Tool + `status=generated|input_problems`；无跨 run 状态机 |
 | 工具注册 | 新增 Skill = 新包目录 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |
 | Provider | 生产 LLM：MiniMax via Anthropic 兼容；文档解析：MinerU HTTP；可选 Oracle（仅 Philips） |

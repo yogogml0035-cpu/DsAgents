@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
+import sys
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -15,6 +17,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8500"
 DEFAULT_SAMPLE_ROOT = Path(r"C:\Users\0325\Desktop\Agent测试用例\渠道文件测试用例\飞利浦外高桥\进境")
 DEFAULT_TIMEOUT_SECONDS = 7200.0
 DEFAULT_POLL_SECONDS = 1.0
+_MAX_STREAM_TEXT = 4000
 
 _CASES = (
     ("DHL", Path("DHL快件/测试用例一"), "9198153694", (Path("DHL快件/测试用例一/DHL快件.zip"),)),
@@ -55,6 +58,8 @@ def _exercise_case(
     files: list[Path],
     timeout_seconds: float,
     poll_seconds: float,
+    *,
+    stream: bool = False,
 ) -> dict[str, Any]:
     session = requests.Session()
     artifacts = _upload(session, base_url, files)
@@ -77,19 +82,158 @@ def _exercise_case(
     response.raise_for_status()
     queued = response.json()
     assert queued["status"] == "queued"
+    run_id = queued["run_id"]
+    if stream:
+        print(f"run_id={run_id} session_id={queued.get('session_id')}", flush=True)
 
+    printer = _EventStreamPrinter() if stream else None
+    after_event_id: int | None = None
     deadline = time.monotonic() + timeout_seconds
+    detail_url = _url(base_url, f"/runs/{run_id}")
     while time.monotonic() < deadline:
-        response = session.get(_url(base_url, f"/runs/{queued['run_id']}"), timeout=60)
+        params: dict[str, int] = {}
+        if stream and after_event_id is not None:
+            params["after_event_id"] = after_event_id
+        response = session.get(detail_url, params=params or None, timeout=60)
         response.raise_for_status()
         payload = response.json()
+        if printer is not None:
+            for event in payload.get("events") or []:
+                printer.emit(event)
+                event_id = event.get("event_id")
+                if isinstance(event_id, int):
+                    after_event_id = event_id
         status = payload["run"]["status"]
         if status == "succeeded":
+            if printer is not None:
+                printer.close()
+                # Incremental polls only carry new events; re-fetch full detail for callers.
+                response = session.get(detail_url, timeout=60)
+                response.raise_for_status()
+                return response.json()
             return payload
         if status in {"failed", "cancelled"}:
-            raise AssertionError(f"run {queued['run_id']} {status}: {payload['run'].get('error')}")
+            if printer is not None:
+                printer.close()
+            raise AssertionError(f"run {run_id} {status}: {payload['run'].get('error')}")
         time.sleep(poll_seconds)
-    raise AssertionError(f"run {queued['run_id']} timed out")
+    if printer is not None:
+        printer.close()
+    raise AssertionError(f"run {run_id} timed out")
+
+
+class _EventStreamPrinter:
+    """Render GET /runs events to the terminal as they arrive."""
+
+    def __init__(self) -> None:
+        self._open_stream: str | None = None
+
+    def emit(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        created_at = event.get("created_at") or ""
+
+        if event_type == "thinking":
+            self._write_delta("thinking", payload.get("content") or "")
+            return
+        if event_type == "text_delta":
+            self._write_delta("text", payload.get("content") or "")
+            return
+
+        self.close()
+        if event_type == "status":
+            status = payload.get("status") or event.get("raw", {}).get("status") or "?"
+            error = payload.get("error")
+            line = f"[{created_at}] status -> {status}"
+            if error:
+                line += f" error={error}"
+            print(line, flush=True)
+            return
+        if event_type == "tool_execution":
+            self._print_tool_execution(created_at, payload)
+            return
+        if event_type == "tool_progress":
+            name = payload.get("name") or "?"
+            status = payload.get("status") or "?"
+            detail = {k: v for k, v in payload.items() if k not in {"name", "status"}}
+            suffix = f" {self._compact(detail)}" if detail else ""
+            print(f"[{created_at}] tool_progress {name} -> {status}{suffix}", flush=True)
+            return
+        if event_type == "assistant_message":
+            thinking = payload.get("thinking")
+            text = payload.get("text")
+            print(f"[{created_at}] assistant_message", flush=True)
+            if thinking:
+                print(self._indent_block("thinking", thinking), flush=True)
+            if text:
+                print(self._indent_block("text", text), flush=True)
+            return
+        if event_type == "model_usage":
+            scope = payload.get("scope") or "model"
+            model = payload.get("model") or "?"
+            inp = payload.get("input_tokens")
+            out = payload.get("output_tokens")
+            print(
+                f"[{created_at}] usage scope={scope} model={model} "
+                f"in={inp} out={out}",
+                flush=True,
+            )
+            return
+        print(f"[{created_at}] {event_type}: {self._compact(payload)}", flush=True)
+
+    def close(self) -> None:
+        if self._open_stream is not None:
+            print(flush=True)
+            self._open_stream = None
+
+    def _write_delta(self, kind: str, content: str) -> None:
+        if not content:
+            return
+        if self._open_stream != kind:
+            self.close()
+            print(f"[{kind}] ", end="", flush=True)
+            self._open_stream = kind
+        print(content, end="", flush=True)
+        sys.stdout.flush()
+
+    def _print_tool_execution(self, created_at: str, payload: dict[str, Any]) -> None:
+        name = payload.get("name") or "?"
+        status = payload.get("status")
+        agent = payload.get("agent_name")
+        header = f"[{created_at}] tool {name}"
+        if agent:
+            header += f" @{agent}"
+        if status:
+            header += f" -> {status}"
+            duration = payload.get("duration_ms")
+            if duration is not None:
+                header += f" ({duration}ms)"
+        print(header, flush=True)
+        args = payload.get("args")
+        if isinstance(args, dict) and args:
+            print(self._indent_block("args", self._compact(args, indent=2)), flush=True)
+        result = payload.get("result")
+        if result is not None:
+            print(self._indent_block("result", str(result)), flush=True)
+        # updates-mode tool_execution only carries the tool-call request (no status).
+        if status is None and "tool_call_id" in payload:
+            tool_call_id = payload.get("tool_call_id")
+            if tool_call_id:
+                print(f"  tool_call_id={tool_call_id}", flush=True)
+
+    @staticmethod
+    def _indent_block(label: str, text: str) -> str:
+        clipped = text if len(text) <= _MAX_STREAM_TEXT else text[:_MAX_STREAM_TEXT] + "…(truncated)"
+        lines = clipped.splitlines() or [clipped]
+        body = "\n".join(f"  {line}" for line in lines)
+        return f"  {label}:\n{body}"
+
+    @staticmethod
+    def _compact(value: Any, *, indent: int | None = None) -> str:
+        text = json.dumps(value, ensure_ascii=False, indent=indent, default=str)
+        if len(text) > _MAX_STREAM_TEXT:
+            return text[:_MAX_STREAM_TEXT] + "…(truncated)"
+        return text
 
 
 def _upload(session: requests.Session, base_url: str, paths: list[Path]) -> list[dict[str, Any]]:
@@ -120,13 +264,16 @@ def _assert_result(name: str, payload: dict[str, Any], waybill: str, has_ignored
     assert run["workflow"] == payload["workflow"] == WORKFLOW
     assert run["result"] == result
     assert result["outcome"] in {"success", "partial_success"}, (name, result)
-    assert result["data"]["header"]["原运单号"] == waybill
+    assert result["data"]["header"]["original_waybill_number"] == waybill
     items = result["data"]["items"]
     assert len(items) >= 1
-    assert all(item["12NC"] and item["库存数量"] for item in items)
-    assert all(item["币种"] and item["单价"] and item["总价"] for item in items)
-    assert any(item["中文品名"] or item["规格型号"] or item["海关编码"] for item in items)
-    assert all(item["新旧"] != "//" and "：//" not in (item["申报要素"] or "") for item in items)
+    assert all(item["product_id"] and item["quantity"] for item in items)
+    assert all(item["currency"] and item["unit_price"] and item["total_price"] for item in items)
+    assert any(item["chinese_name"] or item["specification"] or item["customs_code"] for item in items)
+    assert all(
+        item["new_or_used"] != "//" and "：//" not in (item["declaration_elements"] or "")
+        for item in items
+    )
     _assert_lookup_called(payload)
     if has_ignored_file:
         assert result["outcome"] == "partial_success"

@@ -39,13 +39,13 @@ def run() -> None:
 def _check_result_contract() -> None:
     payload = _recognition_result("success")
     duplicate = copy.deepcopy(payload["data"]["items"][0])
-    duplicate["SO_ITEM"] = "20"
-    duplicate["库存数量"] = "3"
+    duplicate["so_item"] = "20"
+    duplicate["quantity"] = "3"
     payload["data"]["items"].append(duplicate)
-    result = PhilipsWgqRecognitionResult.model_validate(payload).model_dump(mode="json", by_alias=True)
-    assert [item["SO_ITEM"] for item in result["data"]["items"]] == ["10", "20"]
-    assert [item["12NC"] for item in result["data"]["items"]] == [PRODUCT_ID, PRODUCT_ID]
-    assert result["data"]["header"]["ETD"] == "2026-05-25"
+    result = PhilipsWgqRecognitionResult.model_validate(payload).model_dump(mode="json")
+    assert [item["so_item"] for item in result["data"]["items"]] == ["10", "20"]
+    assert [item["product_id"] for item in result["data"]["items"]] == [PRODUCT_ID, PRODUCT_ID]
+    assert result["data"]["header"]["etd"] == "2026-05-25"
 
     partial = copy.deepcopy(payload)
     partial["outcome"] = "partial_success"
@@ -101,21 +101,36 @@ def _check_tracking_and_oracle() -> None:
 
     assert len(result["items"]) == 1
     item = result["items"][0]
-    assert item["12NC"] == PRODUCT_ID
-    assert item["中文品名"] == "申报页中文名"
-    assert item["规格型号"] == "latest-model"
-    assert item["原产国"] == "美国"
-    assert item["海关编码"] == "9018909090"
-    assert item["单位"] == "套"
-    assert item["法一单位"] == "个"
-    assert item["法二单位"] == "千克"
-    assert item["新旧"] == "新"
-    assert item["BU"] == "CT"
-    assert item["申报要素"] == "用途：医疗诊断；品牌：Philips；新旧：新"
+    assert item["product_id"] == PRODUCT_ID
+    assert item["chinese_name"] == "申报页中文名"
+    assert item["specification"] == "latest-model"
+    assert item["origin_country"] == "美国"
+    assert item["customs_code"] == "9018909090"
+    assert item["unit"] == "套"
+    assert item["legal_unit_1"] == "个"
+    assert item["legal_unit_2"] == "千克"
+    assert item["new_or_used"] == "新"
+    assert item["business_unit"] == "CT"
+    assert item["declaration_elements"] == "用途：医疗诊断；品牌：Philips；新旧：新"
     assert connection.cursor_instance.queried == [PRODUCT_ID]
     assert result["problems"] == []
 
-    forbidden = {"库存数量", "币种", "单价", "总价", "运单号", "毛重", "净重", "PO", "SO", "DN", "OM"}
+    forbidden = {
+        "quantity",
+        "currency",
+        "unit_price",
+        "total_price",
+        "original_waybill_number",
+        "gross_weight",
+        "net_weight",
+        "po",
+        "so",
+        "dn",
+        "om",
+        "12NC",
+        "中文品名",
+        "库存数量",
+    }
     assert forbidden.isdisjoint(item)
 
 
@@ -126,7 +141,7 @@ def _check_strict_tracking_no_fallback() -> None:
             "/artifacts/uploads/tracking.xlsx",
         )
     item = result["items"][0]
-    assert all(item[field] is None for field in item if field != "12NC")
+    assert all(item[field] is None for field in item if field != "product_id")
     assert any("未找到合格 Tracking" in problem["issue"] for problem in result["problems"])
     assert any("Oracle 配置缺失" in problem["issue"] for problem in result["problems"])
 
@@ -142,7 +157,7 @@ def _check_oracle_degradation() -> None:
         side_effect=RuntimeError("offline"),
     ):
         result = lookup_philips_wgq_master_data([PRODUCT_ID])
-    assert result["items"][0]["中文品名"] is None
+    assert result["items"][0]["chinese_name"] is None
     assert any("Oracle 查询失败" in problem["issue"] for problem in result["problems"])
 
     connection = _FakeConnection({})

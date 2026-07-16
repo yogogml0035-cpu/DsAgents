@@ -43,7 +43,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 边界 | 实现 | 证据 |
 |---|---|---|
-| 生产 | 通用/Tecan 用 `thinking={"type":"adaptive"}`；Philips invocation 关闭 thinking 以支持 ToolStrategy 强制 tool choice | `runtime/agent.py` `DeepAgentsBrainFactory` |
+| 生产 | 通用/Tecan 用 `thinking={"type":"adaptive"}`；Philips 主 Agent 追加 `StructuredOutputCompatibility`，在 `wrap_model_call` 中仅为 `ToolStrategy` 请求复制模型并关闭 thinking，以支持强制 tool choice | `runtime/agent.py` `DeepAgentsBrainFactory` |
 | 测试 | `FakeBrain` / `FakeBrainFactory`（v2 stream，不触达网络） | `tests/test_support.py` |
 | prompt-cache | DeepAgents 尾栈 `AnthropicPromptCachingMiddleware`；固定前缀勿注入 run_id/时间等动态内容 | 库行为 + `DEFAULT_SYSTEM_PROMPT` / tool schema |
 | usage 观测 | 从 stream `messages` chunk 的 `usage_metadata` 提取 → `model_usage` 事件；不入库专用表 | `runtime/observability.py`、`runtime/execution.py` |
@@ -71,7 +71,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 - 消费者：`skills/philipswgqinboundrecognition/scripts/tools.py` 的 `_oracle_data` / `_init_oracle_client`。
 - 驱动：`oracledb.connect(...)`；配置 `ORACLE_CLIENT_LIB_DIR` 时先启用 thick mode。
-- 查询：参数化 `:product_id`，只读中文品名、规格型号、原产国、海关编码、申报计量单位、法定第一/第二单位；仅查询 Tracking 尚缺字段的 12NC。
+- 查询：参数化 `:product_id`，只读稳定主数据并映射为英文键 `chinese_name` / `specification` / `origin_country` / `customs_code` / `unit` / `legal_unit_1` / `legal_unit_2`；仅查询 Tracking 尚缺字段的 12NC。
 - 行为：配置缺失、client/查询失败或未命中写入 `problems`，不覆盖 Tracking，不丢弃 PDF 结果。
 - Tecan Skill **不**调用 Oracle。
 
@@ -79,7 +79,7 @@ last_mapped_commit: 08413f4688e03e5a24fb8ac08270541d280aee5d
 
 | 工具 | 模块 | 要点 |
 |---|---|---|
-| `lookup_philips_wgq_master_data` | `skills/philipswgqinboundrecognition/scripts/tools.py` | 严格 Tracking 选行 + Oracle 缺失字段补齐；不返回交易字段 |
+| `lookup_philips_wgq_master_data` | `skills/philipswgqinboundrecognition/scripts/tools.py` | 严格 Tracking 选行 + Oracle 缺失字段补齐；返回英文字段（`product_id` 等）；不返回交易字段 |
 | `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` | 写 extraction JSON |
 | `generate_tecan_import` | 同上 | 订单+信息表匹配 + 发票箱单 Excel |
 
@@ -153,6 +153,7 @@ brain.stream(
 | 工具遥测 | `ToolTelemetry.wrap_tool_call` | custom stream → `tool_execution`（started/completed/error + duration） |
 | 解析进度 | `parse_documents` / `extract_archives` 自发 custom | → `tool_progress` |
 | 无进展熔断 | `NoProgressMiddleware` | 连续相同 tool 调用 `NO_PROGRESS_WINDOW` 次 → `NoProgressLoop` |
+| 结构化输出兼容 | `StructuredOutputCompatibility.wrap_model_call` | `ToolStrategy` 且模型启用 thinking 时，`request.override(model=...)` 生成一次性 `thinking=None` 模型；不写 graph state、不改变 `structured_response` 合同 |
 | 结构化日志 / OpenTelemetry / Prometheus | **未接入** | 无 APM SDK |
 | 错误上报 SaaS | **未接入** | 失败写入 run `error` 字段 |
 

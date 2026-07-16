@@ -72,12 +72,13 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_support.py` | 无独立 `run()` | `FakeBrain` / `FakeBrainFactory`、消息构造、轮询 helper、结构化结果 fixture |
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 5 工具 |
 | `tests/test_run_ledger.py` | `run()` | 资源、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
-| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
+| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、Philips `StructuredOutputCompatibility` 请求替换、artifact 归一、事件序列、Philips `structured_response` 成功/缺失 |
 | `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞等 HTTP 契约 |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具裁剪/无 SubAgent、Tecan 两个 SubAgent、middleware、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
 | `tests/test_tecan_import.py` | `run()` | Tecan A/B 裁决、`input_problems`、join、币种和工作簿 |
 | `tests/test_real_philips_wgq_inbound_recognition.py` | `run()` | DHL、DSV、FedEx、UPS、康捷空 upload → workflow run → poll 真实 HTTP 验收 |
+| `tests/test_real_philips_wgq_ups.py` | `run()` | 仅 UPS 普货测试用例一两个 PDF 的 upload → workflow run → poll 真实 HTTP 验收，并打印最终 `result` |
 | `tests/test_real_image_run.py` | `run()` + `main()` | 真实 HTTP 图片 run |
 | `tests/test_real_multi_pdf_run.py` | `run()` + `main()` | 真实多 PDF + MinerU |
 | `tests/test_minimax_cache_baseline.py` | `run()` | 真实 MiniMax cache 基线（诊断型） |
@@ -99,14 +100,14 @@ python -m tests.test_minimax_cache_baseline
 - `FakeBrain` 硬断言 `stream_mode=["messages","custom","updates"]`、`subgraphs=True`、`version="v2"` 和 `thread_id=session_id`。
 - 验证 artifact block 进入 Brain 前全部转为 text block。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage 七类事件。
-- Philips invocation 验证 `BrainFactory.create(..., workflow=...)`、关闭 Anthropic thinking、从 `updates` 捕获嵌套 `structured_response` 并再次 Pydantic 校验。
+- Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking，并从 `updates` 捕获嵌套 `structured_response` 后再次 Pydantic 校验。
 - `test_workflow_setup` 断言 Philips 仅暴露 `parse_documents` 与 `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`。
 
 ### 3. Philips 确定性业务规则
 
-- `PhilipsWgqRecognitionResult` 使用固定 alias、`extra="forbid"` 和 outcome/data/problems 联动校验。
-- 重复 12NC 保持原商品行顺序，不在 schema 层合并。
-- 12NC 去空格/连字符，超过 12 位取后 12 位。
+- `PhilipsWgqRecognitionResult` 使用**英文字段名**（tool 与 `run.result` 同一套）、`extra="forbid"` 和 outcome/data/problems 联动校验；无中文 JSON alias。
+- 重复 `product_id`（12NC）保持原商品行顺序，不在 schema 层合并。
+- `product_id` 去空格/连字符，超过 12 位取后 12 位。
 - Tracking 只读 `进口` sheet；A 列 trim 后严格接受 `进口` / `出1` / `出2` / `已出`；从后向前取第一条合格行。
 - 空白状态、`备注进口` 等非严格状态不得 fallback；未命中进口行时不得读取同料号 `申报要素` 行。
 - Tracking 内 `申报要素` sheet 优先，所选进口行次之；Oracle 只补仍缺失字段。
@@ -127,7 +128,9 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 
 `test_real_philips_wgq_inbound_recognition.py` 默认 skip；开关为 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`。默认样例根可用 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` 覆盖，服务地址用 `DSAGENTS_API_BASE_URL`，超时/轮询分别用 `DSAGENTS_REAL_PHILIPS_WGQ_TIMEOUT_SECONDS` / `DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS`。
 
-脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、运单号、商品行、12NC、数量/价格、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。
+脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、`original_waybill_number`、商品行、`product_id`、`quantity`/价格、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。
+
+`test_real_philips_wgq_ups` 是单用例诊断脚本，默认只上传 UPS 普货测试用例一目录中的两个 PDF，不上传 Tracking；运行前必须显式设置 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_UPS_TEST=1`，并校验结构化结果、`original_waybill_number`、商品交易字段和 `parse_documents` 调用。
 
 ## Mocking Patterns
 
