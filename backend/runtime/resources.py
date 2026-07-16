@@ -13,31 +13,31 @@ from runtime.runs import SqliteRunLedger
 # 数据目录固定在 backend/ 下，与 CWD 无关。
 _BACKEND_DIR = Path(__file__).resolve().parents[1]
 
-# Shared runtime operations handbook (StoreBackend under /memories/).
+# 共享运行时操作手册（StoreBackend，路径 /memories/）。
 RUNTIME_AGENTS_PATH = "/memories/AGENTS.md"
 
-# Seeded once when missing; never overwrite human or agent appends.
-RUNTIME_AGENTS_BASELINE = """# Runtime operations handbook
+# 仅在缺失时写入一次；不覆盖人工或智能体追加内容。
+RUNTIME_AGENTS_BASELINE = """# 运行时操作手册
 
-Shared across all runs. Follow these tool-use patterns.
+跨 run 共享。请遵循下列工具使用约定。
 
-## parse_documents ZIP / result consumption
+## parse_documents 的 ZIP / 结果消费
 
-- After `parse_documents`, prefer JSON `result_path` when present; read that file with `read_file`.
-- When the tool returns `archive_path` (a `.zip`), do **not** call `read_file` on the zip as UTF-8 text.
-- For zip outputs: call `extract_archives` on `archive_path`, then `read_file` on extracted text/markdown paths.
+- 调用 `parse_documents` 后，若有 JSON `result_path`，优先用 `read_file` 读取该文件。
+- 若工具返回 `archive_path`（`.zip`），**不要**把 zip 当 UTF-8 文本 `read_file`。
+- ZIP 输出：先对 `archive_path` 调用 `extract_archives`，再对解压出的文本/Markdown 路径 `read_file`。
 
-## Tool-misuse notes (append-only)
+## 工具误用笔记（仅追加）
 
-After a tool failure that is a reusable misuse pattern, append one short entry:
+工具失败且属于可复用的误用模式时，追加一条短记录：
 
 ```
 ### <tool_name>
-- Error: <what failed>
-- Next: <correct next step>
+- 错误: <失败现象>
+- 下一步: <正确下一步>
 ```
 
-Write only verified tool-misuse patterns. Do not write business data, user preferences, secrets, private paths, full file contents, or unverified guesses.
+只写已验证的工具误用模式。不要写业务数据、用户偏好、密钥、私有路径、完整文件内容或未验证猜测。
 """
 
 

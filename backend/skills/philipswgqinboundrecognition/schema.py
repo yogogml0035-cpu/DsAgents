@@ -10,17 +10,21 @@ WORKFLOW = "philips_wgq_inbound_recognition"
 
 
 class _ContractModel(BaseModel):
-    """English-key API/tool contract. OMS maps these keys to form labels separately."""
+    """英文字段名 API/工具契约。OMS 中文列名由调用方另行映射。"""
 
     model_config = ConfigDict(extra="forbid")
 
 
 class Shipment(_ContractModel):
+    """票次运输层字段。"""
+
     pieces: str | None
     total_gross_weight: str | None
 
 
 class OrderHeader(_ContractModel):
+    """票次抬头字段。"""
+
     om: str | None
     dn: str | None
     po: str | None
@@ -40,6 +44,8 @@ class OrderHeader(_ContractModel):
 
 
 class OrderItem(_ContractModel):
+    """商品行字段；product_id 为 12NC。"""
+
     so_item: str | None
     product_id: str | None
     new_or_used: str | None
@@ -64,12 +70,16 @@ class OrderItem(_ContractModel):
 
 
 class RecognitionData(_ContractModel):
+    """可回填业务体：shipment + header + 至少一行 items。"""
+
     shipment: Shipment
     header: OrderHeader
     items: list[OrderItem] = Field(min_length=1)
 
 
 class RecognitionProblem(_ContractModel):
+    """业务问题项：source/location/issue/action。"""
+
     source: str
     location: str
     issue: str
@@ -77,6 +87,12 @@ class RecognitionProblem(_ContractModel):
 
 
 class PhilipsWgqRecognitionResult(_ContractModel):
+    """飞利浦外高桥进境识别的最终结构化结果。
+
+    outcome 为 success/partial_success 时 data 必须含完整 shipment/header/items；
+    input_problems 时 data 必须为 null。字段名一律英文；未知值填 null。
+    """
+
     outcome: Literal["success", "partial_success", "input_problems"]
     data: RecognitionData | None
     problems: list[RecognitionProblem]

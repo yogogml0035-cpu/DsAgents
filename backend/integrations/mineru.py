@@ -29,20 +29,26 @@ MINERU_POLL_INTERVAL_SECONDS = 30.0
 
 
 def parse_documents(
-    file_paths: Annotated[list[str], "Local paths or /artifacts/... files to parse in one MinerU batch."],
-    return_md: Annotated[bool, "Include Markdown output; triggers full ZIP mode."] = False,
+    file_paths: Annotated[
+        list[str],
+        "本地路径或 /artifacts/... 文件，在一次 MinerU 批次中解析。",
+    ],
+    return_md: Annotated[bool, "包含 Markdown 输出；会触发完整 ZIP 模式。"] = False,
     return_content_list: Annotated[
         bool,
-        "Include MinerU content_list; default JSON mode saves it to result_path.",
+        "包含 MinerU content_list；默认 JSON 模式会写入 result_path。",
     ] = True,
-    return_images: Annotated[bool, "Include extracted images; triggers full ZIP mode."] = False,
-    return_original_file: Annotated[bool, "Include original files; triggers full ZIP mode."] = False,
-    response_format_zip: Annotated[bool, "Save a full ZIP to archive_path instead of JSON result_path."] = False,
+    return_images: Annotated[bool, "包含抽取图片；会触发完整 ZIP 模式。"] = False,
+    return_original_file: Annotated[bool, "包含原始文件；会触发完整 ZIP 模式。"] = False,
+    response_format_zip: Annotated[
+        bool,
+        "将完整 ZIP 保存到 archive_path，而不是 JSON result_path。",
+    ] = False,
 ) -> dict[str, Any]:
-    """Parse local PDF/office documents via MinerU and save outputs under /artifacts/downloads/.
+    """通过 MinerU 解析本地 PDF/Office 文档，输出保存到 /artifacts/downloads/。
 
-    Default mode saves JSON to result_path. Any Markdown, image, original-file,
-    or ZIP request is normalized to full ZIP mode; use extract_archives to inspect it.
+    默认模式将 JSON 写入 result_path。若请求 Markdown、图片、原始文件或 ZIP，
+    会归一为完整 ZIP 模式；用 extract_archives 解压后再查看内容。
     """
     if not file_paths:
         raise ValueError("file_paths must not be empty")
@@ -181,7 +187,7 @@ def parse_documents(
 
 
 def extract_archives(zip_paths: list[str]) -> dict[str, Any]:
-    """Unpack one or more ZIP artifacts into /artifacts/downloads/<zip-stem>/ and list their files."""
+    """将一个或多个 ZIP artifact 解压到 /artifacts/downloads/<zip-stem>/，并列出其中文件。"""
     if not zip_paths:
         raise ValueError("zip_paths must not be empty")
 

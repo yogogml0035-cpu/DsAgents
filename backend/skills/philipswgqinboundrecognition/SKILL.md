@@ -12,13 +12,14 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 ## 输入边界
 
 - 接受 1–10 个 PDF，另可有 1 个 Tracking `.xlsx`。
-- ZIP、DOCX、图片和其他 Excel 不解析、不解包；把它们写入 `problems`，但只要有效 PDF 能形成唯一票次就继续。
+- **用户上传**的 ZIP、DOCX、图片和其他 Excel 不作业务主输入：不解析、不解包；记入 `problems`，但只要有效 PDF 能形成唯一票次就继续。
+- 与上条区分：`parse_documents` 对 **PDF** 返回的 `archive_path`（MinerU ZIP 产物）不是用户业务 ZIP；见固定流程第 1 步。
 - 没有有效 PDF、超过 PDF 上限、运单与发票无法关联，或混入两个以上真实票次时，返回 `input_problems` 且 `data=null`。
 - 当前消息已经给出全部路径；不得调用 `ls`、`glob` 或 `task` 重新发现材料，也不得委派 SubAgent。
 
 ## 固定流程
 
-1. 从当前 artifact 清单筛出 PDF 与可选 Tracking；一次调用 `parse_documents` 解析全部 PDF，读取其 `result_path`。
+1. 从当前 artifact 清单筛出 PDF 与可选 Tracking；一次调用 `parse_documents` 解析全部 PDF，优先读取其 `result_path`。仅当返回 `archive_path`（MinerU 对 PDF 的 ZIP 产物）时调用 `extract_archives`，再对解压出的文本/Markdown `read_file`；不要把该 ZIP 当 UTF-8 文本直接 `read_file`。
 2. 一次完成全部 PDF 的运单、发票和商品行抽取。以共同运单号、发票号、PO、SO、DN、OM 及一致的收发货关系判断是否属于同一真实票次；不要评分或自动拆成 `orders[]`。
 3. 商品行按发票上传顺序、再按原始行顺序输出；重复 12NC 保留为不同商品行，不合并。
 4. 用 PDF 得到的 12NC 调用一次 `lookup_philips_wgq_master_data(product_ids, tracking_artifact)`。Tracking 只能作为该工具的参数；严禁用 `read_file`、`parse_documents`、`grep` 或其他工具查看 `.xlsx`。
@@ -52,4 +53,15 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 
 补充源失败不能丢弃 PDF 结果。`problems` 每项都填写 `source/location/issue/action`。
 
-最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交结果；自然语言 `reply` 只作简短摘要。若误把完整 JSON 写进文本，运行时会尝试从文本恢复，但仍以 schema 校验为准。
+## 结构化提交硬约束
+
+最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交结果；自然语言 `reply` 只作简短摘要，**不能**代替 tool 参数。
+
+- **禁止** `data: {}`、省略 `data`、或只填顶层 `outcome`/`problems` 却留下空业务体。
+- `success` / `partial_success`：`data` **必须同时**包含完整嵌套对象：
+  - `shipment`：含 `pieces`、`total_gross_weight`（未知填 `null`）
+  - `header`：含全部固定英文字段（未知填 `null`）
+  - `items`：非空数组，每行含全部固定英文字段（未知填 `null`）
+- `input_problems`：`data` 必须是 JSON `null`（**不是** `{}`），且 `problems` 至少一条。
+- schema 工具若返回校验错误，必须用**完整** `shipment`/`header`/`items` 重提；禁止重复提交相同的空 `data: {}`。
+- 若误把完整 JSON 写进文本，运行时会尝试从文本恢复，但仍以 schema 校验为准；恢复成功不代表允许空壳。

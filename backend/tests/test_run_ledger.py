@@ -150,21 +150,21 @@ def _check_runtime_agents_handbook(tmp: str) -> None:
         content = first.file_data["content"]
         assert "result_path" in content
         assert "extract_archives" in content
-        assert "do **not** call `read_file` on the zip" in content
+        assert "不要" in content and "read_file" in content and "zip" in content
         assert content.strip() == RUNTIME_AGENTS_BASELINE.strip()
         resources.backend.edit(
             RUNTIME_AGENTS_PATH,
-            "## Tool-misuse notes (append-only)",
-            "## Tool-misuse notes (append-only)\n\n### read_file\n"
-            "- Error: binary zip as text\n"
-            "- Next: extract_archives then read text\n",
+            "## 工具误用笔记（仅追加）",
+            "## 工具误用笔记（仅追加）\n\n### read_file\n"
+            "- 错误: 把二进制 zip 当文本读\n"
+            "- 下一步: extract_archives 后再读文本\n",
         )
 
     with AgentResources(ResourceConfig(data_dir=data_dir)) as resources:
         second = resources.backend.read(RUNTIME_AGENTS_PATH)
         assert second.error is None and second.file_data is not None
         assert "### read_file" in second.file_data["content"]
-        assert "binary zip as text" in second.file_data["content"]
+        assert "把二进制 zip 当文本读" in second.file_data["content"]
 
 
 def _check_model_usage_aggregation(tmp: str) -> None:

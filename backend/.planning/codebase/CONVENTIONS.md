@@ -6,22 +6,22 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 
 **Analysis Date:** 2026-07-16
 
-> 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准。
+> 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准，不以注释或外部文档臆测。
 
 ## Naming Patterns
 
-- **模块 / 函数 / 方法**：`snake_case`（如 `create_harness`、`execute_run`、`default_tool_catalog`、`parse_documents`、`runtime_middlewares`）。
-- **类**：`PascalCase`（如 `HarnessRuntime`、`SqliteRunLedger`、`AgentResources`、`ToolCatalog`、`DeepAgentsBrainFactory`、`StructuredOutputRecovery`）。
-- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`）。
-- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`）。测试内部检查函数同惯例：`_check_*`。
+- **模块 / 函数 / 方法**：`snake_case`（如 `create_harness`、`execute_run`、`default_tool_catalog`、`parse_documents`、`runtime_middlewares`、`fail_incomplete_runs`）。
+- **类**：`PascalCase`（如 `HarnessRuntime`、`SqliteRunLedger`、`AgentResources`、`ToolCatalog`、`DeepAgentsBrainFactory`、`StructuredOutputRecovery`、`PhilipsWgqRecognitionResult`）。
+- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`SKILLS_SOURCE`）。
+- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`、`_PHILIPS_EXCLUDED_TOOLS`）。测试内部检查函数同惯例：`_check_*`。
 - **类型别名**：`ToolHandler = Callable[..., Any]`（`runtime/tools.py`）；协议名用名词：`Brain`、`BrainFactory`。
 - **Skill / 包标识符**：Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；`SKILL.md` frontmatter 名可使用连字符（`philips-wgq-inbound-recognition`）。声明式 SubAgent 显示名用连字符（`tecan-extractor-a` / `tecan-extractor-b`）。
 - **业务工具函数名**：按实际职责命名。Philips 使用单一查询工具 `lookup_philips_wgq_master_data`；Tecan 保留 `save_tecan_extraction` + `generate_tecan_import`；通用 MinerU 工具为 `parse_documents`、`extract_archives`。
-- **HTTP / 事件字段**：请求与事件 payload 用 `snake_case` JSON 键（`session_id`、`run_id`、`after_event_id`、`input_tokens`、`cache_read_input_tokens`、`structured_response`）。
+- **HTTP / 事件字段**：请求与事件 payload 用 `snake_case` JSON 键（`session_id`、`run_id`、`after_event_id`、`input_tokens`、`cache_read_input_tokens`、`structured_response`、`result_json`）。
 - **run 状态字面量**：`queued` / `running` / `succeeded` / `failed` / `cancelling` / `cancelled`（集合 `RUN_STATUSES` 于 `runtime/runs.py`）。
 - **事件类型字面量**（固定 7 种，不可随意扩展）：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
 - **Philips workflow 字面量**：仅 `philips_wgq_inbound_recognition`（`skills/philipswgqinboundrecognition/schema.py` 的 `WORKFLOW`，HTTP `RunRequest.workflow` 同 `Literal`）。
-- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price` 等），`extra="forbid"`，无中文 JSON alias。
+- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price`、`original_waybill_number` 等），`extra="forbid"`，无中文 JSON alias。
 
 ## Code Style
 
@@ -37,11 +37,12 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 - **无 lint / type-check / pytest 门禁**：`pyproject.toml` 无 `[tool.ruff]` / `[tool.mypy]` / `[tool.black]` / `[tool.pytest...]` / `[tool.coverage]`。验证靠 `backend/tests/` 下 assert 脚本（见 `TESTING.md`）。
 - **文件头**：源码与测试统一 `from __future__ import annotations`。
 - **类型注解风格**：广泛使用现代联合与内置泛型——`str | None`、`list[...]`、`dict[...]`、`tuple[...]`、`Sequence[...]`、`Iterator[...]`；HTTP 模型用 pydantic `BaseModel` + `ConfigDict(extra="forbid")` + `Literal` + `Annotated` discriminator。
-- **值对象**：简单不可变快照用 `@dataclass(frozen=True)`（`RunEvent`、`RunSnapshot`、`ResourceConfig`、`ToolCatalog`）。需要校验/序列化的 HTTP 请求体与业务合同用 pydantic。
+- **值对象**：简单不可变快照用 `@dataclass(frozen=True)`（`RunEvent`、`RunSnapshot`、`ResourceConfig`、`ToolCatalog`）。需要校验/序列化的 HTTP 请求体与业务合同用 pydantic（`RunRequest`、`PhilipsWgqRecognitionResult`、`ExtractionReference`）。
 - **继承边界**：仅在外部框架要求时继承——`ToolTelemetry(AgentMiddleware)`、`NoProgressMiddleware(AgentMiddleware)`、`StructuredOutputRecovery(AgentMiddleware)`、`RunRequest(BaseModel)` 等。不为单实现业务工具发明 ABC。
 - **依赖注入优于硬编码**：`HarnessRuntime` 构造接收 `resources`、`tools: ToolCatalog`、`brain_factory: BrainFactory`；`create_app` 接收可选 `resource_config` 与 `harness_factory`，便于测试注入 `FakeBrainFactory`。
 - **运行时保持薄**：`HarnessRuntime.execute_run` 只做「规范化 messages → 调 Brain stream → 解析 chunk → 写 run event」。业务规则下沉到 `skills/*/scripts/`，不在 runtime 内建工作流引擎。
 - **工具静态注册**：`default_tool_catalog()` 在 `runtime/tools.py` 用静态 import 注册 **5** 个 callable；新增 Skill 时追加 import + 注册行，不自动扫描、不插件化。
+- **workflow 工具裁剪用 denylist**：Philips 路径用 `_PHILIPS_EXCLUDED_TOOLS` 排除帝肯业务工具（`save_tecan_extraction`、`generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives`，与 `/memories/AGENTS.md` 及 `SKILL.md` 一致；禁止只 allowlist 业务工具导致通用工具从模型工具表消失。
 - **配置键只读 env 名**：代码从 `MINIMAX_*` / `MINERU_*` / `ORACLE_*` 读环境变量；文档与约定只记键名，不写入本地 `.env` 值。
 - **版本锁定**：以 `uv.lock` 与 `pyproject.toml` 下限为准（如 `deepagents>=0.6.12`）；不写面向未来 deepagents 版本的参数 shim。
 - **注释语言**：模块 docstring 与关键业务注释可用简体中文；标识符、API、路径保持英文/原文。
@@ -49,7 +50,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 ## Module Organization
 
 - **源码顶层**（安装根 = `backend/`）：
-  - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）
+  - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）；端点 `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`
   - `runtime/` — 运行时：`agent.py`（Brain/工厂/SubAgent 装配）、`middleware.py`（可复用 middleware）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）
   - `integrations/` — 外部集成：`artifacts.py`（路径/JSON）、`mineru.py`（解析与解压）
   - `skills/` — 内置 Skill 包：`philipswgqinboundrecognition/`（`SKILL.md`、`schema.py`、`scripts/tools.py`）与 `tecanimport/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
@@ -64,10 +65,11 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
   ```
 
   前提：`cd backend` 或安装后包在 `sys.path`。**没有** `python -m backend.*`。
-- **数据目录锚定** `backend/data/`（`ResourceConfig` 用 `Path(__file__).resolve().parents[1] / "data"`），与 CWD 无关。
+- **数据目录锚定** `backend/data/`（`ResourceConfig` 用 `Path(__file__).resolve().parents[1] / "data"`），与 CWD 无关。子路径包括 `dsagents_runs.db`、`dsagents_store.db`、`dsagents_checkpoints.db`、`artifacts/`、`internal/run-events/`。
 - **`runtime/__init__.py`** 只 re-export 稳定入口：`AgentResources`、`ResourceConfig`、`HarnessRuntime`、`create_harness`、`RunEvent`、`RunSnapshot`、`SqliteRunLedger`。
 - **循环依赖处理**：`create_harness` 对 `DeepAgentsBrainFactory` / `default_tool_catalog` 使用函数内 local import；`_extractor` 同理 local import `default_tool_catalog`。
 - **测试包**：`backend/tests/` 含 `__init__.py`，以 `python -m tests.test_xxx` 运行。
+- **禁止重新引入**：已删除的 session API、SSE 或旧顶层辅助模块。
 
 ## Error Handling
 
@@ -96,7 +98,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 
   - Philips 业务完整度由验证后的 `result.outcome` 表示：`success` / `partial_success` / `input_problems`；其中 `input_problems` 要求 `data=null` 且至少一个 `problems` 项，且 **run 仍为 `succeeded`**（业务问题 ≠ 执行失败）。`success` 可带非空 `problems`（字段缺口、主数据未命中等）；`partial_success` 要求至少一个 problem。
   - Philips 工具侧 `problems` 条目形状：`{source, location, issue, action}`（与 Tecan 一致），由 `_problem` 构造。
-- **Oracle 例外**：Philips 主数据工具遇到配置缺失、查询失败或未命中时把原因写入 `problems`，保留 PDF/Tracking 结果；不写“需确认”等占位值。
+- **Oracle 例外**：Philips 主数据工具遇到配置缺失、查询失败或未命中时把原因写入 `problems`，保留 PDF/Tracking 结果；不写“需确认”等占位值。Oracle thick mode 依赖外部 `ORACLE_CLIENT_LIB_DIR`；缺失时按工具内逻辑优雅降级。
 - **HTTP 状态约定**：
   - 同 `session_id` 并发冲突 → `409`（`{"error":"该会话正在运行","active_run_id":...}`）
   - cancel 未知 run → `404`；已终态 `succeeded`/`failed` → `409`；已 `cancelling`/`cancelled` → `200` 幂等；活跃 drain → `202`
@@ -129,18 +131,21 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
   ```
 
   默认实现：`DeepAgentsBrainFactory`；测试实现：`FakeBrain` / `FakeBrainFactory`（`tests/test_support.py`）。**不为工具、ledger、资源再加 Protocol/ABC**。
-- **工具**：普通 callable + 冻结 `ToolCatalog(handlers: tuple[ToolHandler, ...])`，经 `.as_list()` 交给 Brain。当前 5 个：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
+- **工具**：普通 callable + 冻结 `ToolCatalog(handlers: tuple[ToolHandler, ...])`，经 `.as_list()` 交给 Brain。当前 5 个（注册顺序固定）：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
 - **资源与 ledger**：具体类 `AgentResources`、`ResourceConfig`、`SqliteRunLedger`；上下文管理器用 `ExitStack` 管理 store/checkpointer。
 - **声明式 SubAgent**：`workflow_subagents()` 返回两个 Tecan `SubAgent`（dict 形配置：`name` / `description` / `system_prompt` / `tools` / `permissions` / `response_format` / `middleware`）。每个 SubAgent **各自** `runtime_middlewares()`（无 `memory_backend`；声明式 SubAgent 不继承主 Agent middleware）——共 **4** 个：`StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`。Philips workflow 显式使用空 `subagents`。
-- **主 Agent middleware**：`runtime_middlewares(memory_backend=...)` 在上述 4 个之上再挂一个受限 `MemoryMiddleware`（共 **5** 个；`add_cache_control=True`）；handbook 路径 `/memories/AGENTS.md`。
-- **运行时操作手册**：`AgentResources` 在 `/memories/AGENTS.md` 缺失时写入 ZIP/`result_path` 消费基线；主 Agent 经 `MemoryMiddleware` 自动注入，不依赖模型先 `read_file`；失败后追加由提示词约束 + `edit_file`，不做自动写回。
-- **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
+- **主 Agent middleware**：`runtime_middlewares(memory_backend=...)` 在上述 4 个之上再挂一个受限 `MemoryMiddleware`（共 **5** 个；`add_cache_control=True`）；handbook 路径 `/memories/AGENTS.md`。列表顺序：Recovery → ToolTelemetry → NoProgress → Compatibility →（主 Agent）Memory。
+- **运行时操作手册**：`AgentResources` 在 `/memories/AGENTS.md` 缺失时写入 ZIP/`result_path` 消费基线（`RUNTIME_AGENTS_BASELINE`）；主 Agent 经 `MemoryMiddleware` 自动注入，不依赖模型先 `read_file`；失败后追加由提示词约束 + `edit_file`，不做自动写回；已有非空内容时 **不覆盖**。
+- **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
+- **Philips 结构化提交硬约束**：禁止 `data: {}`；`success`/`partial_success` 必须带齐 `shipment`/`header`/`items`（未知填 `null`）；`input_problems` 才允许 `data=null`。Skill 与 `PHILIPS_WORKFLOW_PROMPT` 双写。
+- **智能体可见文案**：system prompt、Skill、`RUNTIME_AGENTS_BASELINE`、工具 docstring/`Annotated` 参数说明、结构化纠错提示统一**简体中文**；代码标识符、工具名、schema 英文字段名、路径与 API 名保持英文。
 - **StructuredOutputRecovery 有界重试（硬约定）**：
   - `@hook_config(can_jump_to=["model", "end"])` 必须同时声明 `"end"`。
-  - 解析/校验失败或空文本：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
+  - 解析/校验失败、空文本、或空 `data` 壳：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
+  - 空壳用 `EMPTY_DATA_SHELL_HINT`；**不**在 recovery 中编造业务字段。
   - 达到 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
   - **禁止**只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
-  - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`）。
+  - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`、空壳专用纠错）。
   - 共享列表顺序只改 `runtime_middlewares()`；Philips 工厂仅在缺失时 `insert(0)` Recovery / append Compatibility，勿破坏「Recovery 在列表最前」约定。
 - **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
 - **Brain stream 契约**（`runtime/execution.py`）：
@@ -157,7 +162,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
   ```
 
   `artifact` block 进入 Brain 前归一为文本提示 `ARTIFACT_REFERENCE_HINT`；payload **只**含当前请求 `messages[]`。`BrainFactory.create(..., workflow=workflow)` 明确接收可选 workflow；当前固定值仅 `philips_wgq_inbound_recognition`。
-- **session_id 角色**：不是持久化对象，只作 LangGraph `thread_id` 与进程内单飞锁键（`app.state.session_locks` + `app.state.active_runs`）。
+- **session_id 角色**：不是持久化对象，只作 LangGraph `thread_id` 与进程内单飞锁键（`app.state.session_locks` + `app.state.active_runs`）。run 是唯一执行与查询单位；`run_events` 为 append-only 事件源，`runs` 为投影快照。
 - **可观察 payload 形状**（`runtime/observability.py`）：`model_usage` 固定键 `model`（常量 `MAIN_AGENT_MODEL = "MiniMax-M3"`）、`scope`、`agent_name`、四类 token 计数；`assistant_message` 可含 `thinking` + `text`。
 
 ## Logging / Observability conventions

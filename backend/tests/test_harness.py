@@ -28,7 +28,12 @@ from runtime.agent import (
     ToolTelemetry,
 )
 from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
-from runtime.middleware import runtime_middlewares
+from runtime.middleware import (
+    EMPTY_DATA_SHELL_HINT,
+    is_empty_recognition_data_shell,
+    philips_structured_output_error_message,
+    runtime_middlewares,
+)
 from runtime.observability import (
     assistant_message_payload,
     is_subagent_message,
@@ -71,6 +76,7 @@ def run() -> None:
     }
     _check_structured_output_integration()
     _check_structured_output_recovery()
+    _check_empty_data_shell_coaching()
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
@@ -256,8 +262,8 @@ def _check_structured_output_recovery() -> None:
     assert no_json["jump_to"] == "model"
     assert no_json["structured_recovery_attempts"] == 1
     assert isinstance(no_json["messages"][0], HumanMessage)
-    assert "Structured output was rejected" in no_json["messages"][0].content
-    assert "no valid JSON object" in no_json["messages"][0].content
+    assert "结构化输出被拒绝" in no_json["messages"][0].content
+    assert "JSON" in no_json["messages"][0].content
 
     # Invalid schema JSON: also jump_to model with validation error.
     bad_payload = {"outcome": "input_problems", "data": {"not": "allowed"}, "problems": []}
@@ -325,7 +331,7 @@ def _check_structured_output_recovery() -> None:
                 # Retry prompt must have been appended as a human message.
                 assert any(
                     isinstance(message, HumanMessage)
-                    and "Structured output was rejected" in str(message.content)
+                    and "结构化输出被拒绝" in str(message.content)
                     for message in messages
                 )
                 content = (
@@ -390,6 +396,136 @@ def _check_structured_output_recovery() -> None:
     assert "structured_response" not in failed or failed.get("structured_response") is None
     # initial model + max_retries correction loops (2) = 3 calls, then jump_to end
     assert always_bad.calls == 3
+
+
+def _check_empty_data_shell_coaching() -> None:
+    """Empty data:{} shells get a specific correction, not only generic parse text."""
+    assert is_empty_recognition_data_shell(
+        {"outcome": "success", "data": {}, "problems": []}
+    )
+    assert is_empty_recognition_data_shell(
+        {
+            "outcome": "partial_success",
+            "data": {"shipment": {}, "header": {}, "items": []},
+            "problems": [
+                {
+                    "source": "pdf",
+                    "location": "header",
+                    "issue": "x",
+                    "action": "y",
+                }
+            ],
+        }
+    )
+    assert not is_empty_recognition_data_shell(
+        {
+            "outcome": "input_problems",
+            "data": None,
+            "problems": [
+                {
+                    "source": "batch",
+                    "location": "shipment",
+                    "issue": "multi",
+                    "action": "split",
+                }
+            ],
+        }
+    )
+    assert not is_empty_recognition_data_shell(_recognition_result("success"))
+
+    class _FakeStructuredValidationError(Exception):
+        def __init__(self, tool_name: str, ai_message: AIMessage) -> None:
+            self.tool_name = tool_name
+            self.ai_message = ai_message
+            super().__init__(
+                f"Failed to parse structured output for tool '{tool_name}': "
+                "data.shipment Field required"
+            )
+
+    empty_ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "struct-empty-1",
+                "name": "PhilipsWgqRecognitionResult",
+                "args": {"outcome": "success", "data": {}, "problems": []},
+                "type": "tool_call",
+            }
+        ],
+    )
+    empty_err = philips_structured_output_error_message(
+        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", empty_ai)
+    )
+    assert "data 不能是 {}" in empty_err
+    assert "shipment" in empty_err
+    assert "请修正后重试" in empty_err
+
+    other_ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "struct-other-1",
+                "name": "PhilipsWgqRecognitionResult",
+                "args": {
+                    "outcome": "input_problems",
+                    "data": {"not": "allowed"},
+                    "problems": [],
+                },
+                "type": "tool_call",
+            }
+        ],
+    )
+    other_err = philips_structured_output_error_message(
+        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", other_ai)
+    )
+    assert "Failed to parse structured output" in other_err
+
+    recovery = StructuredOutputRecovery(max_retries=2)
+    empty_text = (
+        "done\n```json\n"
+        + json.dumps(
+            {"outcome": "success", "data": {}, "problems": []},
+            ensure_ascii=False,
+        )
+        + "\n```\n"
+    )
+    text_retry = recovery.after_model(
+        {"messages": [AIMessage(content=empty_text)], "structured_recovery_attempts": 0},
+        None,
+    )
+    assert text_retry is not None
+    assert text_retry["jump_to"] == "model"
+    assert text_retry["structured_recovery_attempts"] == 1
+    assert EMPTY_DATA_SHELL_HINT in text_retry["messages"][0].content
+    assert "data" in text_retry["messages"][0].content
+
+    # After ToolStrategy rejects empty shell, last message is ToolMessage — coach again.
+    tool_error_state = {
+        "messages": [
+            empty_ai,
+            ToolMessage(
+                content=empty_err,
+                tool_call_id="struct-empty-1",
+                name="PhilipsWgqRecognitionResult",
+            ),
+        ],
+        "structured_recovery_attempts": 0,
+    }
+    tool_retry = recovery.after_model(tool_error_state, None)
+    assert tool_retry is not None
+    assert tool_retry["jump_to"] == "model"
+    assert tool_retry["structured_recovery_attempts"] == 1
+    assert "data 不能是 {}" in tool_retry["messages"][0].content
+    assert '"data": {}' in tool_retry["messages"][0].content or "data: {}" in (
+        tool_retry["messages"][0].content
+    )
+
+    exhausted = recovery.after_model(
+        {**tool_error_state, "structured_recovery_attempts": 2},
+        None,
+    )
+    assert exhausted is not None
+    assert exhausted.get("jump_to") == "end"
 
 
 def _check_tool_telemetry_middleware() -> None:

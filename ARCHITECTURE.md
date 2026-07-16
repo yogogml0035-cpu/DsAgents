@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-16）对齐 backend 全部 7 份事实文档与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试）、5 静态工具、2 个 Tecan SubAgent；旧 Philips A/B/C、Excel 生成及兼容语义已删除。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-16）对齐 backend 全部 7 份事实文档与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试与空 data 壳纠错）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；旧 Philips A/B/C、Excel 生成及兼容语义已删除。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
 
 ## 1. 系统定位
 
@@ -43,8 +43,8 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 | 模块 | 系统级职责 |
 |------|-----------|
 | `api.py` | FastAPI HTTP 适配层（四端点）+ workflow/session 校验 + 同 session 单飞锁 + 启动恢复 + 顶层 `workflow`/`result`/`usage` |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy 路由、Tecan SubAgent 声明与 middleware 装配 |
-| `runtime/middleware.py` | `StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 与 `runtime_middlewares()` |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol、`DeepAgentsBrainFactory`、Philips ToolStrategy / denylist 工具裁剪、Tecan SubAgent 声明与 middleware 装配 |
+| `runtime/middleware.py` | `StructuredOutputRecovery`（含空 data 壳）、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility` 与 `runtime_middlewares()` |
 | `runtime/execution.py` | `HarnessRuntime.execute_run`（stream → `RunEvent`）、结构化响应捕获/复验、`create_harness`、协作 cancel |
 | `runtime/observability.py` | 纯函数：chunk → `model_usage` / thinking / text / assistant payload（按 `lc_agent_name` 区分主 agent 与 subagent） |
 | `runtime/resources.py` | `AgentResources` + `ResourceConfig` + `CompositeBackend`（`/memories/` `/artifacts/` `/large_tool_results/` `/skills/`） |
@@ -83,8 +83,8 @@ run 是唯一执行与查询单位。短期上下文交给 LangGraph checkpointe
 POST /upload → /artifacts/uploads/...
 POST /runs   → 校验 workflow/session → create_run(queued, workflow) → daemon → execute_run
   → status=running；artifact block → 文本路径提示
-  → brain_factory.create(..., workflow)；主 Agent 装 runtime_middlewares(memory_backend=...)
-  → Philips：ToolStrategy + 仅 parse_documents/lookup_philips_wgq_master_data；无 SubAgent
+  → brain_factory.create(..., workflow)；主 Agent 装 runtime_middlewares(memory_backend=...)（共 5 个）
+  → Philips：ToolStrategy + **denylist** 排除帝肯工具（保留 parse_documents/extract_archives/lookup_philips_wgq_master_data）；无 SubAgent
   → 通用/Tecan：default tools + tecan-extractor-a/b（各装无 memory 的 middleware，共 4 个）
   → brain.stream(messages/custom/updates, v2, subgraphs, RunControl)
   → messages → model_usage（含 subagent）/ thinking / text_delta（仅主 agent 文本）
@@ -107,6 +107,15 @@ POST .../cancel → cancelling → drain → cancelled
 - `after_event_id` 只裁剪 `events[]`，不影响 `latest_content_event` 与 `usage`。
 - 旧事件 `tool_call` / `tool_status` / `tool_result` 已删除。
 
+**Philips `result.outcome` 与 run 终态（系统层）：**
+
+| `outcome` | `data` | `problems` | run 终态 |
+|-----------|--------|------------|----------|
+| `success` | 完整 `RecognitionData` | 可为非空 | `succeeded` |
+| `partial_success` | 完整 `RecognitionData` | **至少一个** | `succeeded` |
+| `input_problems` | **必须 `null`** | **至少一个** | `succeeded`（业务问题 ≠ 执行失败） |
+| （无/非法 structured_response） | — | — | `failed` |
+
 ### 状态机与 cancel（概览）
 
 ```text
@@ -121,8 +130,9 @@ running → cancelling → cancelled
 
 | 面 | 约定 |
 |----|------|
-| Middleware | 实现只放 `runtime/middleware.py`；`runtime_middlewares()` 顺序为 `StructuredOutputRecovery` → `ToolTelemetry` → `NoProgressMiddleware` → `StructuredOutputCompatibility`（主 Agent 再挂受限 `MemoryMiddleware`）。Tecan SubAgent **不继承**主 Agent middleware，须各自注入无 memory 实例 |
-| Structured recovery | `after_model` 有界 `jump_to: "model"`；`can_jump_to` 必须含 `"end"`；耗尽或无法产出 `structured_response` 时显式 `jump_to: "end"`，禁止只返回 `None` |
+| Middleware | 实现只放 `runtime/middleware.py`；`runtime_middlewares()` 顺序为 `StructuredOutputRecovery` → `ToolTelemetry` → `NoProgressMiddleware` → `StructuredOutputCompatibility`（主 Agent 再挂受限 `MemoryMiddleware`，**共 5 个**）。Tecan SubAgent **不继承**主 Agent middleware，须各自注入无 memory 实例（**各 4 个**） |
+| Structured recovery | `after_model` 有界 `jump_to: "model"`（含空文本、空 `data: {}` 壳；默认 `max_retries=2`）；`can_jump_to` 必须含 `"end"`；耗尽或无法产出 `structured_response` 时显式 `jump_to: "end"`，禁止只返回 `None` |
+| 工具收窄 | workflow 用 **denylist** 排除他业务工具，保留共享 MinerU（`parse_documents` / `extract_archives`）；禁止业务-only allowlist |
 | Skill | Philips：结构化 `success\|partial_success\|input_problems` + 单一主数据 Tool → `run.result`；Tecan：2 Tool + `status=generated\|input_problems`；无跨 run 状态机 |
 | 工具注册 | 5 工具静态清单；新增 Skill = 新包目录 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |
 | Provider | 生产 LLM：MiniMax via Anthropic 兼容；文档解析：MinerU HTTP；可选 Oracle（仅 Philips，thick mode 可降级） |
@@ -145,8 +155,8 @@ running → cancelling → cancelled
 - **并发与 cancel**：单飞锁 / `run_controls` 仅进程内；多 worker 同 `session_id` 可交错写 checkpointer；cancel 为协作 drain，非强杀，不回滚 artifacts。
 - **安全面**：HTTP 匿名、无 CORS、无用户隔离；`/upload` 无大小/类型/数量限制；错误与 raw 未脱敏可经 `GET /runs` 回传；`parse_documents` 的 `allow_local` 仅宜测试/程序内使用。
 - **存储与留存**：`runs.db` 无 WAL / 无 busy_timeout（高频 emit+轮询可能锁冲突）；`run_events` 与 spill 只增不删；fresh schema 无迁移，破坏性变更需整清 `backend/data/`。
-- **middleware / 结构化输出**：改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`；用 `python -m tests.test_harness` 验证重试封顶。SubAgent 勿误传 `memory_backend`。
-- **测试门禁**：本地 7 个 assert 脚本人工选择；无 pytest/CI/lint；真实模型/MinerU/Oracle 脚本 opt-in，勿并入默认回归。
+- **middleware / 结构化输出 / 工具裁剪**：改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`（含空 data 壳路径，不编造字段）；用 `python -m tests.test_harness` 验证重试封顶。SubAgent 勿误传 `memory_backend`。workflow 收窄用 denylist，用 `python -m tests.test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具。
+- **测试门禁**：本地 7 个 assert 脚本人工选择（`python -m tests.*`，非 pytest）；无 CI/lint；真实模型/MinerU/Oracle 脚本 opt-in，勿并入默认回归。
 - **Oracle thick client**：Philips 可用 Oracle 补齐 Tracking 缺失的稳定字段；配置缺失、client/查询失败或未命中写入 `problems`，保留已有结果并形成 `partial_success`；依赖外部 `ORACLE_CLIENT_LIB_DIR`；Tecan 不消费 Oracle。
 
 验证入口与按任务核对清单见 [`SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md) §7 与 [`TESTING.md`](backend/.planning/codebase/TESTING.md)。

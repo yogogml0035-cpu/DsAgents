@@ -15,8 +15,8 @@ from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionR
 
 
 ARTIFACT_REFERENCE_HINT = (
-    "Uploaded artifact: {path}. Use read_file for images/media or "
-    "parse_documents for documents when needed."
+    "已上传 artifact：{path}。图片/媒体请用 read_file；"
+    "需要结构化抽取的文档请用 parse_documents。"
 )
 
 

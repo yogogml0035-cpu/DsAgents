@@ -33,7 +33,7 @@ backend/
 │   ├── philipswgqinboundrecognition/   # Philips 外高桥进境结构化识别 Skill
 │   │   ├── __init__.py
 │   │   ├── SKILL.md
-│   │   ├── schema.py                   # Pydantic 响应合同
+│   │   ├── schema.py                   # Pydantic 响应合同；WORKFLOW 常量
 │   │   └── scripts/
 │   │       ├── __init__.py
 │   │       └── tools.py                # Tracking/Oracle 单一主数据 Tool
@@ -44,6 +44,7 @@ backend/
 │       │   ├── fields.md
 │       │   └── rules.md
 │       ├── assets/
+│       │   └── Tecan_进口_发票箱单_空运.xlsx
 │       └── scripts/
 │           ├── __init__.py
 │           ├── tools.py
@@ -94,12 +95,12 @@ backend/
 
 ### Skill 目录角色
 
-Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skills=[SKILLS_SOURCE]` 挂载到 `/skills/`；无动态 loader。Philips 包目录为 `philipswgqinboundrecognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`。
+Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载到虚拟 FS；无动态 loader。Philips 包目录为 `philipswgqinboundrecognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`（`schema.WORKFLOW`）。
 
 | 子路径 | 角色 |
 |--------|------|
 | `SKILL.md` | 主 Agent 可读的领域流程；Philips 只有一份专用提示词 |
-| `schema.py` | Philips 固定 Pydantic 结构化响应合同 |
+| `schema.py` | Philips 固定 Pydantic 结构化响应合同（`PhilipsWgqRecognitionResult`） |
 | `references/` / `assets/` | 仅 Tecan 保留字段参考与 Excel 模板 |
 | `scripts/tools.py` | 暴露给模型的业务 Tool；Philips 1 个、Tecan 2 个 |
 | `scripts/documents.py` | 仅 Tecan 的模板写入实现，不直接注册为 Tool |
@@ -145,7 +146,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | harness / middleware / 事件序列 / recovery 封顶 | `backend/tests/test_harness.py` |
 | ledger / spill / 聚合 | `backend/tests/test_run_ledger.py` |
 | 五工具注册与 MinerU mock | `backend/tests/test_tools.py` |
-| SubAgent / middleware 装配 | `backend/tests/test_workflow_setup.py` |
+| SubAgent / middleware / Philips denylist 装配 | `backend/tests/test_workflow_setup.py` |
 | 业务合同/生成形状 | `backend/tests/test_philips_wgq_inbound_recognition.py`、`test_tecan_import.py` |
 | Philips 真实 HTTP 样例 | `backend/tests/test_real_philips_wgq_inbound_recognition.py` |
 | 替身 | `backend/tests/test_support.py` |
@@ -233,6 +234,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
 | 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |
+| 收窄 workflow 工具表 | denylist 排除**其他业务**工具，保留共享 MinerU 工具 | 禁止只 allowlist 业务工具导致通用工具从模型表消失 |
 | 新 extractor SubAgent | `workflow_subagents()` / `_extractor` | 仅真实需要投票抽取时增加；自装 middleware |
 | 改持久化路径/后端路由 | `ResourceConfig` / `AgentResources.__enter__` | 三库职责勿混 |
 | 改 run 事件 schema | `runtime/runs.py` | fresh schema 无迁移；破坏性变更需清库策略 |
@@ -257,6 +259,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 不要引入动态 Skill 扫描器替代 `default_tool_catalog()` 静态注册。
 - 不要把密钥或 `.env` 内容写入文档或测试断言字符串。
 - 不要在 `after_model` 有界重试中省略 `can_jump_to` 的 `"end"` 或耗尽时只返回 `None`。
+- 不要用业务工具 allowlist 收窄 workflow 工具表，导致 `parse_documents` / `extract_archives` 从模型工具表消失。
 
 ---
 *Structure analysis: 2026-07-16*
