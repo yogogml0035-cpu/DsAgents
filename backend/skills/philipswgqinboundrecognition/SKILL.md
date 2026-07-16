@@ -21,6 +21,8 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 
 1. 从当前 artifact 清单筛出 PDF 与可选 Tracking；一次调用 `parse_documents` 解析全部 PDF，优先读取其 `result_path`。仅当返回 `archive_path`（MinerU 对 PDF 的 ZIP 产物）时调用 `extract_archives`，再对解压出的文本/Markdown `read_file`；不要把该 ZIP 当 UTF-8 文本直接 `read_file`。
 2. 一次完成全部 PDF 的运单、发票和商品行抽取。以共同运单号、发票号、PO、SO、DN、OM 及一致的收发货关系判断是否属于同一真实票次；不要评分或自动拆成 `orders[]`。
+   - **同一 HAWB/运单 + 一致收发货方 + 多张商业发票**（常见 UPS 普货：一份 AWB + 一份 INV 内含两张 Invoice/PO/DN）：按**一票 consolidated** 处理，不要 `input_problems`。
+   - `header.invoice_number` / `po` / `dn` 可将多值用英文逗号拼接；`items` 按发票出现顺序展开为多行（每发票商品行保留）。
 3. 商品行按发票上传顺序、再按原始行顺序输出；重复 12NC 保留为不同商品行，不合并。
 4. 用 PDF 得到的 12NC 调用一次 `lookup_philips_wgq_master_data(product_ids, tracking_artifact)`。Tracking 只能作为该工具的参数；严禁用 `read_file`、`parse_documents`、`grep` 或其他工具查看 `.xlsx`。
 5. 工具返回后立即按下列优先级提交最终结构化响应，不再尝试补查缺失主数据。所有固定字段都要出现，未识别值为 `null`。
@@ -55,13 +57,13 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 
 ## 结构化提交硬约束
 
-最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交结果；自然语言 `reply` 只作简短摘要，**不能**代替 tool 参数。
+最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交；`reply` 只作摘要，**不能**代替 tool 参数。
 
-- **禁止** `data: {}`、省略 `data`、或只填顶层 `outcome`/`problems` 却留下空业务体。
-- `success` / `partial_success`：`data` **必须同时**包含完整嵌套对象：
-  - `shipment`：含 `pieces`、`total_gross_weight`（未知填 `null`）
-  - `header`：含全部固定英文字段（未知填 `null`）
-  - `items`：非空数组，每行含全部固定英文字段（未知填 `null`）
-- `input_problems`：`data` 必须是 JSON `null`（**不是** `{}`），且 `problems` 至少一条。
-- schema 工具若返回校验错误，必须用**完整** `shipment`/`header`/`items` 重提；禁止重复提交相同的空 `data: {}`。
-- 若误把完整 JSON 写进文本，运行时会尝试从文本恢复，但仍以 schema 校验为准；恢复成功不代表允许空壳。
+**提交顺序（降空壳）：** ① 文本中先写恰好一个完整 ```json```（含完整 `data`，未知 `null`）；② 再调用工具且 **args 与该 JSON 相同**；运行时可从合法文本 JSON 恢复。**`data: {}` 永远无效**；只改 `problems` 不算修正。
+
+- **禁止** `data: {}`、省略 `data`、或只填顶层 `outcome`/`problems` 却空业务体。
+- `success` / `partial_success`：`data` 须含 `shipment`（`pieces`、`total_gross_weight`）、`header`（全部固定英文字段）、`items`（非空，每行全字段）；未知 `null`。
+- `input_problems`：`data` 为 JSON `null`（非 `{}`），且 `problems` 至少一条。
+- 校验失败须用完整嵌套重提；禁止重复空 `data: {}`。文本恢复仍以 schema 为准。
+
+最小合法形状（null 换识别值；多商品复制 item）：`{"outcome":"success","data":{"shipment":{"pieces":null,"total_gross_weight":null},"header":{"om":null,"dn":null,"po":null,"so":null,"original_waybill_number":null,"buyer":null,"seller":null,"shipper":null,"consignee":null,"payment_terms":null,"contract_number":null,"salesperson":null,"invoice_number":null,"etd":null,"port_of_departure":null,"port_of_arrival":null},"items":[{"so_item":null,"product_id":null,"new_or_used":null,"chinese_name":null,"specification":null,"quantity":null,"unit":null,"currency":null,"unit_price":null,"total_price":null,"origin_country":null,"customs_code":null,"declaration_elements":null,"legal_quantity_1":null,"legal_unit_1":null,"legal_quantity_2":null,"legal_unit_2":null,"gross_weight":null,"net_weight":null,"business_unit":null,"pre_or_post_sales":null}]},"problems":[]}`

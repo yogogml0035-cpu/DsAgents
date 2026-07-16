@@ -30,6 +30,7 @@ from runtime.agent import (
 from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
 from runtime.middleware import (
     EMPTY_DATA_SHELL_HINT,
+    PHILIPS_MINIMAL_DATA_SKELETON,
     is_empty_recognition_data_shell,
     philips_structured_output_error_message,
     runtime_middlewares,
@@ -459,6 +460,9 @@ def _check_empty_data_shell_coaching() -> None:
     assert "data 不能是 {}" in empty_err
     assert "shipment" in empty_err
     assert "请修正后重试" in empty_err
+    assert "```json" in empty_err
+    assert "original_waybill_number" in empty_err
+    assert "product_id" in empty_err
 
     other_ai = AIMessage(
         content="",
@@ -519,13 +523,97 @@ def _check_empty_data_shell_coaching() -> None:
     assert '"data": {}' in tool_retry["messages"][0].content or "data: {}" in (
         tool_retry["messages"][0].content
     )
+    # Empty-shell coaching must include minimal legal shape + text-first order.
+    coach = tool_retry["messages"][0].content
+    assert "```json" in coach
+    assert "shipment" in coach and "original_waybill_number" in coach
+    assert "product_id" in coach
+    assert "先" in coach or "①" in coach
+    assert "只补 problems" in coach or "只改 problems" in EMPTY_DATA_SHELL_HINT
+    # Skeleton itself is a valid success payload (all-null fields).
+    assert PhilipsWgqRecognitionResult.model_validate(PHILIPS_MINIMAL_DATA_SKELETON)
 
+    # Exhausted empty-shell retries: legal all-null data skeleton, not run failure.
     exhausted = recovery.after_model(
         {**tool_error_state, "structured_recovery_attempts": 2},
         None,
     )
     assert exhausted is not None
     assert exhausted.get("jump_to") == "end"
+    fallback = exhausted["structured_response"]
+    assert isinstance(fallback, PhilipsWgqRecognitionResult)
+    assert fallback.outcome == "partial_success"
+    assert fallback.data is not None
+    assert fallback.data.shipment.pieces is None
+    assert fallback.data.header.original_waybill_number is None
+    assert len(fallback.data.items) == 1
+    assert fallback.data.items[0].product_id is None
+    assert any(
+        p.source == "runtime" and "empty data shell" in p.issue
+        for p in fallback.problems
+    )
+
+    # Exhausted empty shell that already had model problems: keep them + runtime note.
+    shell_with_problems = {
+        "outcome": "success",
+        "data": {},
+        "problems": [
+            {
+                "source": "PDF",
+                "location": "AWB",
+                "issue": "weight mismatch note",
+                "action": "use AWB weight",
+            }
+        ],
+    }
+    shell_ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "struct-empty-2",
+                "name": "PhilipsWgqRecognitionResult",
+                "args": shell_with_problems,
+                "type": "tool_call",
+            }
+        ],
+    )
+    shell_err = philips_structured_output_error_message(
+        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", shell_ai)
+    )
+    exhausted_keep = recovery.after_model(
+        {
+            "messages": [
+                shell_ai,
+                ToolMessage(
+                    content=shell_err,
+                    tool_call_id="struct-empty-2",
+                    name="PhilipsWgqRecognitionResult",
+                ),
+            ],
+            "structured_recovery_attempts": 2,
+        },
+        None,
+    )
+    assert exhausted_keep is not None
+    keep = exhausted_keep["structured_response"]
+    assert isinstance(keep, PhilipsWgqRecognitionResult)
+    assert any(p.issue == "weight mismatch note" for p in keep.problems)
+    assert any(p.source == "runtime" for p in keep.problems)
+
+    # Text empty-shell path also falls back after budget is exhausted.
+    text_exhausted = recovery.after_model(
+        {
+            "messages": [AIMessage(content=empty_text)],
+            "structured_recovery_attempts": 2,
+        },
+        None,
+    )
+    assert text_exhausted is not None
+    assert text_exhausted.get("jump_to") == "end"
+    assert isinstance(
+        text_exhausted["structured_response"], PhilipsWgqRecognitionResult
+    )
+    assert text_exhausted["structured_response"].data is not None
 
 
 def _check_tool_telemetry_middleware() -> None:

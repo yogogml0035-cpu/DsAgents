@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-16）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-16）与根级三件套：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试与空 data 壳纠错）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；run-first、四 HTTP 端点、7 类事件、无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-16）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-16，`last_mapped_commit` 28534a9）与根级三件套：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；run-first、四 HTTP 端点、7 类事件、无 SSE/session 持久化层/独立下载路由边界保持。
 
 ## 1. 系统目的和仓库形态
 
@@ -18,8 +18,8 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 | 工具注册 | `default_tool_catalog()` **静态**注册 5 工具；普通 import，无自动扫描 / 插件平台 |
 | 业务 Skill | Philips：`skills/philipswgqinboundrecognition/`（固定 workflow + 结构化合同 + 1 主数据 Tool）；Tecan：`skills/tecanimport/`（2 业务 Tool + Excel） |
 | SubAgent | 仅 `tecan-extractor-a` / `tecan-extractor-b`；Philips **无** SubAgent |
-| 入口 | HTTP（四端点、立即 `queued`、纯轮询、无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无 one-shot 单函数 API |
-| 业务工作流 | 唯一固定 workflow：`philips_wgq_inbound_recognition` → 验证后的 `run.result`；Tecan 由 Skill 驱动，不增业务 HTTP / 状态表 / 跨 run 恢复 |
+| 入口 | HTTP（四端点、立即 `queued`、纯轮询、无 SSE、无独立文件下载路由）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无 one-shot 单函数 API |
+| 业务工作流 | 唯一固定 workflow：`philips_wgq_inbound_recognition` → 验证后的 `run.result`；Tecan 由 Skill 驱动（HTTP 不设 Tecan `workflow` 字面量），不增业务 HTTP / 状态表 / 跨 run 恢复 |
 
 详细运行时原则见 [`docs/conventions.md`](../docs/conventions.md)（改 backend 前必读）。系统定位总览见根级 [`ARCHITECTURE.md`](../ARCHITECTURE.md)；backend 概览见 [`docs/backend.md`](../docs/backend.md)。
 
@@ -86,10 +86,10 @@ HarnessRuntime.execute_run(...)   # runtime/execution.py
   │    ├─ 主 Agent middleware：runtime_middlewares(memory_backend=resources.backend)
   │    │    顺序：StructuredOutputRecovery → ToolTelemetry → NoProgressMiddleware
   │    │           → StructuredOutputCompatibility → MemoryMiddleware（仅主 Agent，共 5 个）
-  │    ├─ Philips：ToolStrategy(PhilipsWgqRecognitionResult)；
+  │    ├─ Philips：ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=…)；
   │    │    **denylist** 排除帝肯工具，保留 parse_documents + extract_archives +
   │    │    lookup_philips_wgq_master_data；subagents=[]；
-  │    │    工厂缺则补齐：Recovery insert(0)、Compatibility append
+  │    │    工厂缺则补齐：Recovery insert(0)、Compatibility append（已有不重复）
   │    └─ 通用/Tecan：default tools + workflow_subagents()（tecan-extractor-a/b，
   │         各装无 memory 的 runtime_middlewares()，共 4 个 middleware）
   ├─ brain.stream({"messages": normalized_messages},
@@ -100,6 +100,7 @@ HarnessRuntime.execute_run(...)   # runtime/execution.py
   │    ├─ custom   → tool_execution（ToolTelemetry）+ tool_progress（MinerU）
   │    └─ updates  → assistant_message / tool_execution / 可选 structured_response
   ├─ Philips → Pydantic 再校验 structured_response；缺失/非法 → failed
+  │    （空壳 recovery 耗尽可写 all-null skeleton + partial_success → succeeded）
   ├─ 成功 → status=succeeded(reply=..., result=验证后业务 JSON 或 null)
   ├─ GraphDrained → status=cancelled
   └─ 异常 / NoProgressLoop → status=failed(error=...)（真实错误透传）
@@ -164,7 +165,7 @@ Tecan（通用路径 + Skill 驱动）
 - Philips 终态业务 JSON 从 GET 顶层 `result`（或 `run.result`）读取，**不解析** `reply`。
 - Philips `result` 固定 `{"outcome":"success|partial_success|input_problems","data":...|null,"problems":[...]}`；英文字段名；与 run 终态关系见下表。
 - `artifact` block 是项目 API 语义，进入 Brain 前转为文本路径提示，再由 agent 决定 `read_file` / `parse_documents`。
-- 当前**无**鉴权、**无** CORS、**无** SSE；时间字段 UTC ISO-8601 毫秒。
+- 当前**无**鉴权、**无** CORS、**无** SSE、**无**独立文件下载 HTTP（产物靠 `/artifacts/...` 虚拟路径 + 共享磁盘）；时间字段 UTC ISO-8601 毫秒。
 - 启动：`cd backend` 后 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`（或仓库 `scripts/start-backend.ps1`）。
 - `create_app(*, resource_config=None, harness_factory=create_harness)` 支持测试注入。
 
@@ -195,11 +196,16 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 - Brain 调用固定：`BrainFactory.create(..., workflow)` 后使用 `stream_mode=["messages","custom","updates"]`，`subgraphs=True`，`version="v2"`，`control=RunControl()`，`thread_id=session_id`。
 - 主 agent 名 `MAIN_AGENT_NAME = "dsagents-main"`；`register_harness_profile("anthropic", ...)` 禁用默认 general-purpose subagent（锁定 `deepagents==0.6.12`）。
-- **5 工具清单**：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
-- **workflow 工具收窄必须用 denylist**：Philips 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`；禁止只 allowlist 业务工具导致手册中的通用工具从模型工具表消失。无 SubAgent。验证：`python -m tests.test_workflow_setup`。
+- **5 工具清单**（注册顺序固定）：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
+- **workflow 工具收窄必须用 denylist**：Philips 用 `_PHILIPS_EXCLUDED_TOOLS` 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`；禁止只 allowlist 业务工具导致手册中的通用工具从模型工具表消失。无 SubAgent。验证：`python -m tests.test_workflow_setup`。
 - `StructuredOutputCompatibility.wrap_model_call`：仅在 `ToolStrategy` 请求上用 `request.override(model=...)` 关闭该次 Anthropic thinking；工厂原始模型与通用/Tecan adaptive thinking 不变。
-- **`StructuredOutputRecovery`（硬性约定）**：`after_model` 从纯文本 JSON 恢复 `structured_response`；失败（含空文本、空 `data: {}` 壳）则 `jump_to: "model"`（默认最多 2 次，`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`；总模型轮次约 `1 + max_retries`）；空壳用 `EMPTY_DATA_SHELL_HINT`，**不**编造业务字段；耗尽或无法继续时**必须** `jump_to: "end"`，且 `can_jump_to` 须含 `"end"`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。验证：`cd backend && python -m tests.test_harness`。
-- 声明式 Tecan SubAgent **不继承**主 Agent middleware，须经无 memory 的 `runtime_middlewares()` 显式注入（各 4 个）；主 Agent 手册用 `memory_backend=` 打开（共 5 个），勿同时使用 `create_deep_agent(memory=...)`。
+- **`StructuredOutputRecovery`（硬性约定，`runtime/middleware.py`）**：
+  - `after_model` 从纯文本 JSON 恢复 `structured_response`；失败（含空文本、空 `data: {}` 壳）则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`；总模型轮次约 `1 + max_retries`）。
+  - 空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示，**不**编造业务字段。
+  - 耗尽或无法继续时**必须** `jump_to: "end"`，且 `@hook_config(can_jump_to=["model", "end"])`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
+  - **空壳耗尽**：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem → harness 可投影 `succeeded`；**其它失败模式**耗尽后无 `structured_response` → harness 标 `failed`。
+  - 验证：`cd backend && python -m tests.test_harness`。
+- 声明式 Tecan SubAgent **不继承**主 Agent middleware，须经无 memory 的 `runtime_middlewares()` 显式注入（各 4 个：Recovery → ToolTelemetry → NoProgress → Compatibility）；主 Agent 经 `memory_backend=` 再挂受限 `MemoryMiddleware`（共 5 个），勿同时使用 `create_deep_agent(memory=...)`。
 
 ### 4.4 共享状态与查询维度
 
@@ -229,7 +235,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 **事件边界：**
 
 - append-only `run_events`，`event_id` 单调递增；`status` 事件投影 `runs.status/reply/error/result_json/updated_at`；`workflow` 在创建 run 时写入。
-- 7 类事件；`model_usage` 为成本/缓存观测，**不计入** `latest_content_event`。
+- 7 类事件；`latest_content_event` **排除** `status` 与 `model_usage`（后者为成本/缓存观测）。
 - raw v2 chunk 整体落库（可 spill）；无 TTL/归档。
 - API 层 `_usage_summary` 叠加 cache hit rate 与 MiniMax-M3 tier 计价（`PRICING_AS_OF` 等硬编码于 `api.py`）；不可计价模型金额为 `null`。
 
@@ -343,13 +349,13 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 ### 7.5 middleware / 结构化输出 / 工具裁剪 / 依赖
 
-- [ ] 改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`；空壳路径不编造字段；用 `python -m tests.test_harness` 验证重试封顶。
+- [ ] 改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`；空壳路径不编造字段；空壳耗尽走 all-null `partial_success` skeleton，其它失败模式可 `failed`；用 `python -m tests.test_harness` 验证重试封顶与空壳路径。
 - [ ] workflow 收窄用 **denylist** 排除他业务工具，保留 `parse_documents` / `extract_archives`；`test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具。
 - [ ] 共享 middleware 只改 `runtime_middlewares()`；SubAgent 勿误传 `memory_backend`；`test_workflow_setup` 断言 Sub 无 `MemoryMiddleware`（各 4 个）。
 - [ ] stream chunk 形状依赖 langchain/deepagents 约定；升级靠 `uv.lock` + FakeBrain 回归。
 - [ ] MiniMax 强绑 Anthropic 协议与 thinking/cache 中间件；换 provider 需同步解析与 profile。
 - [ ] 四层文档手工同步；pricing 常量硬编码于 `api.py`。
-- [ ] 无 CI/lint/pytest 门禁；本地 7 脚本需按影响范围人工跑；真实集成脚本与本地回归同目录，部分无 env 门闸（易误跑）。
+- [ ] 无 CI/lint/pytest 门禁；本地 7 脚本需按影响范围人工跑；真实集成脚本与本地回归同目录，`test_real_philips_wgq_ups` / `test_minimax_cache_baseline` 等无完整 env 门闸（易误跑）。
 
 ### 7.6 验证入口
 
@@ -391,4 +397,4 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`docs/commands.md`](../docs/commands.md)
 - [`docs/reading-order.md`](../docs/reading-order.md)
 
-本轮（2026-07-16，coding-maps skill）在 backend 7 份事实文档与根级三件套对齐后刷新：保留 run-first / 四端点 / 7 事件 / 无 SSE 边界；补强 workflow **denylist**（保留共享 MinerU）与 `test_workflow_setup` 门禁；补强 `StructuredOutputRecovery` 空 data 壳与 `1+max_retries` 封顶；补 Philips `result.outcome` 与 run 终态对照表、主/Sub middleware 数量（5 vs 4）、手册 seed 语义；风险清单对齐 CONCERNS 工具裁剪与误跑真实脚本条目。
+本轮（2026-07-16，coding-maps skill）在 backend 7 份事实文档（`last_mapped_commit` 28534a9，Analysis Date: 2026-07-16）与根级三件套对齐后原地刷新：核心边界（run-first / 四端点 / 7 事件 / 无 SSE / denylist / 5 工具 / 2 SubAgent）仍成立；补强 `StructuredOutputRecovery` 空壳耗尽 → all-null `partial_success` skeleton 与其它耗尽 → `failed` 的系统层分叉；明确 `latest_content_event` 排除 `status`+`model_usage`、无独立下载 HTTP、工具注册顺序与主/Sub middleware 栈顺序；风险清单对齐 CONCERNS 空壳路径与无门闸真实脚本条目。

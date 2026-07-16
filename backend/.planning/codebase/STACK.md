@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 9c7215e
+last_mapped_commit: 28534a9
 ---
 
 # Technology Stack
@@ -205,6 +205,12 @@ init_chat_model(
 
 Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），保留共享 MinerU 工具与 `lookup_philips_wgq_master_data`，并启用 `ToolStrategy(PhilipsWgqRecognitionResult)` + 结构化输出中间件。
 
+### Middleware 栈（运行时）
+
+主 Agent 经 `runtime_middlewares(memory_backend=...)`（`runtime/middleware.py`）组装，含 `MemoryMiddleware`（`/memories/AGENTS.md`）与约 4 个运行时中间件（`ToolTelemetry`、`NoProgressMiddleware` 等）；Philips workflow 额外注入 `StructuredOutputRecovery` + `StructuredOutputCompatibility`。Tecan SubAgent 各自安装不含 memory 的 runtime middleware（声明式 SubAgent 不继承主 Agent middleware）。
+
+`StructuredOutputRecovery`：`after_model` + `jump_to: "model"` 有界重试；`can_jump_to` 含 `"end"`，达 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
+
 ## Platform Requirements
 
 | 项 | 要求 |
@@ -212,7 +218,7 @@ Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `gener
 | OS | 开发/文档以 Windows 为主（`scripts/start-backend.ps1`）；Python 代码跨平台，路径统一用 `pathlib` |
 | Python | `>=3.11,<4.0`（本机常见 3.12.x） |
 | 包安装 | 在 `backend/` 执行 `uv sync`，以 `uv.lock` 为准 |
-| 启动 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`，或仓库根 `scripts/start-backend.ps1`（可新开窗口） |
+| 启动 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`，或仓库根 `scripts/start-backend.ps1`（可新开窗口；`-Port` 默认 8500） |
 | 磁盘 | 可写 `backend/data/`（SQLite 三库 + artifacts + 可选 run-events） |
 | 网络 | 出站访问 MiniMax（`MINIMAX_BASE_URL`）与 MinerU（`MINERU_BASE_URL`）；Oracle 可选 |
 | Oracle thick | 若设 `ORACLE_CLIENT_LIB_DIR`，需本机 Instant Client 动态库；缺失/失败时 Philips 工具以 `problems` 降级，不崩溃进程 |

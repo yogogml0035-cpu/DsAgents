@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 28534a9
 ---
 
 # Coding Conventions
@@ -12,8 +12,8 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 
 - **模块 / 函数 / 方法**：`snake_case`（如 `create_harness`、`execute_run`、`default_tool_catalog`、`parse_documents`、`runtime_middlewares`、`fail_incomplete_runs`）。
 - **类**：`PascalCase`（如 `HarnessRuntime`、`SqliteRunLedger`、`AgentResources`、`ToolCatalog`、`DeepAgentsBrainFactory`、`StructuredOutputRecovery`、`PhilipsWgqRecognitionResult`）。
-- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`SKILLS_SOURCE`）。
-- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`、`_PHILIPS_EXCLUDED_TOOLS`）。测试内部检查函数同惯例：`_check_*`。
+- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`PHILIPS_MINIMAL_DATA_SKELETON`、`SKILLS_SOURCE`、`_PHILIPS_EXCLUDED_TOOLS`）。
+- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`）。测试内部检查函数同惯例：`_check_*`。
 - **类型别名**：`ToolHandler = Callable[..., Any]`（`runtime/tools.py`）；协议名用名词：`Brain`、`BrainFactory`。
 - **Skill / 包标识符**：Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；`SKILL.md` frontmatter 名可使用连字符（`philips-wgq-inbound-recognition`）。声明式 SubAgent 显示名用连字符（`tecan-extractor-a` / `tecan-extractor-b`）。
 - **业务工具函数名**：按实际职责命名。Philips 使用单一查询工具 `lookup_philips_wgq_master_data`；Tecan 保留 `save_tecan_extraction` + `generate_tecan_import`；通用 MinerU 工具为 `parse_documents`、`extract_archives`。
@@ -21,7 +21,7 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 - **run 状态字面量**：`queued` / `running` / `succeeded` / `failed` / `cancelling` / `cancelled`（集合 `RUN_STATUSES` 于 `runtime/runs.py`）。
 - **事件类型字面量**（固定 7 种，不可随意扩展）：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
 - **Philips workflow 字面量**：仅 `philips_wgq_inbound_recognition`（`skills/philipswgqinboundrecognition/schema.py` 的 `WORKFLOW`，HTTP `RunRequest.workflow` 同 `Literal`）。
-- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price`、`original_waybill_number` 等），`extra="forbid"`，无中文 JSON alias。
+- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price`、`original_waybill_number` 等），`extra="forbid"`，无中文 JSON alias（见 `schema.py` 中 `_ContractModel` 注释：OMS 中文列名由调用方另行映射）。
 
 ## Code Style
 
@@ -139,11 +139,13 @@ last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
 - **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
 - **Philips 结构化提交硬约束**：禁止 `data: {}`；`success`/`partial_success` 必须带齐 `shipment`/`header`/`items`（未知填 `null`）；`input_problems` 才允许 `data=null`。Skill 与 `PHILIPS_WORKFLOW_PROMPT` 双写。
 - **智能体可见文案**：system prompt、Skill、`RUNTIME_AGENTS_BASELINE`、工具 docstring/`Annotated` 参数说明、结构化纠错提示统一**简体中文**；代码标识符、工具名、schema 英文字段名、路径与 API 名保持英文。
-- **StructuredOutputRecovery 有界重试（硬约定）**：
+- **StructuredOutputRecovery 有界重试（硬约定）**（`runtime/middleware.py`）：
   - `@hook_config(can_jump_to=["model", "end"])` 必须同时声明 `"end"`。
   - 解析/校验失败、空文本、或空 `data` 壳：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
-  - 空壳用 `EMPTY_DATA_SHELL_HINT`；**不**在 recovery 中编造业务字段。
+  - 空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示；**不**在 recovery 中编造业务字段。
   - 达到 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
+  - **空壳重试耗尽**（Philips schema）：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON。
+  - 其它失败模式仍无 `structured_response` 退出，由 Harness 标 run `failed`。
   - **禁止**只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
   - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`、空壳专用纠错）。
   - 共享列表顺序只改 `runtime_middlewares()`；Philips 工厂仅在缺失时 `insert(0)` Recovery / append Compatibility，勿破坏「Recovery 在列表最前」约定。

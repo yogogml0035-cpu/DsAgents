@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 28534a9
 ---
 
 # Testing Patterns
@@ -62,7 +62,8 @@ python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
 $env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
 python -m tests.test_real_philips_wgq_inbound_recognition
 
-# UPS 单用例诊断：当前无 env 门闸，会直连 DSAGENTS_API_BASE_URL；断言主体已注释，偏人工观察
+# UPS 单用例诊断：当前无 env 门闸，会直连 DSAGENTS_API_BASE_URL（脚本默认端口 8501）
+# 断言主体已注释，偏人工观察
 python -m tests.test_real_philips_wgq_ups
 
 # 诊断型 MiniMax prompt-cache 基线；无开关，会触达真实端点（BASE_URL 默认读 DSAGENTS_BASE_URL）
@@ -78,7 +79,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_support.py` | 无独立 `run()` | `FakeBrain` / `FakeBrainFactory`、`StreamControl`、消息构造、`wait_for_run`、Philips 结构化结果 fixture |
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 精确 5 工具名 |
 | `tests/test_run_ledger.py` | `run()` | 资源、`/memories/AGENTS.md` seed/不覆盖、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
-| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility`、`StructuredOutputRecovery` 文本 JSON 恢复 / 校验失败 `jump_to: model` / 耗尽 `jump_to: end`、artifact 归一、七类事件、Philips `structured_response` 成功/缺失/`input_problems` |
+| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility`、`StructuredOutputRecovery` 文本 JSON 恢复 / 校验失败 `jump_to: model` / 耗尽 `jump_to: end`、空 data 壳纠错、artifact 归一、七类事件、Philips `structured_response` 成功/缺失/`input_problems` |
 | `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞等 HTTP 契约 |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具裁剪/无 SubAgent、Tecan 两个 SubAgent、主/Sub middleware 差异（Sub **4** 个、主含 Memory）、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
@@ -107,7 +108,7 @@ python -m tests.test_minimax_cache_baseline
 - 验证 artifact block 进入 Brain 前全部转为 text block（`ARTIFACT_REFERENCE_HINT`）。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage **七类事件**。
 - Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking；独立 fake chat model 还实际经过 `create_agent` 的 `wrap_model_call` 链并保留 `structured_response`，Harness 再从 `updates` 捕获并做 Pydantic 校验。
-- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；`attempts >= max_retries` → `jump_to: "end"`（含空文本路径）；端到端模型调用次数 = 1 + `max_retries` 后退出；空 `data: {}` 文本与 ToolMessage 错误路径使用 `EMPTY_DATA_SHELL_HINT`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
+- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；非空壳 `attempts >= max_retries` → `jump_to: "end"` 且无 `structured_response`；空 `data: {}` 耗尽 → `partial_success` + all-null `data` + runtime problem；端到端模型调用次数 = 1 + `max_retries` 后退出；空壳文本/ToolMessage 路径使用 `EMPTY_DATA_SHELL_HINT` 与 `PHILIPS_MINIMAL_DATA_SKELETON`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
 - `test_harness` 验证 `NoProgressMiddleware` 从当前 HumanMessage 之后的消息序列识别连续三次同一 tool+args，新 human turn 与参数变化不会误触发；middleware 不依赖实例级计数；主 Agent 仅一个 `MemoryMiddleware` 且手册进入 system prompt。
 - `test_workflow_setup` 断言 Philips 排除帝肯工具、保留 `parse_documents` / `extract_archives` / `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`；SubAgent middleware 无 `MemoryMiddleware`（各 **4** 个 runtime middleware）；受限记忆提示不含默认用户偏好语义。
 - `test_run_ledger` 断言 `/memories/AGENTS.md` 首次 seed 含 ZIP/`result_path` 基线，人工/追加内容在重开资源后不被覆盖。
@@ -135,16 +136,16 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 
 ### 6. 真实 Philips HTTP 验收
 
-`test_real_philips_wgq_inbound_recognition.py` 默认 skip；开关为 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`。默认样例根可用 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` 覆盖，服务地址用 `DSAGENTS_API_BASE_URL`，超时/轮询分别用 `DSAGENTS_REAL_PHILIPS_WGQ_TIMEOUT_SECONDS` / `DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS`。
+`test_real_philips_wgq_inbound_recognition.py` 默认 skip；开关为 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`。默认样例根可用 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` 覆盖，服务地址用 `DSAGENTS_API_BASE_URL`（默认 `http://127.0.0.1:8500`），超时/轮询分别用 `DSAGENTS_REAL_PHILIPS_WGQ_TIMEOUT_SECONDS` / `DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS`。
 
-脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、`original_waybill_number`、商品行、`product_id`、`quantity`/价格（`currency` / `unit_price` / `total_price`）、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。
+脚本逐例上传 PDF、共用 Tracking 和可选无关附件，提交固定 workflow 并轮询终态；断言新 session、`original_waybill_number`、商品行、`product_id`、`quantity`/价格（`currency` / `unit_price` / `total_price`）、至少一项主数据、lookup 工具调用，以及 ZIP/DOCX 对应 `partial_success` 问题。渠道用例包括 DHL、DSV、FedEx、UPS、康捷空。
 
-`test_real_philips_wgq_ups` 是单用例诊断脚本：默认 case 目录可通过 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` 覆盖；**当前无 env 门闸**，会直接 HTTP 访问 `DSAGENTS_API_BASE_URL`（默认 `http://127.0.0.1:8500`）。运行时打印上传列表、流式事件与最终 `result`/`usage`；`_assert_response` 仍保留但调用处已注释，适合人工观察而非门禁。
+`test_real_philips_wgq_ups` 是单用例诊断脚本：默认 case 目录可通过 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` 覆盖；**当前无 env 门闸**，会直接 HTTP 访问 `DSAGENTS_API_BASE_URL`（脚本默认 `http://127.0.0.1:8501`）。运行时打印上传列表、流式事件与最终 `result`/`usage`；`_assert_response` 仍保留但调用处已注释，适合人工观察而非门禁。
 
 ### 7. 其它真实诊断
 
 - `test_real_image_run`：`DSAGENTS_RUN_REAL_IMAGE_TEST=1`；可选 `DSAGENTS_API_BASE_URL`、`DSAGENTS_IMAGE_PATH`、`DSAGENTS_IMAGE_QUESTION`、超时/轮询 env。
-- `test_real_multi_pdf_run`：`DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；`--pdf-dir` 或对应 env。
+- `test_real_multi_pdf_run`：`DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；`--pdf-dir` 或 `DSAGENTS_PDF_DIR`；另有 request/timeout/upload/poll 相关 env。
 - `test_minimax_cache_baseline`：无开关；读 `DSAGENTS_BASE_URL`（注意与其它真实脚本的 `DSAGENTS_API_BASE_URL` 不同）；两 turn 同 session 打印 cache 相关 `model_usage`，零 cache 只记诊断不失败。
 
 ## Mocking Patterns
@@ -182,7 +183,7 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 
 - 5 工具静态注册与 MinerU mock 路径（`test_tools` 精确名称列表：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`）；
 - ledger 的 `workflow` / `result_json`、事件、spill、usage、`/memories/AGENTS.md` seed；
-- Harness 的结构化响应捕获、七类事件、`StructuredOutputRecovery` 有界重试与 `jump_to: end`、通用行为；
+- Harness 的结构化响应捕获、七类事件、`StructuredOutputRecovery` 有界重试与 `jump_to: end`、空 data 壳路径、通用行为；
 - HTTP 四端点、workflow 校验、新 session、result 投影、cancel、usage；
 - Philips Pydantic 合同、严格 Tracking、Oracle 补缺与降级、交易字段隔离；
 - Tecan SubAgent 与 Excel 行为未回归；两个 SubAgent 各含 **4** 个 runtime middleware（无 handbook），且 `StructuredOutputRecovery` / `StructuredOutputCompatibility` 仍在场；
@@ -199,7 +200,7 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 5. 改 Philips schema/Tracking/Oracle 时同步 `test_philips_wgq_inbound_recognition`；改 Tecan 时同步 `test_tecan_import`。
 6. 新工具必须静态登记进 `default_tool_catalog()`，并更新 `test_tools` 的精确名称列表。
 7. 为 workflow 收窄 `tools` 时用 denylist 排除**其他业务**工具，保留共享 MinerU 工具；用 `python -m tests.test_workflow_setup` 验证。
-8. 改 `after_model` + `jump_to` 时必须覆盖：`can_jump_to` 含 `"end"`、耗尽 `max_retries` 时 `jump_to: "end"`、不可仅 `return None`；用 `python -m tests.test_harness` 验证。
+8. 改 `after_model` + `jump_to` 时必须覆盖：`can_jump_to` 含 `"end"`、耗尽 `max_retries` 时 `jump_to: "end"`、不可仅 `return None`；空壳耗尽应产出合法 all-null `data`；用 `python -m tests.test_harness` 验证。
 9. 真实外部测试单独建文件、默认 skip（或明确标为诊断），并在 `docs/commands.md` 标明开关、服务和样例依赖。
 
 ---

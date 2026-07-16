@@ -28,7 +28,7 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：Philips 工具名集合须**含** `parse_documents` / `extract_archives`（及本业务主数据工具），**不含**帝肯业务工具；禁止业务-only allowlist 导致共享 MinerU 工具从模型工具表消失。
 
-改 `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认重试次数封顶（约 `1 + max_retries` 次模型调用）且耗尽时 `jump_to: "end"`（禁止只返回 `None`）。
+改 `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、UTC ISO-8601 毫秒时间戳、状态机与 usage 聚合的本地 assert 脚本。
 

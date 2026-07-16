@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 9c7215e
+last_mapped_commit: 28534a9
 ---
 
 # Integrations
@@ -18,7 +18,7 @@ last_mapped_commit: 9c7215e
 uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
 
-或仓库 `scripts/start-backend.ps1` 拉起。
+或仓库 `scripts/start-backend.ps1` 拉起（`-Port` 默认 8500；无 `-Server` 时新开窗口）。
 
 | 方法 / 路径 | 入参 | 行为摘要 | 主要状态码 |
 |---|---|---|---|
@@ -61,7 +61,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 #### 程序内入口（非 HTTP）
 
-`AgentResources` + `create_harness(...).execute_run(messages, session_id, run_id, workflow=...)`（`runtime/execution.py`）。测试与嵌入式调用走此路径。
+`AgentResources` + `create_harness(...).execute_run(messages, session_id, run_id, workflow=...)`（`runtime/execution.py`）。测试与嵌入式调用走此路径。Stream：`stream_mode=["messages", "custom", "updates"]`、`subgraphs=True`、`version="v2"`、`control=RunControl`；`config.configurable.thread_id = session_id`。
 
 ---
 
@@ -190,10 +190,11 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | SubAgent | `tecan-extractor-a` / `tecan-extractor-b`（只读 FS + `save_tecan_extraction` + `ExtractionReference` 结构化输出） |
 | 输出 | `generate_tecan_import` → `status: generated` + Excel/canonical artifacts，或 `code: input_problems` |
 | 参考 | `references/fields.md`、`references/rules.md` |
+| 内部常量 | 工具模块内 `WORKFLOW = "tecan-import"`（抽取 payload 标记，**不是** HTTP `RunRequest.workflow` 字面量） |
 
 ### 通用运行手册
 
-`/memories/AGENTS.md`（StoreBackend）种子内容指导：`parse_documents` 优先读 `result_path`；ZIP 须先 `extract_archives` 再 `read_file`。仅首次缺失时写入，不覆盖后续追加。
+`/memories/AGENTS.md`（StoreBackend）种子内容指导：`parse_documents` 优先读 `result_path`；ZIP 须先 `extract_archives` 再 `read_file`。仅首次缺失时写入，不覆盖后续追加。`MemoryMiddleware` 在工具失败后可指导模型向该手册追加误用笔记（禁止写入业务数据与密钥）。
 
 ---
 

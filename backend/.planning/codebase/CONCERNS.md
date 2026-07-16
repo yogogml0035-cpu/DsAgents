@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 3a3a6e5c3f608a05ae5a076b99812723c097613e
+last_mapped_commit: 28534a9
 analysis_date: 2026-07-16
 scope: backend/
 ---
@@ -59,9 +59,11 @@ scope: backend/
 
 - **问题**：
   - `tests/test_real_image_run.py` / `test_real_multi_pdf_run.py`：`run()` 需 `DSAGENTS_RUN_REAL_*_TEST=1`，但 `python -m ...` 走 `main()` 会立即打真实服务。
-  - `tests/test_minimax_cache_baseline.py`：`__main__` 直接 `run()`，无 env 开关，会打真实 HTTP/MiniMax。
+  - `tests/test_real_philips_wgq_inbound_recognition.py`：`run()` 需 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；`__main__` 直接 `run()`（有 env 门闩）。
+  - `tests/test_real_philips_wgq_ups.py`：`__main__` 直接 `run()`，**无** env 开关；默认 `DEFAULT_CASE_DIR` 为开发机本地绝对路径；会打真实 HTTP API。
+  - `tests/test_minimax_cache_baseline.py`：`__main__` 直接调用真实 endpoint，无 env 开关。
 - **影响**：误跑产生费用与外部副作用；若引入 pytest 全收集更危险。
-- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集。
+- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集；去掉硬编码本机路径。
 
 ### 8. 无自动化聚合入口（已确认）
 
@@ -78,7 +80,7 @@ scope: backend/
   - `@hook_config(can_jump_to=["model", "end"])` — **必须**同时声明 `"end"`，禁止只允许 `"model"`
   - 解析/校验失败或空文本：`jump_to: "model"`，计数 `structured_recovery_attempts`，默认 `max_retries=2`
   - 耗尽重试：**必须** `return {"jump_to": "end"}`（源码注释：`Returning None would infinite-loop; jump to end instead.`）
-  - 空 `data: {}` / 缺 `shipment|header|items`：专用 `EMPTY_DATA_SHELL_HINT` + `philips_structured_output_error_message`（ToolStrategy `handle_errors`）；不编造业务字段
+  - 空 `data: {}` / 缺 `shipment|header|items`：专用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 纠错骨架 + `philips_structured_output_error_message`（ToolStrategy `handle_errors`）；重试耗尽回退 all-null 合法骨架（`partial_success`），不编造业务字段
   - Skill / `PHILIPS_WORKFLOW_PROMPT` 硬约束禁止空壳提交
 - **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径专用纠错。
 - **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。模型仍可能在专用提示后重复空壳，最终由 `NoProgressMiddleware` 或 recovery 耗尽结束。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
@@ -383,4 +385,4 @@ scope: backend/
 
 ---
 
-*Concerns analysis: 2026-07-16*
+*Concerns analysis: 2026-07-16 · last_mapped_commit: 28534a9*
