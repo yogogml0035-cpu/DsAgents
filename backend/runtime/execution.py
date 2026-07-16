@@ -51,7 +51,7 @@ class HarnessRuntime:
         try:
             brain = self.brain_factory.create(
                 resources=self.resources,
-                middleware=runtime_middlewares(),
+                middleware=runtime_middlewares(memory_backend=self.resources.backend),
                 tools=self.tools.as_list(),
                 workflow=workflow,
             )

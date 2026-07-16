@@ -3,35 +3,88 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Annotated, Any
 
+from deepagents.middleware.memory import MemoryMiddleware
 from langchain.agents.middleware import (
     AgentMiddleware,
+    AgentState,
     ModelRequest,
     ModelResponse,
     ToolCallRequest,
+    hook_config,
 )
+from langchain.agents.middleware.types import OmitFromSchema
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_stream_writer
+from pydantic import BaseModel, ValidationError
+from typing_extensions import NotRequired
 
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
+from runtime.resources import RUNTIME_AGENTS_PATH
+from skills.philipswgqinboundrecognition import PhilipsWgqRecognitionResult
 
 
 NO_PROGRESS_WINDOW = 3
+# How many after_model correction loops are allowed when text JSON fails validation
+# or cannot be parsed. Each attempt jumps back to the model once.
+DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2
+_RECOVERY_MODEL_SNIPPET_CHARS = 3000
+_RECOVERY_ERROR_CHARS = 1500
+
+# Restricted MemoryMiddleware prompt: auto-load handbook; append only after tool failures.
+RUNTIME_MEMORY_SYSTEM_PROMPT = """\
+<agent_memory>
+{agent_memory}
+</agent_memory>
+
+<memory_guidelines>
+The handbook above is shared runtime tool-use guidance. Follow it for document/result consumption.
+
+After a tool call fails and the failure is a reusable tool-misuse pattern, append one short entry to
+`/memories/AGENTS.md` with `edit_file` using this shape:
+
+### <tool_name>
+- Error: <what failed>
+- Next: <correct next step>
+
+Only append verified tool-misuse patterns. Do not write business data, user preferences, secrets,
+private paths, full file contents, or unverified guesses. Do not update the handbook for one-off
+environment glitches or when no tool failed.
+</memory_guidelines>
+"""
 
 __all__ = [
+    "DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES",
     "NO_PROGRESS_WINDOW",
+    "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
     "NoProgressMiddleware",
     "StructuredOutputCompatibility",
+    "StructuredOutputRecovery",
+    "StructuredOutputRecoveryState",
     "ToolTelemetry",
     "runtime_middlewares",
 ]
+
+_FENCED_JSON = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+class StructuredOutputRecoveryState(AgentState):
+    """Agent state extension for structured-output recovery retries."""
+
+    structured_recovery_attempts: NotRequired[
+        Annotated[int, OmitFromSchema(input=True, output=True)]
+    ]
 
 
 class NoProgressLoop(Exception):
@@ -128,13 +181,145 @@ class StructuredOutputCompatibility(AgentMiddleware):
         return handler(request)
 
 
-def runtime_middlewares() -> list[AgentMiddleware]:
-    """Return fresh middleware instances for each agent graph."""
-    return [
+class StructuredOutputRecovery(AgentMiddleware):
+    """Recover ToolStrategy structured_response from plain-text JSON.
+
+    MiniMax and similar models sometimes finish with a fenced JSON body instead
+    of calling the schema tool. Harness only accepts ``structured_response`` from
+    stream updates, so this middleware parses the latest AI text, validates it
+    against the configured schema, and writes ``structured_response`` into state.
+
+    On parse/validation failure, append a correction HumanMessage and
+    ``jump_to: "model"`` up to ``max_retries`` times (default 2). Exhausted
+    retries use ``jump_to: "end"`` so the agent graph exits without an infinite
+    ToolStrategy re-generation loop; the harness then fails with
+    ``structured_response missing``.
+
+    Does not rewrite business outcome fields. Does not invent schema values.
+    """
+
+    state_schema = StructuredOutputRecoveryState
+
+    def __init__(
+        self,
+        schema: type[BaseModel] | None = None,
+        *,
+        max_retries: int = DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES,
+    ) -> None:
+        super().__init__()
+        self.schema = schema or PhilipsWgqRecognitionResult
+        if max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
+        self.max_retries = max_retries
+
+    @hook_config(can_jump_to=["model", "end"])
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        del runtime
+        if _state_get(state, "structured_response") is not None:
+            return None
+        messages = _messages_of(state)
+        if not messages:
+            return None
+        latest = messages[-1]
+        if not _is_ai_message(latest):
+            return None
+        if observability.tool_calls_of(latest):
+            # Pending or structured tool_calls: leave ToolStrategy / tools path alone.
+            return None
+        text = _message_text(latest)
+        if not text or not text.strip():
+            # Empty finish without structured_response: still use the bounded retry
+            # path. Exhausted retries jump_to end so ToolStrategy cannot loop forever.
+            return self._retry_or_give_up(
+                state,
+                reason="assistant finished with empty text and no structured_response",
+                model_text=text or "",
+            )
+
+        payload = _extract_json_object(text)
+        if payload is not None:
+            try:
+                validated = self.schema.model_validate(payload)
+            except ValidationError as exc:
+                return self._retry_or_give_up(
+                    state,
+                    reason=_format_validation_error(exc),
+                    model_text=text,
+                )
+            return {
+                "structured_response": validated,
+                "structured_recovery_attempts": 0,
+            }
+
+        # Text finish without a parseable JSON object — ask the model to resubmit
+        # via the schema tool or a single valid JSON object.
+        return self._retry_or_give_up(
+            state,
+            reason="no valid JSON object found in assistant text",
+            model_text=text,
+        )
+
+    def _retry_or_give_up(
+        self,
+        state: Any,
+        *,
+        reason: str,
+        model_text: str,
+    ) -> dict[str, Any]:
+        attempts = _recovery_attempts(state)
+        if attempts >= self.max_retries:
+            # Critical: with ToolStrategy and no tools, create_agent's
+            # model_to_model edge re-enters the model whenever structured_response
+            # is missing. Returning None would infinite-loop; jump to end instead.
+            return {"jump_to": "end"}
+        schema_name = getattr(self.schema, "__name__", "structured schema")
+        return {
+            "messages": [
+                HumanMessage(
+                    content=_build_recovery_retry_message(
+                        reason=reason,
+                        model_text=model_text,
+                        schema_name=schema_name,
+                    )
+                )
+            ],
+            "jump_to": "model",
+            "structured_recovery_attempts": attempts + 1,
+        }
+
+
+def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddleware]:
+    """Return fresh middleware instances for each agent graph.
+
+    When ``memory_backend`` is set (main agent), attach built-in MemoryMiddleware
+    with a restricted prompt so ``/memories/AGENTS.md`` is auto-loaded without the
+    default user-preference memory semantics. Subagents omit memory_backend.
+
+    Order notes (onion model):
+    - Recovery is listed first so its ``after_model`` runs last among after hooks
+      and can still fill ``structured_response`` after other layers run.
+    - Compatibility wraps model calls (thinking off for ToolStrategy).
+    """
+    middleware: list[AgentMiddleware] = [
+        StructuredOutputRecovery(),
         ToolTelemetry(),
         NoProgressMiddleware(),
         StructuredOutputCompatibility(),
     ]
+    if memory_backend is not None:
+        # add_cache_control: second breakpoint on the memory block (official
+        # memory= also sets this). Still sits in user middleware before
+        # AnthropicPromptCachingMiddleware — not as optimal as create_deep_agent
+        # tail placement, but avoids default memory= prompt semantics.
+        middleware.append(
+            MemoryMiddleware(
+                backend=memory_backend,
+                sources=[RUNTIME_AGENTS_PATH],
+                system_prompt=RUNTIME_MEMORY_SYSTEM_PROMPT,
+                add_cache_control=True,
+            )
+        )
+    return middleware
 
 
 def _runtime_agent_name(request: ToolCallRequest) -> str:
@@ -217,3 +402,122 @@ def _is_ai_message(message: Any) -> bool:
         getattr(message, "type", None) == "ai"
         or getattr(message, "role", None) == "assistant"
     )
+
+
+def _state_get(state: Any, key: str) -> Any:
+    if isinstance(state, dict):
+        return state.get(key)
+    return getattr(state, key, None)
+
+
+def _recovery_attempts(state: Any) -> int:
+    raw = _state_get(state, "structured_recovery_attempts")
+    if isinstance(raw, int) and raw >= 0:
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return 0
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    text = str(exc).strip()
+    if len(text) > _RECOVERY_ERROR_CHARS:
+        return text[:_RECOVERY_ERROR_CHARS] + "...[truncated]"
+    return text
+
+
+def _build_recovery_retry_message(
+    *,
+    reason: str,
+    model_text: str,
+    schema_name: str,
+) -> str:
+    snippet = model_text.strip()
+    if len(snippet) > _RECOVERY_MODEL_SNIPPET_CHARS:
+        snippet = snippet[:_RECOVERY_MODEL_SNIPPET_CHARS] + "\n...[truncated]"
+    return (
+        f"Structured output was rejected. Resubmit a valid `{schema_name}` by "
+        "calling the structured-output tool (preferred), or emit exactly one JSON "
+        "object that matches the schema. Do not invent fields; use null for unknowns. "
+        "Natural-language summary alone is not accepted as the business result.\n\n"
+        f"Issue:\n{reason}\n\n"
+        f"Your previous content:\n{snippet}"
+    )
+
+
+def _message_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                # Some providers put body under type=text with nested fields only.
+                if block.get("type") == "text" and isinstance(block.get("content"), str):
+                    parts.append(block["content"])
+        return "".join(parts)
+    return "" if content is None else str(content)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Pull the first valid JSON object from fenced or raw assistant text."""
+    candidates: list[str] = []
+    for match in _FENCED_JSON.finditer(text):
+        candidates.append(match.group(1))
+    # Prefer the largest balanced {...} slice when fences are missing or partial.
+    balanced = _largest_json_object_slice(text)
+    if balanced is not None:
+        candidates.append(balanced)
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _largest_json_object_slice(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    last_end: int | None = None
+    for index in range(start, len(text)):
+        ch = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                last_end = index
+                # Keep scanning for a later top-level close only if nested restarts;
+                # first complete object from the first '{' is usually the payload.
+                break
+    if last_end is None:
+        return None
+    return text[start : last_end + 1]
