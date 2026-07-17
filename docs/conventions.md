@@ -38,3 +38,6 @@
 - **SQLite 三库分离**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 互不共享连接；新 schema 无迁移，部署切换需整目录一致清空或替换。
 - **Philips 空壳 vs 业务问题**：`data: {}` 是非法形状（recovery 纠错 / 耗尽 skeleton），不是 `input_problems`；`input_problems` 要求 `data=null` 且至少一条 problem。空壳耗尽的 all-null skeleton 使用 `partial_success` + runtime problem，**禁止**用编造业务值“凑成功”。
 - **Philips consolidated 票次**：同一 HAWB/运单下多张商业发票或多个 PO/DN 视为一票；header 字段可逗号拼接，items 按发票顺序展开。规则见 Skill 与 `PHILIPS_WORKFLOW_PROMPT`，改提示词时两边同步。
+- **OMS 旁路索引（非 run_events）**：实现在 `runtime/oms_log.py`。仅 HTTP `POST /runs` 在 `create_run` **成功之后** best-effort 追加 JSONL（默认 `backend/log/oms_log.log`，锚定 `backend/`）；写失败吞异常、不阻塞已创建 run。**不是**第 8 类事件，不进入 `run_events`。`/upload`、422、409 不写；程序内 `execute_run` 不经此路径。细节见 backend `INTEGRATIONS.md` / `ARCHITECTURE.md`。
+- **时间戳中国时区**：`SqliteRunLedger` 与 `oms_log` 统一使用 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`；改格式须两边同步。
+- **运行时日志目录不入库**：`backend/log/` 已 gitignore（含 `oms_log.log`）；勿提交本地 OMS 索引文件。

@@ -20,11 +20,12 @@
 
 ## 当前模块职责
 
-- `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁和启动恢复。
+- `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁、启动恢复；`create_run` 成功后触发 OMS 旁路索引。
 - `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy / **denylist** 工具裁剪（排除帝肯业务工具，保留 `parse_documents` / `extract_archives` / 主数据工具）、两个 Tecan extractor SubAgent 与 middleware 装配。
 - `backend/runtime/middleware.py`：`StructuredOutputRecovery`（有界重试 + 空 `data: {}` 壳纠错；`EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**写 all-null `data` + `partial_success` + runtime problem，其它失败模式无 `structured_response` → `failed`）、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`；主 Agent 约 5 个 middleware，SubAgent 各 4 个（无 memory）。
 - `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、结构化响应捕获/复验、协作式 cancel 和默认 harness 工厂。
-- `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢。
+- `backend/runtime/oms_log.py`：HTTP `POST /runs` 在 `create_run` 成功后 best-effort 追加 `backend/log/oms_log.log`（JSONL `run_created`）；非 `run_events`；程序内路径不经此模块。
+- `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢；中国时区 UTC+8 时间戳。
 - `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由；缺失时 seed 共享操作手册 `/memories/AGENTS.md`。
 - `backend/runtime/tools.py`：静态注册 5 个工具（2 MinerU + 1 Philips + 2 Tecan）；不自动扫描 Skill，不提供插件平台。
 - `backend/integrations/`：artifact 路径/唯一命名/JSON helper 与 MinerU HTTP（`parse_documents`）及 ZIP 解压（`extract_archives`）集成。
@@ -32,7 +33,7 @@
 
 ## 数据与边界
 
-- `backend/data/` 按需创建 `dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db`；新 schema 无迁移，部署切换需清空整个数据目录。
+- `backend/data/` 按需创建 `dsagents_runs.db`、`dsagents_checkpoints.db`、`dsagents_store.db`；新 schema 无迁移，部署切换需清空整个数据目录。OMS 日志在 `backend/log/oms_log.log`（与 `data/` 分开）。
 - 同一 `session_id` 的单飞锁只在进程内有效；多 worker 不提供跨进程互斥。
 - `POST /runs/{run_id}/cancel` 是协作式 drain，不回滚已经生成的文件，也不提供跨进程强杀。
 - Philips 的业务问题使用 `result.outcome=input_problems`（`data=null`，run 仍 `succeeded`）；结构化响应缺失/非法或运行时异常才令 run `failed`。空 `data: {}` 壳在 recovery 重试耗尽时走 **all-null skeleton + `partial_success`**（仍 `succeeded`，不编造业务字段），与 `input_problems`（`data=null`）分叉。Tecan 工具继续返回 `code=input_problems`。下一 run 均重新显式传入所需 artifact 路径。

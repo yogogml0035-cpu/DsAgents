@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -29,6 +30,7 @@ def run() -> None:
         _check_cancel(tmp)
         _check_startup_recovery(tmp)
         _check_usage_pricing(tmp)
+        _check_oms_run_created_log(tmp)
 
 
 def _check_cancel(tmp: str) -> None:
@@ -335,6 +337,121 @@ def _check_api(tmp: str) -> None:
         unknown = client.get("/runs/missing-run")
         assert unknown.status_code == 404
         assert unknown.json() == {"error": "Unknown run: missing-run"}
+
+
+def _check_oms_run_created_log(tmp: str) -> None:
+    """Each successfully created run appends one JSONL index line; upload/422/409 do not."""
+    data_dir = Path(tmp) / "oms-log-data"
+    log_path = Path(tmp) / "oms-log" / "oms_log.log"
+    factory = FakeBrainFactory()
+
+    def fake_harness(resources: AgentResources) -> HarnessRuntime:
+        return HarnessRuntime(
+            resources=resources,
+            tools=ToolCatalog(()),
+            brain_factory=factory,
+        )
+
+    app = create_app(
+        resource_config=ResourceConfig(data_dir=data_dir),
+        harness_factory=fake_harness,
+    )
+    with patch("runtime.oms_log.DEFAULT_OMS_LOG_PATH", log_path):
+        with TestClient(app) as client:
+            assert not log_path.exists()
+
+            upload = client.post(
+                "/upload",
+                files=[("files", ("invoice_demo.pdf", b"pdf", "application/pdf"))],
+            )
+            assert upload.status_code == 200
+            assert not log_path.exists()
+
+            bad = client.post("/runs", json={"message": "hello", "session_id": None})
+            assert bad.status_code == 422
+            assert not log_path.exists()
+
+            artifact_path = "/artifacts/uploads/invoice_20260717120000.pdf"
+            text_only = client.post(
+                "/runs",
+                json={"messages": [user_message(text_block("plain"))], "session_id": "oms-text"},
+            )
+            assert text_only.status_code == 200
+            text_run_id = text_only.json()["run_id"]
+            text_session = text_only.json()["session_id"]
+            wait_for_run(client, text_run_id, "succeeded")
+
+            with_files = client.post(
+                "/runs",
+                json={
+                    "messages": [
+                        user_message(
+                            text_block("with files"),
+                            artifact_block(artifact_path),
+                            artifact_block("/artifacts/uploads/tracking_20260717120001.pdf"),
+                        )
+                    ],
+                    "session_id": "oms-files",
+                },
+            )
+            assert with_files.status_code == 200
+            files_run_id = with_files.json()["run_id"]
+            files_session = with_files.json()["session_id"]
+            wait_for_run(client, files_run_id, "succeeded")
+
+            failed = client.post(
+                "/runs",
+                json={"messages": [user_message(text_block("fail"))], "session_id": "oms-fail"},
+            )
+            assert failed.status_code == 200
+            failed_run_id = failed.json()["run_id"]
+            wait_for_run(client, failed_run_id, "failed")
+
+            hold_control = StreamControl()
+            factory.control = hold_control
+            hold = client.post(
+                "/runs",
+                json={"messages": [user_message(text_block("hold"))], "session_id": "oms-hold"},
+            )
+            assert hold.status_code == 200
+            hold_run_id = hold.json()["run_id"]
+            assert hold_control.started.wait(timeout=5)
+            conflict = client.post(
+                "/runs",
+                json={"messages": [user_message(text_block("blocked"))], "session_id": "oms-hold"},
+            )
+            assert conflict.status_code == 409
+            hold_control.release.set()
+            wait_for_run(client, hold_run_id, "succeeded")
+
+            lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            records = [json.loads(line) for line in lines]
+            by_run = {item["run_id"]: item for item in records}
+            assert set(by_run) == {text_run_id, files_run_id, failed_run_id, hold_run_id}
+            assert len(records) == 4
+
+            text_rec = by_run[text_run_id]
+            assert text_rec["event"] == "run_created"
+            assert text_rec["session_id"] == text_session
+            assert text_rec["workflow"] is None
+            assert text_rec["files"] == []
+            assert isinstance(text_rec["created_at"], str)
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text_rec["created_at"])
+            assert "prompt" not in text_rec and "messages" not in text_rec and "result" not in text_rec
+
+            files_rec = by_run[files_run_id]
+            assert files_rec["session_id"] == files_session
+            assert files_rec["files"] == [
+                {"name": "invoice_20260717120000.pdf", "path": artifact_path},
+                {
+                    "name": "tracking_20260717120001.pdf",
+                    "path": "/artifacts/uploads/tracking_20260717120001.pdf",
+                },
+            ]
+
+            # Failed terminal status does not remove or duplicate the create index.
+            assert by_run[failed_run_id]["event"] == "run_created"
+            assert sum(1 for item in records if item["run_id"] == failed_run_id) == 1
 
 
 def _check_workflow_api(tmp: str) -> None:

@@ -58,12 +58,12 @@ def _check_resources_and_ledger(tmp: str) -> None:
         snapshot = resources.runs.get_run("run-1")
         assert snapshot.status == "succeeded"
         assert snapshot.reply == "ok"
-        # Fresh schema: UTC ISO-8601 millisecond timestamps.
-        assert _is_utc_iso_millisecond(snapshot.created_at)
-        assert _is_utc_iso_millisecond(snapshot.updated_at)
+        # Fresh schema: China local time YYYY-MM-DD HH:MM:SS.
+        assert _is_china_local_time(snapshot.created_at)
+        assert _is_china_local_time(snapshot.updated_at)
         run_events = resources.runs.get_run_events("run-1")
         assert [event.event_type for event in run_events] == ["status", "status", "assistant_message", "status"]
-        assert all(_is_utc_iso_millisecond(event.created_at) for event in run_events)
+        assert all(_is_china_local_time(event.created_at) for event in run_events)
         assert run_events[2].raw["type"] == "updates"
         latest_content = resources.runs.get_latest_content_event("run-1")
         assert latest_content is not None
@@ -233,11 +233,11 @@ def _check_model_usage_aggregation(tmp: str) -> None:
         assert latest_after is None
 
 
-_UTC_ISO_MS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+_CHINA_LOCAL_TIME = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 
-def _is_utc_iso_millisecond(value: str) -> bool:
-    return _UTC_ISO_MS.match(value) is not None
+def _is_china_local_time(value: str) -> bool:
+    return _CHINA_LOCAL_TIME.match(value) is not None
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from integrations.artifacts import clean_filename, make_timestamped_name
 from runtime.execution import HarnessRuntime, create_harness
+from runtime.oms_log import append_run_created_log
 from runtime.resources import AgentResources, ResourceConfig
 
 
@@ -114,6 +115,17 @@ def create_app(
         except Exception:
             _release_session_run(app, session_id)
             raise
+
+        # Best-effort OMS index: never block a successfully created run.
+        try:
+            append_run_created_log(
+                run_id=run_id,
+                session_id=session_id,
+                workflow=request.workflow,
+                messages=messages,
+            )
+        except Exception:
+            pass
 
         worker = threading.Thread(
             target=_run_background,
