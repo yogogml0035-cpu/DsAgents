@@ -80,7 +80,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 精确 5 工具名 |
 | `tests/test_run_ledger.py` | `run()` | 资源、`/memories/AGENTS.md` seed/不覆盖、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
 | `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility`、`StructuredOutputRecovery` 文本 JSON 恢复 / 校验失败 `jump_to: model` / 耗尽 `jump_to: end`、空 data 壳纠错、artifact 归一、七类事件、Philips `structured_response` 成功/缺失/`input_problems` |
-| `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞等 HTTP 契约 |
+| `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞、OMS `run_created` JSONL 索引等 HTTP 契约 |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具裁剪/无 SubAgent、Tecan 两个 SubAgent、主/Sub middleware 差异（Sub **4** 个、主含 Memory）、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
 | `tests/test_tecan_import.py` | `run()` | Tecan A/B 裁决、`input_problems`、join、币种和工作簿 |
@@ -97,7 +97,7 @@ python -m tests.test_minimax_cache_baseline
 ### 1. Run / HTTP / ledger
 
 - `test_run_ledger` 断言 `RunSnapshot.workflow`、解析后的 `result`、终态 `status.payload.result` 和重开 SQLite 后的持久化结果。
-- `test_api` 覆盖四个端点、增量轮询、`latest_content_event`、usage 计价、启动恢复和 cancel 全出口。
+- `test_api` 覆盖四个端点、增量轮询、`latest_content_event`、usage 计价、启动恢复、cancel 全出口，以及 OMS `oms_log.log`：每个成功创建的 run 恰好一行、`/upload`/422/409 不写、failed 不丢索引。
 - Philips workflow 覆盖：未知 workflow `422`、非空 `session_id` `422`、每次服务端生成不同 session、GET 顶层与 `run` 快照同时暴露 `workflow` / `result`。
 - `result.outcome=input_problems` 仍断言 `run.status=succeeded`；结构化结果缺失则断言 `failed`。
 - 启动恢复：遗留 `queued`/`running`/`cancelling` 经 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 变为 `failed`，错误文案 `"执行已中断，请重试"`。

@@ -51,7 +51,7 @@ last_mapped_commit: 28534a9
 
 - **源码顶层**（安装根 = `backend/`）：
   - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）；端点 `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`
-  - `runtime/` — 运行时：`agent.py`（Brain/工厂/SubAgent 装配）、`middleware.py`（可复用 middleware）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）
+  - `runtime/` — 运行时：`agent.py`（Brain/工厂/SubAgent 装配）、`middleware.py`（可复用 middleware）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）、`oms_log.py`（HTTP run 创建 JSONL 检索索引）
   - `integrations/` — 外部集成：`artifacts.py`（路径/JSON）、`mineru.py`（解析与解压）
   - `skills/` — 内置 Skill 包：`philipswgqinboundrecognition/`（`SKILL.md`、`schema.py`、`scripts/tools.py`）与 `tecanimport/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
 - **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Philips 打包 `SKILL.md`，Tecan 另打包 `references/*.md` / `assets/*`。
@@ -169,8 +169,9 @@ last_mapped_commit: 28534a9
 
 ## Logging / Observability conventions
 
-- **无标准 logging 门禁**：运行时不以 `logging` 模块作为主观测面；观测走 **run 事件账本**（append-only `run_events` + `runs` 快照）。
-- **事件写入**：一律经 `SqliteRunLedger.emit_run_event` / `emit_run_status`；时间戳 UTC ISO-8601 毫秒（`...Z`）。
+- **主观测面仍是 run 事件账本**：运行时不以 Python `logging` 作为主路径；完整执行过程走 **append-only `run_events` + `runs` 投影快照**。
+- **OMS 检索索引（辅助）**：`runtime/oms_log.py` 在 HTTP `POST /runs` **成功 `create_run` 之后** best-effort 追加一条 JSONL 到 `backend/log/oms_log.log`（`event=run_created`：时间、`run_id`、`session_id`、`workflow`、messages 内 artifact 的 basename + 虚拟 path）。供运维按时间/文件名主体 grep；**不是**第 8 类 run event；不含 prompt / thinking / 工具 raw / 业务 result。写失败不得影响已创建 run 的 HTTP 响应。`/upload`、422、409 不写。程序内 `execute_run` 不经此路径。
+- **事件写入**：一律经 `SqliteRunLedger.emit_run_event` / `emit_run_status`；时间戳为中国时区本地时间 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。
 - **事件职责**：
   - `status` — 状态机迁移
   - `tool_execution` — ToolTelemetry / updates 派生的工具调用与结果摘要

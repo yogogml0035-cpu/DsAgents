@@ -94,6 +94,7 @@ POST /runs({workflow?, messages, session_id?})
   → 通用路径 session_id 缺省则 uuid4.hex；run_id 始终服务端生成
   → _acquire_session_run（冲突 409）
   → runs.create_run(..., workflow, status=queued)   # 同时写 status 事件
+  → append_run_created_log → backend/log/oms_log.log（JSONL；best-effort，失败不挡 run）
   → daemon Thread → harness.execute_run(..., workflow=workflow)
   → 立即返回 {run_id, session_id, status:"queued"}
 
@@ -332,7 +333,7 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 | `data/artifacts/downloads/` | MinerU 与 Tecan 业务 JSON/Excel |
 | `data/internal/run-events/` | 事件大 payload spill |
 
-`SqliteRunLedger` 每次方法新开 `sqlite3.connect`；fresh schema，无迁移。时间戳 UTC ISO-8601 毫秒（如 `2026-07-13T08:18:59.250Z`）。
+`SqliteRunLedger` 每次方法新开 `sqlite3.connect`；fresh schema，无迁移。时间戳为中国时区（UTC+8）本地时间（如 `2026-07-17 12:01:59`）。
 
 ### 并发与生命周期
 

@@ -5,9 +5,12 @@ import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+# 中国标准时间（UTC+8，无夏令时）；库内时间字段统一按此时区写入。
+_CHINA_TZ = timezone(timedelta(hours=8))
 
 
 # run 是唯一执行/查询单位。queued → running → succeeded|failed|cancelled；
@@ -465,6 +468,5 @@ def _usage_int(value: Any) -> int:
 
 
 def _now_text() -> str:
-    # UTC ISO-8601 毫秒时间（fresh schema，无迁移、无本地时区转换）。
-    now = datetime.now(timezone.utc)
-    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+    # 中国时区本地时间：YYYY-MM-DD HH:MM:SS（如 2026-07-17 12:01:59）。
+    return datetime.now(_CHINA_TZ).strftime("%Y-%m-%d %H:%M:%S")

@@ -22,7 +22,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 | 方法 / 路径 | 入参 | 行为摘要 | 主要状态码 |
 |---|---|---|---|
-| `POST /runs` | `RunRequest`：`workflow?`、`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；Philips workflow 强制新 `session_id`；写 ledger；daemon 线程执行 | `200` queued；`409` session 冲突；校验失败 `422` |
+| `POST /runs` | `RunRequest`：`workflow?`、`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；Philips workflow 强制新 `session_id`；写 ledger；best-effort 追加 `backend/log/oms_log.log`（`run_created` JSONL 索引）；daemon 线程执行 | `200` queued；`409` session 冲突；校验失败 `422` |
 | `GET /runs/{run_id}` | query `after_event_id?` | run 快照 + 顶层 `workflow`/`result` + 增量 events + `latest_content_event` + `usage` | `200`；`404` 未知 run |
 | `POST /runs/{run_id}/cancel` | path `run_id` | 投影 `cancelling` 并 `harness.request_cancel`；未进入执行则直接 `cancelled` | `202` cancelling；`200` 已取消中；`409` 终态；`404` 未知 |
 | `POST /upload` | multipart 字段 `files`（可多文件） | 落到 `artifacts/uploads/`，返回虚拟路径 | `200` `files[]` |
@@ -32,9 +32,10 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 - **无** SSE / `text/event-stream`；客户端靠轮询 `after_event_id`。
 - `after_event_id` 只过滤 `events[]`；`latest_content_event` 与 `usage` 始终为当前全量值。
 - **无** CORS 中间件。
-- 时间字段：UTC ISO-8601 毫秒（ledger）。
+- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（ledger）。
 - 取消不回滚已生成文件，不跨进程强杀 worker。
 - 启动 lifespan：`fail_incomplete_runs("执行已中断，请重试")` 清理上次进程遗留非终态 run。
+- OMS 索引：仅 `create_run` 成功后写一条不可变 JSONL；`/upload` 与非法/冲突请求不写；终态 failed/cancelled 不删不补写。
 
 #### `RunRequest` 约束
 

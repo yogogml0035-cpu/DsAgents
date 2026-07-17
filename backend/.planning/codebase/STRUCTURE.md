@@ -15,12 +15,14 @@ backend/
 ├── api.py                              # FastAPI HTTP：upload / runs / cancel
 ├── pyproject.toml                      # 包名 dsagents；setuptools 布局
 ├── uv.lock
+├── log/                                # 运行时生成：oms_log.log（OMS run 检索索引，非 run_events）
 ├── runtime/
 │   ├── __init__.py                     # 稳定导出：Resources / harness / ledger
 │   ├── agent.py                        # Brain Protocol、工厂、SubAgent 装配
 │   ├── middleware.py                   # runtime middleware 与兼容性 hook
 │   ├── execution.py                    # HarnessRuntime.execute_run / cancel
 │   ├── observability.py                # chunk → 载荷纯函数
+│   ├── oms_log.py                      # POST /runs 成功 create 后 JSONL 摘要索引
 │   ├── resources.py                    # AgentResources + ResourceConfig + CompositeBackend
 │   ├── runs.py                         # SqliteRunLedger、RunEvent、RunSnapshot
 │   └── tools.py                        # ToolCatalog + default_tool_catalog()
@@ -84,7 +86,8 @@ backend/
 | 路径 | 用途 |
 |------|------|
 | `backend/api.py` | 唯一 HTTP 入口模块；`create_app` / 模块级 `app` |
-| `backend/runtime/` | 运行时核心：执行、资源、事件账本、工具目录、Brain 装配、middleware、可观测提取 |
+| `backend/runtime/` | 运行时核心：执行、资源、事件账本、OMS 索引日志、工具目录、Brain 装配、middleware、可观测提取 |
+| `backend/log/` | 运行时生成：`oms_log.log`（按时间/文件名检索 run；非 git 源码） |
 | `backend/integrations/` | 与外部系统/路径契约的通用能力（artifact FS、MinerU HTTP），不含业务裁决 |
 | `backend/skills/` | 内置 Agent Skills：指令（`SKILL.md`）、字段/规则参考、模板、可调用 scripts |
 | `backend/skills/*/scripts/` | 业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
@@ -215,6 +218,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | `runtime/observability.py` | chunk → usage/thinking/text/assistant/tool payload 纯函数 | I/O、run 状态 |
 | `runtime/resources.py` | 三库 + CompositeBackend 装配与 handbook 种子 | run 事件语义 |
 | `runtime/runs.py` | append-only `run_events` + `runs` 投影、usage 聚合、启动清理 | 模型调用 |
+| `runtime/oms_log.py` | HTTP `create_run` 后 best-effort JSONL 索引（`run_created`） | run_events、业务结果、查询 API |
 | `runtime/tools.py` | `ToolCatalog` 与 5 工具静态注册 | 工具实现体 |
 | `integrations/artifacts.py` | `/artifacts/` 路径安全、命名、JSON 写入 helper | 业务 schema |
 | `integrations/mineru.py` | MinerU 解析/解压工具与 progress 事件 | run ledger |

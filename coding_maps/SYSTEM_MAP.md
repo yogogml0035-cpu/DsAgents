@@ -165,7 +165,7 @@ Tecan（通用路径 + Skill 驱动）
 - Philips 终态业务 JSON 从 GET 顶层 `result`（或 `run.result`）读取，**不解析** `reply`。
 - Philips `result` 固定 `{"outcome":"success|partial_success|input_problems","data":...|null,"problems":[...]}`；英文字段名；与 run 终态关系见下表。
 - `artifact` block 是项目 API 语义，进入 Brain 前转为文本路径提示，再由 agent 决定 `read_file` / `parse_documents`。
-- 当前**无**鉴权、**无** CORS、**无** SSE、**无**独立文件下载 HTTP（产物靠 `/artifacts/...` 虚拟路径 + 共享磁盘）；时间字段 UTC ISO-8601 毫秒。
+- 当前**无**鉴权、**无** CORS、**无** SSE、**无**独立文件下载 HTTP（产物靠 `/artifacts/...` 虚拟路径 + 共享磁盘）；时间字段为中国时区本地时间 `YYYY-MM-DD HH:MM:SS`。
 - 启动：`cd backend` 后 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`（或仓库 `scripts/start-backend.ps1`）。
 - `create_app(*, resource_config=None, harness_factory=create_harness)` 支持测试注入。
 
@@ -222,7 +222,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 | 文件 / 目录 | 通道 | 写入方 |
 |-------------|------|--------|
-| `data/dsagents_runs.db` | run ledger | `SqliteRunLedger`（fresh schema，无迁移；UTC ISO-8601 毫秒） |
+| `data/dsagents_runs.db` | run ledger | `SqliteRunLedger`（fresh schema，无迁移；中国时区 `YYYY-MM-DD HH:MM:SS`） |
 | `data/dsagents_checkpoints.db` | LangGraph checkpointer | `SqliteSaver`（`thread_id=session_id`） |
 | `data/dsagents_store.db` | LangGraph store | `SqliteStore`（`namespace=("dsagents",)`） |
 | `data/artifacts/uploads/` | 上传源 | `POST /upload` |

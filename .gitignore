@@ -18,3 +18,4 @@ backend/.env
 backend/dsagents.egg-info/
 backend/tests/tests_file/
 .playwright-mcp/
+backend/log/

@@ -25,7 +25,7 @@ HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`p
 - `after_event_id` **只裁剪** `events[]`，不影响 `latest_content_event` 与顶层 `usage`。
 - 事件类型固定 7 类：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`（`model_usage` 不计入 `latest_content_event`）。
 - 派生通道：`messages` → usage/thinking/text_delta；`custom` → tool_execution（`ToolTelemetry`）+ tool_progress（MinerU）；`updates` → assistant_message / tool_execution / 可选 `structured_response`。SubAgent 文本 token 不进公开 thinking/text；其 `model_usage` 仍计入。
-- 时间字段：UTC ISO-8601 毫秒。当前**无**鉴权、**无** CORS。
+- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。当前**无**鉴权、**无** CORS。
 - 启动 lifespan：装配资源 → `fail_incomplete_runs("执行已中断，请重试")`。
 
 **Philips `result.outcome` 与 run 终态：**
@@ -131,7 +131,7 @@ brain.stream(
 | `resources.checkpointer` | `SqliteSaver` | `data/dsagents_checkpoints.db`（`thread_id=session_id`） |
 | `resources.store` | `SqliteStore` | `data/dsagents_store.db`（`namespace=("dsagents",)`） |
 
-- fresh schema，无迁移；`runs` 保存可选 `workflow` / `result_json`；UTC ISO-8601 毫秒；大 payload 外溢 `data/internal/run-events/`（默认 `max_inline_bytes=262_144`）。
+- fresh schema，无迁移；`runs` 保存可选 `workflow` / `result_json`；中国时区本地时间 `YYYY-MM-DD HH:MM:SS`；大 payload 外溢 `data/internal/run-events/`（默认 `max_inline_bytes=262_144`）。
 - 三库互不共享连接，无跨库事务。表结构与 `CompositeBackend` 路由见 backend ARCHITECTURE / STRUCTURE。
 
 ### 5.2 Artifacts
