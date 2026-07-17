@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: 28534a9
+last_mapped_commit: d012362
 ---
 
 # Technology Stack
 
-**Analysis Date:** 2026-07-16
+**Analysis Date:** 2026-07-17
 
 > 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；配置键来自 `backend/.env.example` 与代码默认值。运行命令以仓库 `scripts/start-backend.ps1` 与测试默认值为准。
 
@@ -42,6 +42,8 @@ last_mapped_commit: 28534a9
 | 默认监听 | `0.0.0.0:8500` | `scripts/start-backend.ps1`；测试默认 `http://127.0.0.1:8500` |
 | 环境加载 | `python-dotenv` 读 `backend/.env` | `runtime/agent.py`、`integrations/mineru.py` 中 `BACKEND_ENV_PATH` + `load_dotenv` |
 | 协作取消 | LangGraph `RunControl` + `GraphDrained` | `runtime/execution.py` |
+| 时间戳 | 中国时区 UTC+8 本地格式 `YYYY-MM-DD HH:MM:SS` | `runtime/runs.py` `_CHINA_TZ` / `_now_text`；`runtime/oms_log.py` 同约定 |
+| OMS 索引日志 | 创建 run 成功后 best-effort 追加 JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log`；`api.py` `POST /runs` |
 
 数据目录固定为 `backend/data/`（相对 `backend/` 源码根，与 CWD 无关），由 `ResourceConfig` 定义：
 
@@ -54,6 +56,12 @@ last_mapped_commit: 28534a9
 | `artifacts_dir` | `data/artifacts/` | 上传与下载文件落盘 |
 | `run_events_dir` | `data/internal/run-events/` | 超阈值事件外置 |
 | `skills_dir` | `backend/skills/` | Skill 只读挂载源 |
+
+OMS 日志路径（锚定 `backend/`，与 CWD 无关，**不在** `data/` 下）：
+
+| 路径 | 用途 |
+|---|---|
+| `backend/log/oms_log.log` | `DEFAULT_OMS_LOG_PATH`；`run_created` JSONL 运维索引 |
 
 ## Frameworks
 
@@ -109,6 +117,7 @@ init_chat_model(
 | `/artifacts/`、`/large_tool_results/` | `FilesystemBackend` → `data/artifacts/` | `virtual_mode=True` |
 | `/skills/` | `FilesystemBackend` → `backend/skills/` | 只读意图；`FilesystemPermission` deny write `/skills/**` |
 | `/memories/` | `StoreBackend` | 首次写入 `RUNTIME_AGENTS_BASELINE` 到 `/memories/AGENTS.md` |
+| OMS JSONL | 标准库 `json` + 文件 append | **非** SQLite；与 `run_events` 观测路径分离 |
 
 ### 文档 / 外部数据访问
 
@@ -190,6 +199,8 @@ init_chat_model(
 | `RUNTIME_AGENTS_PATH` | `"/memories/AGENTS.md"` | `runtime/resources.py` |
 | `max_inline_bytes` | `262_144`（ledger 事件内联阈值） | `runtime/runs.py` |
 | `RUN_STATUSES` | queued/running/succeeded/failed/cancelled/cancelling | `runtime/runs.py` |
+| `_CHINA_TZ` | `timezone(timedelta(hours=8))` | `runtime/runs.py`、`runtime/oms_log.py` |
+| `DEFAULT_OMS_LOG_PATH` | `backend/log/oms_log.log` | `runtime/oms_log.py` |
 | `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES` | `2` | `runtime/middleware.py` |
 | `NO_PROGRESS_WINDOW` | `3` | `runtime/middleware.py` / `runtime/agent.py` |
 
@@ -207,9 +218,16 @@ Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `gener
 
 ### Middleware 栈（运行时）
 
-主 Agent 经 `runtime_middlewares(memory_backend=...)`（`runtime/middleware.py`）组装，含 `MemoryMiddleware`（`/memories/AGENTS.md`）与约 4 个运行时中间件（`ToolTelemetry`、`NoProgressMiddleware` 等）；Philips workflow 额外注入 `StructuredOutputRecovery` + `StructuredOutputCompatibility`。Tecan SubAgent 各自安装不含 memory 的 runtime middleware（声明式 SubAgent 不继承主 Agent middleware）。
+`runtime_middlewares(*, memory_backend=...)`（`runtime/middleware.py`）基线四件套：
 
-`StructuredOutputRecovery`：`after_model` + `jump_to: "model"` 有界重试；`can_jump_to` 含 `"end"`，达 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
+1. `StructuredOutputRecovery`
+2. `ToolTelemetry`
+3. `NoProgressMiddleware`
+4. `StructuredOutputCompatibility`
+
+主 Agent 传入 `memory_backend=self.resources.backend` 时再追加 `MemoryMiddleware`（`/memories/AGENTS.md`，约 5 个）；Tecan SubAgent 调用 `runtime_middlewares()` **不含** memory（各 4 个）。声明式 SubAgent 不继承主 Agent middleware。Philips workflow 在 `DeepAgentsBrainFactory.create` 中确保 Recovery/Compatibility 存在（Recovery 插到列表首位，使 `after_model` 在同类钩子中后执行）。
+
+`StructuredOutputRecovery`：`after_model` + `jump_to: "model"` 有界重试；`can_jump_to` 含 `"end"`，达 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。空 data 壳耗尽 → all-null skeleton + `partial_success`；其它失败耗尽 → 无 `structured_response`（可 `failed`）。
 
 ## Platform Requirements
 
@@ -219,7 +237,7 @@ Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `gener
 | Python | `>=3.11,<4.0`（本机常见 3.12.x） |
 | 包安装 | 在 `backend/` 执行 `uv sync`，以 `uv.lock` 为准 |
 | 启动 | `cd backend && uv run uvicorn api:app --host 0.0.0.0 --port 8500`，或仓库根 `scripts/start-backend.ps1`（可新开窗口；`-Port` 默认 8500） |
-| 磁盘 | 可写 `backend/data/`（SQLite 三库 + artifacts + 可选 run-events） |
+| 磁盘 | 可写 `backend/data/`（SQLite 三库 + artifacts + 可选 run-events）；可写 `backend/log/`（OMS JSONL） |
 | 网络 | 出站访问 MiniMax（`MINIMAX_BASE_URL`）与 MinerU（`MINERU_BASE_URL`）；Oracle 可选 |
 | Oracle thick | 若设 `ORACLE_CLIENT_LIB_DIR`，需本机 Instant Client 动态库；缺失/失败时 Philips 工具以 `problems` 降级，不崩溃进程 |
 | 前端 | 本子项目无内置 UI；客户端轮询 HTTP（无 SSE） |
@@ -229,16 +247,17 @@ Philips workflow 下 Brain 排除帝肯工具（`save_tecan_extraction` / `gener
 
 ```text
 backend/
-  api.py                 # FastAPI 入口与 usage 估价
+  api.py                 # FastAPI 入口、usage 估价、OMS 写点
   pyproject.toml / uv.lock
   .env.example
-  runtime/               # agent、execution、middleware、observability、resources、runs、tools
+  runtime/               # agent、execution、middleware、observability、oms_log、resources、runs、tools
   integrations/          # artifacts 路径约定、mineru 客户端
   skills/
     philipswgqinboundrecognition/  # workflow + schema + Oracle/Tracking tool
     tecanimport/                   # Excel 生成 + 抽取/一站式 tool + assets/references
   tests/                 # assert 脚本，非 pytest
   data/                  # 运行时生成（通常不入库）
+  log/                   # OMS JSONL（oms_log.log）
 ```
 
 ## Analysis 边界

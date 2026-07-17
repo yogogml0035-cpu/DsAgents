@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: 28534a9
+last_mapped_commit: d012362
 ---
 
 # Integrations
 
-**Analysis Date:** 2026-07-16
+**Analysis Date:** 2026-07-17
 
 > 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部 `allow_local=True` 可供测试/程序内路径，业务 Skill 工具只接受显式 artifact 路径。
 
@@ -22,7 +22,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 | 方法 / 路径 | 入参 | 行为摘要 | 主要状态码 |
 |---|---|---|---|
-| `POST /runs` | `RunRequest`：`workflow?`、`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；Philips workflow 强制新 `session_id`；写 ledger；best-effort 追加 `backend/log/oms_log.log`（`run_created` JSONL 索引）；daemon 线程执行 | `200` queued；`409` session 冲突；校验失败 `422` |
+| `POST /runs` | `RunRequest`：`workflow?`、`session_id?`、`messages[]`（`text` / `artifact` block） | 分配 `run_id`；Philips workflow 强制新 `session_id`；写 ledger；**best-effort** 追加 `backend/log/oms_log.log`（`run_created` JSONL 索引）；daemon 线程执行 | `200` queued；`409` session 冲突；校验失败 `422` |
 | `GET /runs/{run_id}` | query `after_event_id?` | run 快照 + 顶层 `workflow`/`result` + 增量 events + `latest_content_event` + `usage` | `200`；`404` 未知 run |
 | `POST /runs/{run_id}/cancel` | path `run_id` | 投影 `cancelling` 并 `harness.request_cancel`；未进入执行则直接 `cancelled` | `202` cancelling；`200` 已取消中；`409` 终态；`404` 未知 |
 | `POST /upload` | multipart 字段 `files`（可多文件） | 落到 `artifacts/uploads/`，返回虚拟路径 | `200` `files[]` |
@@ -32,10 +32,10 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 - **无** SSE / `text/event-stream`；客户端靠轮询 `after_event_id`。
 - `after_event_id` 只过滤 `events[]`；`latest_content_event` 与 `usage` 始终为当前全量值。
 - **无** CORS 中间件。
-- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（ledger）。
+- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 日志一致）。
 - 取消不回滚已生成文件，不跨进程强杀 worker。
 - 启动 lifespan：`fail_incomplete_runs("执行已中断，请重试")` 清理上次进程遗留非终态 run。
-- OMS 索引：仅 `create_run` 成功后写一条不可变 JSONL；`/upload` 与非法/冲突请求不写；终态 failed/cancelled 不删不补写。
+- OMS 索引：仅 `create_run` 成功后写一条不可变 JSONL；`/upload` 与非法/冲突请求不写；终态 failed/cancelled 不删不补写；写失败吞掉异常，**不**阻塞已成功创建的 run。
 
 #### `RunRequest` 约束
 
@@ -158,9 +158,39 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `dsagents_runs.db` | run 投影 + 事件索引 | `SqliteRunLedger` |
 | `dsagents_store.db` | 跨 run store（`/memories/`） | `SqliteStore` |
 | `dsagents_checkpoints.db` | LangGraph checkpoint（`thread_id`=`session_id`） | `SqliteSaver` |
-| `data/internal/run-events/` | 超阈值事件 JSON 外置 | ledger `max_inline_bytes` |
+| `data/internal/run-events/` | 超阈值事件 JSON 外置 | ledger `max_inline_bytes`（默认 `262_144`） |
 
 `session_id` **不是**独立 REST 资源：仅用于 checkpoint `thread_id` 与进程内单飞锁。
+
+时间戳：`runtime/runs.py` 使用 `_CHINA_TZ = timezone(timedelta(hours=8))`，`_now_text()` 输出 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。`runs.created_at` / `updated_at` 与 `run_events.created_at` 均按此写入。
+
+---
+
+### 7. OMS 日志文件（运维索引，非 run 观测）
+
+| 项 | 事实 |
+|---|---|
+| 模块 | `runtime/oms_log.py` |
+| 默认路径 | `DEFAULT_OMS_LOG_PATH` = `backend/log/oms_log.log`（锚定 `backend/`，与 CWD 无关） |
+| 格式 | JSON Lines（每行一个 JSON 对象 + `\n`） |
+| 事件类型 | 仅 `event: "run_created"`（创建时一条，append-only，不更新、不删除） |
+| 触发点 | `api.py` `POST /runs`：`create_run` 成功后 `append_run_created_log(...)` |
+| 语义 | Best-effort 运维 grep 索引（按时间 / 文件名 stem）；**不是** `run_events` 可观测路径的一部分 |
+| 失败策略 | `try/except Exception: pass`，永不阻塞已成功创建的 run |
+| 不写场景 | `/upload`；校验失败；session `409` 冲突；worker 终态 failed/cancelled **不**补写 |
+
+**记录字段（`append_run_created_log`）：**
+
+| 字段 | 说明 |
+|---|---|
+| `event` | 固定 `"run_created"` |
+| `created_at` | 中国时区本地 `YYYY-MM-DD HH:MM:SS`（与 ledger 一致） |
+| `run_id` | 本次 run |
+| `session_id` | 本次 session |
+| `workflow` | 请求 workflow 或 `null` |
+| `files` | 自 messages 抽取的 artifact 列表：`[{name, path}, ...]`（保序，不去重） |
+
+辅助：`extract_run_files(messages)` 仅收集 `type == "artifact"` 的 content block。
 
 ---
 
@@ -232,6 +262,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 Client
   │  POST /upload  ──►  disk: data/artifacts/uploads  ──►  /artifacts/uploads/...
   │  POST /runs    ──►  SqliteRunLedger (queued)
+  │                     best-effort append backend/log/oms_log.log (run_created)
   │                     daemon thread → HarnessRuntime.execute_run
   │                         │
   │                         ├─ DeepAgentsBrain + MiniMax (Anthropic-compatible)
@@ -241,7 +272,7 @@ Client
   │                         │     lookup_philips... ──xlsx + optional Oracle──► master fields
   │                         │     save_tecan_extraction / generate_tecan_import ──xlsx/json──► downloads
   │                         ├─ checkpoint/store SQLite (session_id = thread_id)
-  │                         └─ emit events → ledger
+  │                         └─ emit events → ledger (UTC+8 timestamps)
   │  GET /runs/{id}  ◄──  snapshot + events + usage
   └  POST /runs/{id}/cancel ──► RunControl.drain / cancelled
 ```
@@ -253,6 +284,7 @@ Client
 - 无 session CRUD REST、无 SSE 推送、无内置对象存储（S3 等）。
 - 无独立“文件下载”HTTP 路由：产物靠虚拟路径 + 共享磁盘/后续封装。
 - Oracle 与 MinerU **不**在 lifespan 做健康检查；失败发生在工具调用时。
+- OMS JSONL **不是** HTTP 可查询 API，不替代 `GET /runs/{run_id}`。
 - 密钥不进 ledger 事件正文设计目标；文档与代码映射不记录真实密钥。
 - 无 webhook 入站/出站、无 Redis/Postgres 等外部消息或关系库。
 

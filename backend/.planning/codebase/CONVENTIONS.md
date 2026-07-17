@@ -1,27 +1,27 @@
 ---
-last_mapped_commit: 28534a9
+last_mapped_commit: d012362
 ---
 
 # Coding Conventions
 
-**Analysis Date:** 2026-07-16
+**Analysis Date:** 2026-07-17
 
 > 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准，不以注释或外部文档臆测。
 
 ## Naming Patterns
 
-- **模块 / 函数 / 方法**：`snake_case`（如 `create_harness`、`execute_run`、`default_tool_catalog`、`parse_documents`、`runtime_middlewares`、`fail_incomplete_runs`）。
+- **模块 / 函数 / 方法**：`snake_case`（如 `create_harness`、`execute_run`、`default_tool_catalog`、`parse_documents`、`runtime_middlewares`、`fail_incomplete_runs`、`append_run_created_log`）。
 - **类**：`PascalCase`（如 `HarnessRuntime`、`SqliteRunLedger`、`AgentResources`、`ToolCatalog`、`DeepAgentsBrainFactory`、`StructuredOutputRecovery`、`PhilipsWgqRecognitionResult`）。
-- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`PHILIPS_MINIMAL_DATA_SKELETON`、`SKILLS_SOURCE`、`_PHILIPS_EXCLUDED_TOOLS`）。
-- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`）。测试内部检查函数同惯例：`_check_*`。
+- **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`PHILIPS_MINIMAL_DATA_SKELETON`、`SKILLS_SOURCE`、`_PHILIPS_EXCLUDED_TOOLS`、`DEFAULT_OMS_LOG_PATH`）。
+- **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`、`_now_text`）。测试内部检查函数同惯例：`_check_*`。
 - **类型别名**：`ToolHandler = Callable[..., Any]`（`runtime/tools.py`）；协议名用名词：`Brain`、`BrainFactory`。
 - **Skill / 包标识符**：Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；`SKILL.md` frontmatter 名可使用连字符（`philips-wgq-inbound-recognition`）。声明式 SubAgent 显示名用连字符（`tecan-extractor-a` / `tecan-extractor-b`）。
 - **业务工具函数名**：按实际职责命名。Philips 使用单一查询工具 `lookup_philips_wgq_master_data`；Tecan 保留 `save_tecan_extraction` + `generate_tecan_import`；通用 MinerU 工具为 `parse_documents`、`extract_archives`。
 - **HTTP / 事件字段**：请求与事件 payload 用 `snake_case` JSON 键（`session_id`、`run_id`、`after_event_id`、`input_tokens`、`cache_read_input_tokens`、`structured_response`、`result_json`）。
 - **run 状态字面量**：`queued` / `running` / `succeeded` / `failed` / `cancelling` / `cancelled`（集合 `RUN_STATUSES` 于 `runtime/runs.py`）。
 - **事件类型字面量**（固定 7 种，不可随意扩展）：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
-- **Philips workflow 字面量**：仅 `philips_wgq_inbound_recognition`（`skills/philipswgqinboundrecognition/schema.py` 的 `WORKFLOW`，HTTP `RunRequest.workflow` 同 `Literal`）。
-- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price`、`original_waybill_number` 等），`extra="forbid"`，无中文 JSON alias（见 `schema.py` 中 `_ContractModel` 注释：OMS 中文列名由调用方另行映射）。
+- **Philips workflow 字面量**：仅 `philips_wgq_inbound_recognition`（`skills/philipswgqinboundrecognition` 的 `WORKFLOW`，HTTP `RunRequest.workflow` 同 `Literal`）。
+- **Philips 结构化结果字段**：英文字段名（`product_id`、`currency`、`unit_price`、`original_waybill_number` 等），`extra="forbid"`，无中文 JSON alias（OMS 中文列名由调用方另行映射）。
 
 ## Code Style
 
@@ -42,7 +42,25 @@ last_mapped_commit: 28534a9
 - **依赖注入优于硬编码**：`HarnessRuntime` 构造接收 `resources`、`tools: ToolCatalog`、`brain_factory: BrainFactory`；`create_app` 接收可选 `resource_config` 与 `harness_factory`，便于测试注入 `FakeBrainFactory`。
 - **运行时保持薄**：`HarnessRuntime.execute_run` 只做「规范化 messages → 调 Brain stream → 解析 chunk → 写 run event」。业务规则下沉到 `skills/*/scripts/`，不在 runtime 内建工作流引擎。
 - **工具静态注册**：`default_tool_catalog()` 在 `runtime/tools.py` 用静态 import 注册 **5** 个 callable；新增 Skill 时追加 import + 注册行，不自动扫描、不插件化。
-- **workflow 工具裁剪用 denylist**：Philips 路径用 `_PHILIPS_EXCLUDED_TOOLS` 排除帝肯业务工具（`save_tecan_extraction`、`generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives`，与 `/memories/AGENTS.md` 及 `SKILL.md` 一致；禁止只 allowlist 业务工具导致通用工具从模型工具表消失。
+- **workflow 工具裁剪用 denylist**：Philips 路径用 `_PHILIPS_EXCLUDED_TOOLS` 排除帝肯业务工具（`save_tecan_extraction`、`generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives`，与 `/memories/AGENTS.md` 及 `SKILL.md` 一致；禁止只 allowlist 业务工具导致通用工具从模型工具表消失。实现：
+
+  ```python
+  # runtime/agent.py
+  _PHILIPS_EXCLUDED_TOOLS = frozenset(
+      {
+          "save_tecan_extraction",
+          "generate_tecan_import",
+      }
+  )
+  # workflow == WORKFLOW 时：
+  kwargs["tools"] = [
+      tool
+      for tool in tools
+      if getattr(tool, "__name__", "") not in _PHILIPS_EXCLUDED_TOOLS
+  ]
+  ```
+
+  验证：`cd backend && python -m tests.test_workflow_setup`。
 - **配置键只读 env 名**：代码从 `MINIMAX_*` / `MINERU_*` / `ORACLE_*` 读环境变量；文档与约定只记键名，不写入本地 `.env` 值。
 - **版本锁定**：以 `uv.lock` 与 `pyproject.toml` 下限为准（如 `deepagents>=0.6.12`）；不写面向未来 deepagents 版本的参数 shim。
 - **注释语言**：模块 docstring 与关键业务注释可用简体中文；标识符、API、路径保持英文/原文。
@@ -66,6 +84,7 @@ last_mapped_commit: 28534a9
 
   前提：`cd backend` 或安装后包在 `sys.path`。**没有** `python -m backend.*`。
 - **数据目录锚定** `backend/data/`（`ResourceConfig` 用 `Path(__file__).resolve().parents[1] / "data"`），与 CWD 无关。子路径包括 `dsagents_runs.db`、`dsagents_store.db`、`dsagents_checkpoints.db`、`artifacts/`、`internal/run-events/`。
+- **OMS 索引日志锚定** `backend/log/oms_log.log`（`runtime/oms_log.py` 的 `DEFAULT_OMS_LOG_PATH`），与 CWD 无关。
 - **`runtime/__init__.py`** 只 re-export 稳定入口：`AgentResources`、`ResourceConfig`、`HarnessRuntime`、`create_harness`、`RunEvent`、`RunSnapshot`、`SqliteRunLedger`。
 - **循环依赖处理**：`create_harness` 对 `DeepAgentsBrainFactory` / `default_tool_catalog` 使用函数内 local import；`_extractor` 同理 local import `default_tool_catalog`。
 - **测试包**：`backend/tests/` 含 `__init__.py`，以 `python -m tests.test_xxx` 运行。
@@ -105,6 +124,7 @@ last_mapped_commit: 28534a9
   - pydantic 校验失败 → FastAPI `422`（`extra="forbid"` 拒绝旧字段如单数 `message`；未知 `workflow` 或 Philips workflow 复用非空 `session_id` 同样 `422`）
 - **启动恢复**：lifespan 内 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)`，文案 `"执行已中断，请重试"`，把遗留 `queued`/`running`/`cancelling` 标为 `failed`。
 - **部分失败不抛**：MinerU 多文件解析时单文件失败进入 `failed[]`，整体仍返回结果；全无效输入也不抛，返回空 `succeeded`。
+- **OMS 日志 best-effort，不阻塞**：`POST /runs` 在 `create_run` **成功之后**调用 `append_run_created_log(...)`，外层 `try/except Exception: pass`。写盘失败不得影响已创建 run 的 HTTP 响应、后台线程启动或状态机。`/upload`、422、409 **不写**。程序内 `execute_run` 不经此路径。
 
 ## Type Patterns
 
@@ -139,52 +159,70 @@ last_mapped_commit: 28534a9
 - **结构化输出**：Tecan extractor 使用 `ToolStrategy(ExtractionReference, ...)`；Philips 主 Agent 使用 `ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message, ...)`，Harness 从 `updates` 捕获后再次 Pydantic 校验并投影 `result_json`。
 - **Philips 结构化提交硬约束**：禁止 `data: {}`；`success`/`partial_success` 必须带齐 `shipment`/`header`/`items`（未知填 `null`）；`input_problems` 才允许 `data=null`。Skill 与 `PHILIPS_WORKFLOW_PROMPT` 双写。
 - **智能体可见文案**：system prompt、Skill、`RUNTIME_AGENTS_BASELINE`、工具 docstring/`Annotated` 参数说明、结构化纠错提示统一**简体中文**；代码标识符、工具名、schema 英文字段名、路径与 API 名保持英文。
-- **StructuredOutputRecovery 有界重试（硬约定）**（`runtime/middleware.py`）：
-  - `@hook_config(can_jump_to=["model", "end"])` 必须同时声明 `"end"`。
-  - 解析/校验失败、空文本、或空 `data` 壳：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
-  - 空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示；**不**在 recovery 中编造业务字段。
-  - 达到 `max_retries` 或无法产出 `structured_response` 时显式 `jump_to: "end"`。
-  - **空壳重试耗尽**（Philips schema）：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON。
-  - 其它失败模式仍无 `structured_response` 退出，由 Harness 标 run `failed`。
-  - **禁止**只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
-  - 验证：`cd backend && python -m tests.test_harness`（断言重试封顶与耗尽 `jump_to: "end"`、空壳专用纠错）。
-  - 共享列表顺序只改 `runtime_middlewares()`；Philips 工厂仅在缺失时 `insert(0)` Recovery / append Compatibility，勿破坏「Recovery 在列表最前」约定。
-- **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
-- **Brain stream 契约**（`runtime/execution.py`）：
 
-  ```python
-  brain.stream(
-      {"messages": normalized_messages},
-      config={"configurable": {"thread_id": session_id}},
-      stream_mode=["messages", "custom", "updates"],
-      subgraphs=True,
-      version="v2",
-      control=RunControl(),
-  )
-  ```
+### Middleware 约定
 
-  `artifact` block 进入 Brain 前归一为文本提示 `ARTIFACT_REFERENCE_HINT`；payload **只**含当前请求 `messages[]`。`BrainFactory.create(..., workflow=workflow)` 明确接收可选 workflow；当前固定值仅 `philips_wgq_inbound_recognition`。
+实现集中于 `runtime/middleware.py`，由 `runtime/agent.py` re-export 部分符号；装配入口只有 `runtime_middlewares()`。
+
+| Middleware | 钩子 | 行为 |
+| --- | --- | --- |
+| `StructuredOutputRecovery` | `after_model`（`can_jump_to=["model","end"]`） | 从纯文本 JSON 恢复 `structured_response`；有界重试 |
+| `ToolTelemetry` | `wrap_tool_call` | `started` / `completed` / `error` + `duration_ms` + `agent_name` |
+| `NoProgressMiddleware` | `before_model` | 从**当前消息状态**派生连续 `NO_PROGRESS_WINDOW=3` 次同一 tool+args → `NoProgressLoop`；**不**把计数写在 middleware 实例或 graph state |
+| `StructuredOutputCompatibility` | `wrap_model_call` | ToolStrategy 路径关闭 thinking，原始模型保持 adaptive |
+| `MemoryMiddleware`（仅主 Agent） | deepagents 内置 | 自动加载 `/memories/AGENTS.md`；受限 `RUNTIME_MEMORY_SYSTEM_PROMPT`；`add_cache_control=True` |
+
+- **洋葱顺序**：Recovery 列在列表最前，使其 `after_model` 在 after 钩子链中最后执行，仍可填充 `structured_response`。
+- Philips 工厂仅在列表缺失时 `insert(0)` Recovery / `append` Compatibility；勿破坏「Recovery 在列表最前」。
+- stream writer 安全：`_safe_writer` / MinerU 侧对 `get_stream_writer` 的 `KeyError`/`RuntimeError` 静默降级为 no-op。
+
+### StructuredOutputRecovery（硬约定）
+
+`runtime/middleware.py`：
+
+- `@hook_config(can_jump_to=["model", "end"])` **必须**同时声明 `"end"`。
+- 解析/校验失败、空文本、或空 `data` 壳：`jump_to: "model"`，最多 `max_retries`（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）。
+- 空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示；**不**在 recovery 中编造业务字段。
+- 达到 `max_retries` 时显式 `jump_to: "end"`。
+- **空壳重试耗尽**（Philips schema）：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON；run 可 `succeeded`。
+- **其它失败模式**仍无 `structured_response` 退出，由 Harness 标 run `failed`。
+- **禁止**只返回 `None` 依赖默认边退出——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
+- 验证：`cd backend && python -m tests.test_harness`。
+
+### Brain stream 契约
+
+`runtime/execution.py`：
+
+```python
+brain.stream(
+    {"messages": normalized_messages},
+    config={"configurable": {"thread_id": session_id}},
+    stream_mode=["messages", "custom", "updates"],
+    subgraphs=True,
+    version="v2",
+    control=RunControl(),
+)
+```
+
+- `artifact` block 进入 Brain 前归一为文本提示 `ARTIFACT_REFERENCE_HINT`；payload **只**含当前请求 `messages[]`。
+- `BrainFactory.create(..., workflow=workflow)` 明确接收可选 workflow；当前固定值仅 `philips_wgq_inbound_recognition`。
 - **session_id 角色**：不是持久化对象，只作 LangGraph `thread_id` 与进程内单飞锁键（`app.state.session_locks` + `app.state.active_runs`）。run 是唯一执行与查询单位；`run_events` 为 append-only 事件源，`runs` 为投影快照。
 - **可观察 payload 形状**（`runtime/observability.py`）：`model_usage` 固定键 `model`（常量 `MAIN_AGENT_MODEL = "MiniMax-M3"`）、`scope`、`agent_name`、四类 token 计数；`assistant_message` 可含 `thinking` + `text`。
+- **权限**：`FilesystemPermission(operations=["write"], paths=[...], mode="deny")`；主 Agent deny `/skills/**`，SubAgent deny `/**` 写。
 
 ## Logging / Observability conventions
 
 - **主观测面仍是 run 事件账本**：运行时不以 Python `logging` 作为主路径；完整执行过程走 **append-only `run_events` + `runs` 投影快照**。
-- **OMS 检索索引（辅助）**：`runtime/oms_log.py` 在 HTTP `POST /runs` **成功 `create_run` 之后** best-effort 追加一条 JSONL 到 `backend/log/oms_log.log`（`event=run_created`：时间、`run_id`、`session_id`、`workflow`、messages 内 artifact 的 basename + 虚拟 path）。供运维按时间/文件名主体 grep；**不是**第 8 类 run event；不含 prompt / thinking / 工具 raw / 业务 result。写失败不得影响已创建 run 的 HTTP 响应。`/upload`、422、409 不写。程序内 `execute_run` 不经此路径。
-- **事件写入**：一律经 `SqliteRunLedger.emit_run_event` / `emit_run_status`；时间戳为中国时区本地时间 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。
-- **事件职责**：
+- **时间戳格式**：中国标准时间（UTC+8，无夏令时）本地时间字符串 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。`SqliteRunLedger._now_text` 与 `oms_log._now_text` 共用同一约定（`timezone(timedelta(hours=8))` + `strftime("%Y-%m-%d %H:%M:%S")`）。
+- **OMS 检索索引（辅助）**：`runtime/oms_log.py` 在 HTTP `POST /runs` **成功 `create_run` 之后** best-effort 追加一条 JSONL 到 `backend/log/oms_log.log`（`event=run_created`：`created_at`、`run_id`、`session_id`、`workflow`、messages 内 artifact 的 basename + 虚拟 path）。供运维按时间/文件名主体 grep；**不是**第 8 类 run event；不含 prompt / thinking / 工具 raw / 业务 result。写失败吞掉、**不阻塞**已创建 run。`/upload`、422、409 不写。程序内 `execute_run` 不经此路径。
+- **事件写入**：一律经 `SqliteRunLedger.emit_run_event` / `emit_run_status`。
+- **事件职责**（固定 7 类）：
   - `status` — 状态机迁移
   - `tool_execution` — ToolTelemetry / updates 派生的工具调用与结果摘要
   - `tool_progress` — `parse_documents` / `extract_archives` 经 custom stream 的进度
   - `thinking` / `text_delta` — 主 Agent 流式内容（SubAgent 文本经 `lc_agent_name` 过滤）
   - `assistant_message` — 终态助手消息（可带 `thinking`）
   - `model_usage` — 成本/缓存事实；**不**进入 `latest_content_event`；HTTP 顶层 `usage` 由 `aggregate_model_usage` + `api._usage_summary` 汇总计价
-- **middleware 观测**（实现集中于 `runtime/middleware.py`，由 `runtime/agent.py` re-export 部分符号）：
-  - `ToolTelemetry.wrap_tool_call`：`started` / `completed` / `error` + `duration_ms` + `agent_name`
-  - `NoProgressMiddleware.before_model`：从当前消息状态派生连续 `NO_PROGRESS_WINDOW=3` 次同一 tool+args → `NoProgressLoop`；不把调用历史写入 graph state 或 middleware 实例
-  - `StructuredOutputCompatibility.wrap_model_call`：ToolStrategy 路径关闭 thinking，避免与结构化工具冲突
-  - `StructuredOutputRecovery.after_model`：从纯文本 JSON 恢复 `structured_response`，有界 `jump_to`
-- **stream writer 安全**：`_safe_writer` / MinerU 侧对 `get_stream_writer` 的 `KeyError`/`RuntimeError` 静默降级为 no-op，避免无 graph 上下文时炸工具。
 - **大 payload 外溢**：默认 `max_inline_bytes=262_144`，超限写入 run-events 目录下 JSON，行内留指针；用户可见物仍在 `data/artifacts/{uploads,downloads}/`。
 - **SubAgent 隔离**：SubAgent `messages` 文本不写公开 thinking/text_delta；其 `model_usage` 仍以 `scope="subagent"` 计入。
 
@@ -200,4 +238,4 @@ last_mapped_commit: 28534a9
 - **禁止模式**：不从 `backend.xxx` 导入；不在约定层依赖相对跨包 `from ...` 穿透 Skill 边界以外的随意路径；工具目录不动态 `importlib` 扫描；不重新引入已删除的 session API、SSE 或旧顶层辅助模块。
 
 ---
-*Conventions analysis: 2026-07-16*
+*Conventions analysis: 2026-07-17*

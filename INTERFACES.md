@@ -1,7 +1,7 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单、工具入参）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-16）对齐 backend 事实文档（Analysis Date: 2026-07-16，`last_mapped_commit` 28534a9）：固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
+> 本轮刷新（2026-07-17）对齐 backend 事实文档（Analysis Date: 2026-07-17，`last_mapped_commit` d012362）：固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；HTTP `POST /runs` 在 `create_run` 成功后 **best-effort OMS** 旁路索引（`runtime/oms_log.py` → `backend/log/oms_log.log`，非 `run_events`、无查询 API）；时间字段中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
 
 HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`parse_documents` 的程序内调用为测试便利保留 `allow_local`，不改变对外 API 契约。
 
@@ -11,10 +11,10 @@ HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`p
 
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
-| `POST /runs` | `{"workflow"?: "philips_wgq_inbound_recognition", "session_id"?: str\|null, "messages": [{"role", "content": [text\|artifact block]}...]}`（`extra="forbid"`） | `run_id` 服务端生成；Philips workflow 禁止非空 `session_id` 并始终生成新 session；省略 workflow 时保留通用 session 语义；写 ledger → daemon 执行 | `200 {"run_id","session_id","status":"queued"}`；未知 workflow/非法复用/其它校验失败 `422`；通用 session 冲突 `409` |
+| `POST /runs` | `{"workflow"?: "philips_wgq_inbound_recognition", "session_id"?: str\|null, "messages": [{"role", "content": [text\|artifact block]}...]}`（`extra="forbid"`） | `run_id` 服务端生成；Philips workflow 禁止非空 `session_id` 并始终生成新 session；省略 workflow 时保留通用 session 语义；写 ledger → **best-effort** OMS `run_created` 索引 → daemon 执行 | `200 {"run_id","session_id","status":"queued"}`；未知 workflow/非法复用/其它校验失败 `422`；通用 session 冲突 `409` |
 | `GET /runs/{run_id}` | query `after_event_id: int\|null` | run 快照 + 顶层 `workflow`/解析后的 `result` + 增量 events + 最新内容事件 + 全量 `usage` | `200 {"run","workflow","result","events","latest_content_event","usage"}`；未知 `404`。`run` 快照也含 `workflow` / `result`；无模型调用时 `usage=null` |
 | `POST /runs/{run_id}/cancel` | path `run_id` | 见 §2 | `404` 未知 / `409` 终态 / `200` 已 cancelling\|cancelled / `202` 活跃 drain |
-| `POST /upload` | multipart 字段名 `files`（可多文件） | 同请求共用 `batch_timestamp`；落到 `/artifacts/uploads/<cleaned-stem>_<ts>(_n).ext`；只保存不解析 | `200 {"files":[{"file_path","name","mime_type","size"}]}` |
+| `POST /upload` | multipart 字段名 `files`（可多文件） | 同请求共用 `batch_timestamp`；落到 `/artifacts/uploads/<cleaned-stem>_<ts>(_n).ext`；只保存不解析；**不写** OMS | `200 {"files":[{"file_path","name","mime_type","size"}]}` |
 
 补充约定：
 
@@ -25,7 +25,8 @@ HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`p
 - `after_event_id` **只裁剪** `events[]`，不影响 `latest_content_event` 与顶层 `usage`。
 - 事件类型固定 7 类：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`（`model_usage` 不计入 `latest_content_event`）。
 - 派生通道：`messages` → usage/thinking/text_delta；`custom` → tool_execution（`ToolTelemetry`）+ tool_progress（MinerU）；`updates` → assistant_message / tool_execution / 可选 `structured_response`。SubAgent 文本 token 不进公开 thinking/text；其 `model_usage` 仍计入。
-- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）。当前**无**鉴权、**无** CORS。
+- 时间字段：中国时区（UTC+8）本地时间 `YYYY-MM-DD HH:MM:SS`（如 `2026-07-17 12:01:59`）；`SqliteRunLedger` 与 OMS 日志共用同一约定。当前**无**鉴权、**无** CORS。
+- **OMS 旁路索引**（非 run 观测、非 HTTP 查询面）：`POST /runs` 仅在 `create_run` **成功之后** best-effort 追加 `backend/log/oms_log.log`（JSONL，`event=run_created`：`created_at`、`run_id`、`session_id`、`workflow`、messages 内 artifact basename/path 等）。**不是**第 8 类 `run_events`；**无**查询 API；不含 prompt / thinking / 工具 raw / 业务 `result`。写失败吞异常，**不**阻塞已创建 run 的 `200 queued` 与后台执行。`422` / `409`、`POST /upload`、cancel/终态 **不写**。实现与字段表见 [`INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) **OMS 日志文件**节。
 - 启动 lifespan：装配资源 → `fail_incomplete_runs("执行已中断，请重试")`。
 
 **Philips `result.outcome` 与 run 终态：**
@@ -84,9 +85,10 @@ with AgentResources(ResourceConfig()) as resources:
 ```
 
 - `execute_run(messages, session_id, run_id, workflow=None)` → `Iterator[RunEvent]`；选择 Philips 时 `create_run(..., workflow=...)` 与 execute 参数应一致，并由调用方使用全新 session。
+- **程序内路径不经 OMS**：`append_run_created_log` 仅由 HTTP `POST /runs` 在 `create_run` 成功后触发；直接 `resources.runs.create_run` + `harness.execute_run` **不写** `oms_log.log`。
 - 稳定导出（`runtime/__init__.py`）：`AgentResources`、`ResourceConfig`、`HarnessRuntime`、`create_harness`、`RunEvent`、`RunSnapshot`、`SqliteRunLedger`。
 - 测试注入：`create_app(resource_config=..., harness_factory=...)` + `FakeBrainFactory`（`tests/test_support.py`）。
-- 验证：`cd backend && python -m tests.test_api` 等 assert 脚本（**非 pytest**）。
+- 验证：`cd backend && python -m tests.test_api` 等 assert 脚本（**非 pytest**）；OMS 索引覆盖见 `test_api` 内 `_check_oms_run_created_log`。
 
 ## 4. Brain 调用约定
 
@@ -131,8 +133,9 @@ brain.stream(
 | `resources.checkpointer` | `SqliteSaver` | `data/dsagents_checkpoints.db`（`thread_id=session_id`） |
 | `resources.store` | `SqliteStore` | `data/dsagents_store.db`（`namespace=("dsagents",)`） |
 
-- fresh schema，无迁移；`runs` 保存可选 `workflow` / `result_json`；中国时区本地时间 `YYYY-MM-DD HH:MM:SS`；大 payload 外溢 `data/internal/run-events/`（默认 `max_inline_bytes=262_144`）。
+- fresh schema，无迁移；`runs` 保存可选 `workflow` / `result_json`；中国时区本地时间 `YYYY-MM-DD HH:MM:SS`（与 OMS 一致）；大 payload 外溢 `data/internal/run-events/`（默认 `max_inline_bytes=262_144`）。
 - 三库互不共享连接，无跨库事务。表结构与 `CompositeBackend` 路由见 backend ARCHITECTURE / STRUCTURE。
+- OMS 旁路文件：`backend/log/oms_log.log`（锚定 `backend/`，**不在** `data/` 下；非 ledger；细节见 [`INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) OMS 节）。
 
 ### 5.2 Artifacts
 
@@ -200,6 +203,7 @@ brain.stream(
 | 目标 | 动作 |
 |------|------|
 | 改 HTTP 契约 | 先改本文件 §1/§2 → `INTEGRATIONS.md`（APIs & External Services）→ `api.py`；勿重新引入 SSE / 旧 `message` 字段 |
+| 改 OMS 旁路索引 | `INTEGRATIONS.md` OMS 节 → `runtime/oms_log.py` + `api.py` `post_run`；保持 best-effort、不进 `run_events`；`python -m tests.test_api`（`_check_oms_run_created_log`） |
 | 替换 LLM | 实现 `BrainFactory` 并经 `create_harness` 注入；同步 stream 解析与 profile |
 | 新增 Skill / 工具 | `skills/<name>/` + `default_tool_catalog()` 静态注册 + `package-data` |
 | 改 Philips 识别 | `docs/philips-wgq-inbound-recognition-prd.md` → Skill/schema/主数据工具 → workflow/result HTTP 合同；保持单一工具、无 SubAgent/Excel |
@@ -208,5 +212,5 @@ brain.stream(
 | 改 workflow 工具裁剪 | denylist 排除他业务工具，保留 `parse_documents` / `extract_archives`；`python -m tests.test_workflow_setup` |
 | 加鉴权 / CORS | 当前缺失（已确认）；需显式补中间件 |
 | 跨进程部署 | 单飞锁仅进程内；多 worker 前需跨进程锁或单进程约束 |
-| schema / 数据切换 | 停服并清空整个 `backend/data/`（无迁移） |
-| 验证 | `cd backend && python -m tests.*`（**非 pytest**）；常用：`test_api`（cancel/usage）、`test_harness`、`test_workflow_setup` |
+| schema / 数据切换 | 停服并清空整个 `backend/data/`（无迁移）；OMS 日志在 `backend/log/`，备份/清理单独考虑 |
+| 验证 | `cd backend && python -m tests.*`（**非 pytest**）；常用：`test_api`（cancel/usage/OMS）、`test_harness`、`test_workflow_setup` |

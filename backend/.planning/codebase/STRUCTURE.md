@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: 28534a9
+last_mapped_commit: d012362
 ---
 
 # Codebase Structure
 
-**Analysis Date:** 2026-07-16
+**Analysis Date:** 2026-07-17
 
 > 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。
 
@@ -85,9 +85,9 @@ backend/
 
 | 路径 | 用途 |
 |------|------|
-| `backend/api.py` | 唯一 HTTP 入口模块；`create_app` / 模块级 `app` |
+| `backend/api.py` | 唯一 HTTP 入口模块；`create_app` / 模块级 `app`；四端点 + session 单飞锁 + OMS 触发 |
 | `backend/runtime/` | 运行时核心：执行、资源、事件账本、OMS 索引日志、工具目录、Brain 装配、middleware、可观测提取 |
-| `backend/log/` | 运行时生成：`oms_log.log`（按时间/文件名检索 run；非 git 源码） |
+| `backend/log/` | 运行时生成：`oms_log.log`（按时间/文件名检索 run；非 git 源码；非 `run_events`） |
 | `backend/integrations/` | 与外部系统/路径契约的通用能力（artifact FS、MinerU HTTP），不含业务裁决 |
 | `backend/skills/` | 内置 Agent Skills：指令（`SKILL.md`）、字段/规则参考、模板、可调用 scripts |
 | `backend/skills/*/scripts/` | 业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
@@ -126,6 +126,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 执行循环 / cancel | `backend/runtime/execution.py` |
 | ledger schema / 投影 | `backend/runtime/runs.py` |
 | stream 载荷提取 | `backend/runtime/observability.py` |
+| OMS run_created 索引 | `backend/runtime/oms_log.py` |
 
 ### Brain / 工具 / Skill / middleware
 
@@ -173,6 +174,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - **绝对顶层导入**（`backend/` 在 `sys.path` 或已 editable 安装）：
   - `from runtime import AgentResources, create_harness`
   - `from runtime.runs import SqliteRunLedger, RunEvent`
+  - `from runtime.oms_log import append_run_created_log`
   - `from integrations.artifacts import resolve_artifact_path, write_json_artifact`
   - `from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult`
 - Skill 目录名：小写无连字符 Python 包名（`philipswgqinboundrecognition`、`tecanimport`）；Philips HTTP workflow 使用下划线常量 `philips_wgq_inbound_recognition`。
@@ -181,18 +183,19 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 
 | 类别 | 约定 | 示例 |
 |------|------|------|
-| 模块/文件 | snake_case | `execution.py`、`artifacts.py`、`middleware.py` |
+| 模块/文件 | snake_case | `execution.py`、`artifacts.py`、`middleware.py`、`oms_log.py` |
 | 类 | PascalCase | `HarnessRuntime`、`SqliteRunLedger`、`StructuredOutputRecovery` |
-| 函数/方法 | snake_case | `execute_run`、`emit_run_status`、`runtime_middlewares` |
-| 常量 | UPPER_SNAKE | `RUN_STATUSES`、`MAIN_AGENT_NAME`、`SKILLS_SOURCE`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES` |
+| 函数/方法 | snake_case | `execute_run`、`emit_run_status`、`runtime_middlewares`、`append_run_created_log` |
+| 常量 | UPPER_SNAKE | `RUN_STATUSES`、`MAIN_AGENT_NAME`、`SKILLS_SOURCE`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`DEFAULT_OMS_LOG_PATH` |
 | frozen dataclass | PascalCase | `RunEvent`、`ToolCatalog`、`ResourceConfig` |
-| Protocol | PascalCase 能力名 | `Brain`、`BrainFactory` |
+| Protocol | PascalCase 能力名 | `Brain`、`BrainFactory`（**仅此**使用 `typing.Protocol`） |
 | 工具函数名 | snake_case，即模型可见名 | `parse_documents`、`generate_tecan_import` |
 | SubAgent `name` | kebab-case | `tecan-extractor-a`、`tecan-extractor-b`；Philips 无 SubAgent |
 | 主 Agent `name` | `dsagents-main`（`MAIN_AGENT_NAME`） | |
 | 虚拟路径 | POSIX `/artifacts/...`、`/skills/`、`/memories/` | |
 | 事件 type 字符串 | snake_case | `tool_execution`、`model_usage`、`assistant_message` |
 | run status | 小写英文 | `queued`、`cancelling`、`succeeded` |
+| OMS log event | snake_case | `run_created` |
 | 测试模块 | `test_*.py`，入口常为 `run()` | 非 pytest 发现规则强制 |
 | 环境变量 | UPPER_SNAKE | `MINIMAX_*`、`MINERU_*`、`ORACLE_*` |
 
@@ -202,6 +205,8 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 下载/业务产物：`unique_download_path(stem, suffix)` → stem + 时间戳 + 冲突后缀
 - 事件 spill：`{uuid.hex}.json` 于 `data/internal/run-events/`
 - DB：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db`
+- OMS：`log/oms_log.log`（JSONL 追加）
+- 时间戳字段：中国时区（UTC+8）本地格式 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 `oms_log` 一致）
 
 ### 文档语言
 
@@ -211,13 +216,13 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 
 | 模块 | 职责 | 不负责 |
 |------|------|--------|
-| `api.py` | HTTP 契约、session 单飞锁、后台线程调度、usage 计价汇总 | 业务裁决、stream 解析细节 |
-| `runtime/execution.py` | `HarnessRuntime`：装配 Brain、消费 stream、写 7 类事件、协作取消 | 解析业务字段、计价 |
+| `api.py` | HTTP 契约、session 单飞锁、后台线程调度、usage 计价汇总、触发 OMS 日志 | 业务裁决、stream 解析细节 |
+| `runtime/execution.py` | `HarnessRuntime`：装配 Brain、消费 stream、写 7 类事件、协作取消 | 解析业务字段、计价、OMS 文件 |
 | `runtime/agent.py` | `Brain`/`BrainFactory` Protocol、DeepAgents 工厂、SubAgent 声明 | 事件落库、HTTP |
 | `runtime/middleware.py` | Tool 遥测、无进展熔断、ToolStrategy thinking 兼容、structured recovery 有界重试 | harness 循环、ledger |
 | `runtime/observability.py` | chunk → usage/thinking/text/assistant/tool payload 纯函数 | I/O、run 状态 |
 | `runtime/resources.py` | 三库 + CompositeBackend 装配与 handbook 种子 | run 事件语义 |
-| `runtime/runs.py` | append-only `run_events` + `runs` 投影、usage 聚合、启动清理 | 模型调用 |
+| `runtime/runs.py` | append-only `run_events` + `runs` 投影、usage 聚合、启动清理 | 模型调用、OMS 旁路 |
 | `runtime/oms_log.py` | HTTP `create_run` 后 best-effort JSONL 索引（`run_created`） | run_events、业务结果、查询 API |
 | `runtime/tools.py` | `ToolCatalog` 与 5 工具静态注册 | 工具实现体 |
 | `integrations/artifacts.py` | `/artifacts/` 路径安全、命名、JSON 写入 helper | 业务 schema |
@@ -225,6 +230,19 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | `skills/philipswgqinboundrecognition/` | 固定 workflow 合同 + 主数据 Tool | harness 通用路径 |
 | `skills/tecanimport/` | 抽取/生成 Excel 业务 Tool 与参考资料 | HTTP 入口 |
 | `tests/*` | 可执行 assert 回归与真实集成脚本 | 生产路径 |
+
+## 数据目录
+
+| 路径 | 说明 |
+|------|------|
+| `backend/data/` | `ResourceConfig.data_dir` 默认根；与进程 CWD 无关 |
+| `data/dsagents_runs.db` | `SqliteRunLedger`：`runs` 投影 + `run_events` 事件源 |
+| `data/dsagents_checkpoints.db` | LangGraph `SqliteSaver`；`thread_id = session_id` |
+| `data/dsagents_store.db` | LangGraph `SqliteStore`；`/memories/` 经 StoreBackend |
+| `data/artifacts/uploads/` | `POST /upload` 落盘 |
+| `data/artifacts/downloads/` | MinerU / 业务工具产物 |
+| `data/internal/run-events/` | 超 `max_inline_bytes`（默认 262_144）的事件 payload spill |
+| `backend/log/oms_log.log` | OMS `run_created` JSONL；锚定 `backend/`，**非** `data/` 下 |
 
 ## Where to Add New Code
 
@@ -242,6 +260,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | 新 extractor SubAgent | `workflow_subagents()` / `_extractor` | 仅真实需要投票抽取时增加；自装 middleware |
 | 改持久化路径/后端路由 | `ResourceConfig` / `AgentResources.__enter__` | 三库职责勿混 |
 | 改 run 事件 schema | `runtime/runs.py` | fresh schema 无迁移；破坏性变更需清库策略 |
+| 改 OMS 索引字段 | `runtime/oms_log.py` | 保持 best-effort、不进入 `run_events` |
 | 本地回归测试 | `tests/test_*.py` + `test_support.py` | assert 脚本；`python -m tests.<module>` |
 | 真实模型/HTTP 集成 | 独立 `test_real_*.py` 等，env 守卫 | 勿并入默认本地回归 |
 | 文档事实刷新 | `backend/.planning/codebase/*.md` | 改 backend 后先同步此处，再按影响更新根级文档 |
@@ -264,6 +283,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 不要把密钥或 `.env` 内容写入文档或测试断言字符串。
 - 不要在 `after_model` 有界重试中省略 `can_jump_to` 的 `"end"` 或耗尽时只返回 `None`。
 - 不要用业务工具 allowlist 收窄 workflow 工具表，导致 `parse_documents` / `extract_archives` 从模型工具表消失。
+- 不要把 OMS 日志写入 `run_events` 或依赖其作为执行真相源。
 
 ---
-*Structure analysis: 2026-07-16*
+*Structure analysis: 2026-07-17*

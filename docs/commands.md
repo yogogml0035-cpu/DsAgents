@@ -32,6 +32,8 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、中国时区本地时间戳、状态机与 usage 聚合的本地 assert 脚本。
 
+`python -m tests.test_api` — 四 HTTP 端点、session 单飞、cancel/usage 等；并含 OMS `run_created` JSONL 索引检查（`_check_oms_run_created_log`：成功创建写一行，`/upload`/422/409 不写，失败 run 不丢索引，时间戳格式）。改 `runtime/oms_log.py` 或 `api.py` 写点时务必复跑。
+
 ## 真实外部集成（默认跳过，不进普通门禁）
 
 真实图片 HTTP / 模型集成：

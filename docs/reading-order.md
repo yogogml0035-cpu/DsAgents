@@ -19,4 +19,4 @@
 
 ## 当前里程碑
 
-run-first DeepAgents runtime 已交付通用文档解析、Philips 外高桥结构化识别与 Tecan artifact/Excel 工作流。HTTP 仍为 upload、run、poll、cancel 四类端点；Philips 通过固定 workflow 和 `run.result` 返回业务 JSON，无 A/B/C、Excel 或额外状态机；Tecan 保留原有 SubAgent。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md`（Analysis Date: 2026-07-16）。
+run-first DeepAgents runtime 已交付通用文档解析、Philips 外高桥结构化识别与 Tecan artifact/Excel 工作流。HTTP 仍为 upload、run、poll、cancel 四类端点；Philips 通过固定 workflow 和 `run.result` 返回业务 JSON，无 A/B/C、Excel 或额外状态机；Tecan 保留原有 SubAgent；OMS 旁路索引与 UTC+8 时间戳已对齐。实现状态详见 `backend/.planning/codebase/ARCHITECTURE.md`（Analysis Date: 2026-07-17，`last_mapped_commit` d012362）。
