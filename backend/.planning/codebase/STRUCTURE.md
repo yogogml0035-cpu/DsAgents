@@ -1,12 +1,12 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Codebase Structure
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
-> 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。
+> 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。`last_mapped_commit` 为 `d39ed16`。
 
 ## Directory Layout
 
@@ -32,25 +32,27 @@ backend/
 │   └── mineru.py                       # parse_documents / extract_archives
 ├── skills/
 │   ├── __init__.py
-│   ├── philipswgqinboundrecognition/   # Philips 外高桥进境结构化识别 Skill
+│   ├── philipswgqinboundrecognition/   # Philips Python 运行时包
 │   │   ├── __init__.py
-│   │   ├── SKILL.md
 │   │   ├── schema.py                   # Pydantic 响应合同；WORKFLOW 常量
 │   │   └── scripts/
 │   │       ├── __init__.py
 │   │       └── tools.py                # Tracking/Oracle 单一主数据 Tool
-│   └── tecanimport/                    # Tecan 帝肯进口 Skill
-│       ├── __init__.py
+│   ├── philips-wgq-inbound-recognition/ # Philips Agent Skill 资源
+│   │   └── SKILL.md
+│   ├── tecanimport/                    # Tecan Python 运行时包
+│   │   ├── __init__.py
+│   │   └── scripts/
+│   │       ├── __init__.py
+│   │       ├── tools.py
+│   │       └── documents.py
+│   └── tecan-import/                   # Tecan Agent Skill 资源
 │       ├── SKILL.md
 │       ├── references/
 │       │   ├── fields.md
 │       │   └── rules.md
-│       ├── assets/
-│       │   └── Tecan_进口_发票箱单_空运.xlsx
-│       └── scripts/
-│           ├── __init__.py
-│           ├── tools.py
-│           └── documents.py
+│       └── assets/
+│           └── Tecan_进口_发票箱单_空运.xlsx
 ├── tests/
 │   ├── __init__.py
 │   ├── test_support.py                 # FakeBrain / helpers
@@ -62,7 +64,7 @@ backend/
 │   ├── test_philips_wgq_inbound_recognition.py
 │   ├── test_tecan_import.py
 │   ├── test_real_philips_wgq_inbound_recognition.py
-│   ├── test_real_philips_wgq_ups.py    # 真实集成（env 守卫）
+│   ├── test_real_philips_wgq_ups.py    # 真实集成（诊断/HTTP）
 │   ├── test_real_image_run.py
 │   ├── test_real_multi_pdf_run.py
 │   └── test_minimax_cache_baseline.py
@@ -79,7 +81,7 @@ backend/
         └── run-events/                 # 大 payload spill（按需创建）
 ```
 
-构建/安装产物（非源码事实，可能出现在工作树）：`dist/`、`dsagents.egg-info/`、`__pycache__/`。
+构建/安装产物（非源码事实，可能出现在工作树）：`dist/`、`dsagents.egg-info/`、`build/`、`__pycache__/`。分析时跳过数据产物与缓存。
 
 ## Directory Purposes
 
@@ -89,8 +91,8 @@ backend/
 | `backend/runtime/` | 运行时核心：执行、资源、事件账本、OMS 索引日志、工具目录、Brain 装配、middleware、可观测提取 |
 | `backend/log/` | 运行时生成：`oms_log.log`（按时间/文件名检索 run；非 git 源码；非 `run_events`） |
 | `backend/integrations/` | 与外部系统/路径契约的通用能力（artifact FS、MinerU HTTP），不含业务裁决 |
-| `backend/skills/` | 内置 Agent Skills：指令（`SKILL.md`）、字段/规则参考、模板、可调用 scripts |
-| `backend/skills/*/scripts/` | 业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
+| `backend/skills/` | 内置 Agent Skill 资源与运行时 Python 包；资源目录提供 `SKILL.md`、字段/规则参考和模板 |
+| `backend/skills/*/scripts/` | 运行时业务 Tool；Tecan 同时含 Excel 生成；由 `runtime/tools.py` 静态 import |
 | `backend/tests/` | 可执行 assert 脚本与 `FakeBrain` 替身；真实集成脚本与本地回归分文件；**无**仓库内 `tests_file/` 夹具目录（真实样例路径由 env 或脚本默认值指向外部） |
 | `backend/data/` | 固定数据根（`ResourceConfig`，与 CWD 无关）：三库 + artifacts + 事件 spill |
 | `backend/.planning/codebase/` | 子项目 codebase maps；根级文档上游事实源 |
@@ -98,15 +100,17 @@ backend/
 
 ### Skill 目录角色
 
-Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载到虚拟 FS；无动态 loader。Philips 包目录为 `philipswgqinboundrecognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`（`schema.WORKFLOW`）。
+运行时 Python 包目录使用合法包名，可直接绝对导入；Agent Skill 资源目录使用符合规范的 **kebab-case** 连字符名称，并通过 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载到虚拟 FS；无动态 loader。Philips Python 包目录为 `philipswgqinboundrecognition`，Skill 资源目录为 `philips-wgq-inbound-recognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`（`schema.WORKFLOW`）。
 
 | 子路径 | 角色 |
 |--------|------|
-| `SKILL.md` | 主 Agent 可读的领域流程；Philips 只有一份专用提示词 |
+| `*/SKILL.md` | 主 Agent 可读的领域流程；Philips 只有一份专用提示词 |
 | `schema.py` | Philips 固定 Pydantic 结构化响应合同（`PhilipsWgqRecognitionResult`） |
-| `references/` / `assets/` | 仅 Tecan 保留字段参考与 Excel 模板 |
+| `tecan-import/references/` / `tecan-import/assets/` | Tecan 字段参考与 Excel 模板 |
 | `scripts/tools.py` | 暴露给模型的业务 Tool；Philips 1 个、Tecan 2 个 |
 | `scripts/documents.py` | 仅 Tecan 的模板写入实现，不直接注册为 Tool |
+
+Skill 包布局约定：**kebab-case `SKILL.md` 资源目录** + **可 import 的 Python 包目录** 成对存在（两套内置 Skill 均如此）。
 
 ## Key File Locations
 
@@ -177,7 +181,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
   - `from runtime.oms_log import append_run_created_log`
   - `from integrations.artifacts import resolve_artifact_path, write_json_artifact`
   - `from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult`
-- Skill 目录名：小写无连字符 Python 包名（`philipswgqinboundrecognition`、`tecanimport`）；Philips HTTP workflow 使用下划线常量 `philips_wgq_inbound_recognition`。
+- Python 包目录名：小写无连字符（`philipswgqinboundrecognition`、`tecanimport`）；Agent Skill 资源目录名使用连字符（`philips-wgq-inbound-recognition`、`tecan-import`），Philips HTTP workflow 使用下划线常量 `philips_wgq_inbound_recognition`。
 
 ### 标识符风格
 
@@ -228,7 +232,9 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | `integrations/artifacts.py` | `/artifacts/` 路径安全、命名、JSON 写入 helper | 业务 schema |
 | `integrations/mineru.py` | MinerU 解析/解压工具与 progress 事件 | run ledger |
 | `skills/philipswgqinboundrecognition/` | 固定 workflow 合同 + 主数据 Tool | harness 通用路径 |
-| `skills/tecanimport/` | 抽取/生成 Excel 业务 Tool 与参考资料 | HTTP 入口 |
+| `skills/philips-wgq-inbound-recognition/` | Philips Agent Skill `SKILL.md` | DeepAgents `/skills/` 挂载 |
+| `skills/tecanimport/` | 抽取/生成 Excel 业务 Tool | HTTP 入口 |
+| `skills/tecan-import/` | Tecan Agent Skill `SKILL.md`、references、assets | DeepAgents `/skills/` 挂载 |
 | `tests/*` | 可执行 assert 回归与真实集成脚本 | 生产路径 |
 
 ## 数据目录
@@ -255,7 +261,7 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 | structured recovery 调整 | `StructuredOutputRecovery` | 必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"` |
 | 换默认模型/装配 | `DeepAgentsBrainFactory` 或注入自定义 `BrainFactory` | 仅 Protocol 边界可替换 |
 | 新通用工具（非业务） | 宜放 `integrations/` 或 `runtime/`，并在 `default_tool_catalog()` 静态追加 | 禁止自动扫描插件 |
-| 新业务 Skill | `skills/<packagename>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | 目录名须合法 Python 包名；有非 Python 资源才加 `package-data`；Tool 静态注册 |
+| 新业务 Skill | `skills/<skill-name>/` +（需要代码时）`skills/<package_name>/`：只创建实际需要的 `SKILL.md` / schema / scripts / assets | Skill 资源目录可用连字符且必须与 frontmatter `name` 一致；Python 包目录须合法；Tool 静态注册 |
 | 收窄 workflow 工具表 | denylist 排除**其他业务**工具，保留共享 MinerU 工具 | 禁止只 allowlist 业务工具导致通用工具从模型表消失 |
 | 新 extractor SubAgent | `workflow_subagents()` / `_extractor` | 仅真实需要投票抽取时增加；自装 middleware |
 | 改持久化路径/后端路由 | `ResourceConfig` / `AgentResources.__enter__` | 三库职责勿混 |
@@ -267,10 +273,10 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 
 ### 新增 Skill 最小清单
 
-1. 创建 `skills/<name>/`，只加入本 Skill 实际需要的 `SKILL.md`、schema、scripts 或 assets。
+1. 创建 `skills/<skill-name>/`，只加入本 Skill 实际需要的 `SKILL.md`、references 或 assets；需要 Python 代码时另建合法包目录 `skills/<package_name>/`。
 2. 在 `runtime/tools.py` 的 `default_tool_catalog()` 静态 import 并注册 Tool。
 3. 仅当业务明确需要独立抽取器时，在 `workflow_subagents()` 增加声明式 SubAgent。
-4. `pyproject.toml` `[tool.setuptools.package-data]` 声明 `SKILL.md` / `references/*` / `assets/*`。
+4. `pyproject.toml` `[tool.setuptools.package-data]` 为 `skills` package 声明 `SKILL.md` / `references/*` / `assets/*`。
 5. 增加 `tests/test_<skill>.py` 覆盖合同与领域规则；真实依赖另放 env 守卫脚本。
 6. 刷新 `.planning/codebase/` 相关事实文档。
 
@@ -286,4 +292,4 @@ Skill 目录使用合法 Python 包名，可直接绝对导入，并通过 `skil
 - 不要把 OMS 日志写入 `run_events` 或依赖其作为执行真相源。
 
 ---
-*Structure analysis: 2026-07-17*
+*Structure analysis: 2026-07-18 · last_mapped_commit: d39ed16*

@@ -29,7 +29,7 @@
 - `backend/runtime/resources.py`：`AgentResources`、SQLite store/checkpointer 和 `/memories/`、`/artifacts/`、`/large_tool_results/`、`/skills/` 路由；缺失时 seed 共享操作手册 `/memories/AGENTS.md`。
 - `backend/runtime/tools.py`：静态注册 5 个工具（2 MinerU + 1 Philips + 2 Tecan）；不自动扫描 Skill，不提供插件平台。
 - `backend/integrations/`：artifact 路径/唯一命名/JSON helper 与 MinerU HTTP（`parse_documents`）及 ZIP 解压（`extract_archives`）集成。
-- `backend/skills/`：Philips 响应 schema/主数据规则与 Tecan 字段合同/模板/Excel 实现。
+- `backend/skills/`：成对布局——kebab 资源目录（`philips-wgq-inbound-recognition/`、`tecan-import/`：`SKILL.md` / references / assets）+ 可 import 包（`philipswgqinboundrecognition/`、`tecanimport/`：schema、主数据/抽取 Tool、Excel）。`package-data` 打包资源文件；`/skills/` 只读挂载资源根。
 
 ## 数据与边界
 

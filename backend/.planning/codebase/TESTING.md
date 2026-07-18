@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Testing Patterns
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 事实来源：`backend/tests/*`、`backend/pyproject.toml`、以及被测 `runtime/` / `api.py` / `skills/` 行为。
 
@@ -62,13 +62,26 @@ python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
 $env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
 python -m tests.test_real_philips_wgq_inbound_recognition
 
-# UPS 单用例诊断：当前无 env 门闸，会直连 DSAGENTS_API_BASE_URL（脚本默认端口 8501）
+# UPS 单用例诊断：当前无 env 门闸，会直连 DSAGENTS_API_BASE_URL
+# （脚本 DEFAULT_BASE_URL 为 http://127.0.0.1:8501；其它真实脚本多为 8500）
 # 断言主体已注释，偏人工观察
 python -m tests.test_real_philips_wgq_ups
 
 # 诊断型 MiniMax prompt-cache 基线；无开关，会触达真实端点（BASE_URL 默认读 DSAGENTS_BASE_URL）
 python -m tests.test_minimax_cache_baseline
 ```
+
+**默认 API 端口（以源码为准，commit `d39ed16`）**：
+
+| 脚本 | 默认 `DEFAULT_BASE_URL` / 相关 env |
+| --- | --- |
+| `test_real_philips_wgq_ups.py` | `http://127.0.0.1:8501`；可用 `DSAGENTS_API_BASE_URL` 覆盖 |
+| `test_real_philips_wgq_inbound_recognition.py` | `http://127.0.0.1:8500`；`DSAGENTS_API_BASE_URL` |
+| `test_real_image_run.py` | `http://127.0.0.1:8500`；`DSAGENTS_API_BASE_URL` |
+| `test_real_multi_pdf_run.py` | `http://127.0.0.1:8500`；`DSAGENTS_API_BASE_URL` |
+| `test_minimax_cache_baseline.py` | `DSAGENTS_BASE_URL`（默认含端口 `8500`）；**注意** env 键名与其它脚本不同 |
+
+普通本地回归（`TestClient`）**不依赖** HTTP 端口。
 
 仅文档变更至少执行 `git diff --check`。改 `StructuredOutputRecovery` 重试/退出语义时务必跑 `python -m tests.test_harness`，确认重试次数封顶且耗尽时 `jump_to: "end"`。改 Philips 工具裁剪时务必跑 `python -m tests.test_workflow_setup`，确认工具名集合含 `extract_archives`、不含帝肯工具。改 OMS 索引日志时务必跑 `python -m tests.test_api`（含 `_check_oms_run_created_log`）。
 
@@ -85,7 +98,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
 | `tests/test_tecan_import.py` | `run()` | Tecan A/B 裁决、`input_problems`、join、币种和工作簿 |
 | `tests/test_real_philips_wgq_inbound_recognition.py` | `run()` | 多渠道 upload → workflow run → poll 真实 HTTP 验收；默认 skip，需 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1` |
-| `tests/test_real_philips_wgq_ups.py` | `run()` | UPS 普货单用例诊断：上传 case 目录 PDF、流式轮询并打印 `result`/`usage`；当前断言主体注释，无默认 skip 开关 |
+| `tests/test_real_philips_wgq_ups.py` | `run()` | UPS 普货单用例诊断：上传 case 目录 PDF、流式轮询并打印 `result`/`usage`；当前断言主体注释，无默认 skip 开关；默认端口 **8501** |
 | `tests/test_real_image_run.py` | `run()` + `main()` | 真实 HTTP 图片 run；`DSAGENTS_RUN_REAL_IMAGE_TEST=1` |
 | `tests/test_real_multi_pdf_run.py` | `run()` + `main()` | 真实多 PDF + MinerU；`DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1` |
 | `tests/test_minimax_cache_baseline.py` | `run()` | 真实 MiniMax cache 基线（诊断型，无 env 门闸；读 `DSAGENTS_BASE_URL`） |
@@ -222,4 +235,4 @@ Tecan 保留 A/B extractor、必要时 C 回查、`input_problems`、canonical �
 10. 真实外部测试单独建文件、默认 skip（或明确标为诊断），并在 `docs/commands.md` 标明开关、服务和样例依赖。
 
 ---
-*Testing analysis: 2026-07-17*
+*Testing analysis: 2026-07-18*

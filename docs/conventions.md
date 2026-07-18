@@ -11,6 +11,7 @@
 - **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
 - **简单性约束**：优先删减范围而非增加旋钮。
 - **源码顶层布局稳定**：产品代码落在 `backend/` 的 `api.py` + `runtime/` + `integrations/` + `skills/`；业务逻辑归属对应 Skill 包，不要再引入已删除的顶层辅助模块或 `backend/dsagents/` 包壳。
+- **Skill 双目录成对**：每个内置业务同时维护 **kebab-case 资源目录**（`SKILL.md`、references、assets，挂载 `/skills/`）与 **可 import 的 Python 包目录**（合法包名，含 `scripts/tools.py` 等）。Philips：`philips-wgq-inbound-recognition/` + `philipswgqinboundrecognition/`；Tecan：`tecan-import/` + `tecanimport/`。新增 Skill 须同时建两套目录，并在 `pyproject.toml` 的 `[tool.setuptools.package-data]` 追加资源文件；不要把资源只塞进 Python 包或只建一边。
 - **middleware 与有界 structured recovery**：实现集中在 `runtime/middleware.py`；`runtime_middlewares()` 固定顺序（`StructuredOutputRecovery` 最前）；`after_model` + `jump_to: "model"` 的重试必须同时声明 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。空 `data: {}` 壳（`success`/`partial_success` 但缺嵌套字段或 `items` 空）走专属 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状纠错（优先完整 JSON 文本再同内容 tool args）；**空壳重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON，不编造业务字段值。其他解析失败仍无 `structured_response` 退出。改动后跑 `python -m tests.test_harness`。
 - **Philips 业务结果 vs 执行失败**：业务 JSON 走 `run.result`（`outcome` 为 `success` / `partial_success` / `input_problems`）。`input_problems` 时 `data=null` 且 **run 仍 `succeeded`**；仅 `structured_response` 缺失/非法或运行时异常才令 run **`failed`**。不要用 `reply` 解析业务 JSON。
 - **workflow 工具收窄用 denylist**：为固定 workflow 收窄工具表时，用 denylist 排除**其他业务**工具（如帝肯的 `save_tecan_extraction` / `generate_tecan_import`），必须保留共享 MinerU 工具 `parse_documents` / `extract_archives` 以及本业务工具；禁止业务-only allowlist（会与 `/memories/AGENTS.md`、Skill 手册中的 ZIP/解析指引脱节）。验证：`python -m tests.test_workflow_setup`。
@@ -30,7 +31,7 @@
 
 以下约定已在当前代码中稳定成立，修改相关面时优先遵守：
 
-- **工具静态注册**：新业务工具写入对应 Skill 的 `scripts/tools.py`，并在 `runtime/tools.py` 的 `default_tool_catalog()` 显式注册；不要做目录扫描或动态 loader。当前静态 5 工具：2 个 MinerU 通用（`parse_documents` / `extract_archives`）+ Philips 主数据 1 + Tecan 业务 2。
+- **工具静态注册**：新业务工具写入对应 **可 import Skill 包** 的 `scripts/tools.py`，并在 `runtime/tools.py` 的 `default_tool_catalog()` 显式注册；不要做目录扫描或动态 loader。当前静态 5 工具：2 个 MinerU 通用（`parse_documents` / `extract_archives`）+ Philips 主数据 1 + Tecan 业务 2。Agent 可读流程写在同业务的 kebab 资源目录 `SKILL.md`，不要指望动态扫描资源树注册工具。
 - **事件 schema 固定 7 类**：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`。不要重新引入已删除的 `tool_call` / `tool_status` / `tool_result`。
 - **artifact 路径显式传递**：HTTP 与 Skill 边界使用 `/artifacts/...`；生成文件唯一命名、不覆盖输入。业务问题统一 `input_problems`（Philips 在 `result.outcome`；Tecan 在工具返回 `code`），跨 run 不隐式恢复中间态；业务问题 ≠ run `failed`。
 - **共享操作手册 seed**：`/memories/AGENTS.md` 缺失时由资源层写入含 ZIP→`extract_archives` 等基线指引；**已有文件不覆盖**。改手册文案时同步检查 Skill 与 workflow 工具表是否仍一致。

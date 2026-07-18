@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-17）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-17，`last_mapped_commit` d012362）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-18）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局与 `package-data` 打包。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
 
 ## 1. 系统定位
 
@@ -10,7 +10,7 @@
 
 - **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；middleware 实现集中在 `runtime/middleware.py`，由 `runtime_middlewares()` 与 agent 工厂装配；工具保持普通 callable + `ToolCatalog`；资源 / ledger 保持具体类。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
 - **工具静态注册**：`default_tool_catalog()` 静态注册 5 个工具（2 个 MinerU 通用、Philips 1 个主数据工具、Tecan 2 个业务工具）；普通 Python import，不自动扫描、无插件平台。
-- **业务能力按 Skill 打包**：`skills/philipswgqinboundrecognition/` 提供固定响应合同、专用 Skill 与 `lookup_philips_wgq_master_data`；`skills/tecanimport/` 保留抽取保存与 Excel 生成。`workflow_subagents()` 当前只注册 2 个 Tecan extractor（`tecan-extractor-a` / `tecan-extractor-b`），Philips workflow 不使用 SubAgent。
+- **业务能力按 Skill 打包（成对目录）**：每个内置业务同时有 **kebab-case Agent Skill 资源目录**（挂载 `/skills/`，含 `SKILL.md` 等）与 **可 import 的 Python 包目录**（合法包名）。Philips：`skills/philips-wgq-inbound-recognition/` + `skills/philipswgqinboundrecognition/`（固定响应合同与 `lookup_philips_wgq_master_data`）；Tecan：`skills/tecan-import/` + `skills/tecanimport/`（抽取保存与 Excel）。`workflow_subagents()` 当前只注册 2 个 Tecan extractor（`tecan-extractor-a` / `tecan-extractor-b`），Philips workflow 不使用 SubAgent。
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为事件投影快照。`session_id` 仅作 LangGraph `thread_id` 与进程内单飞锁键，不是一等持久化对象。
 - **入口形态**：HTTP（`POST /runs` 立即返回 `queued`，后台 daemon 线程执行；纯轮询增量事件，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无 one-shot 单函数 API。
 - **业务工作流形态**：`POST /runs` 可显式选择唯一固定 workflow `philips_wgq_inbound_recognition`；Philips 用 `ToolStrategy(PhilipsWgqRecognitionResult)` 将验证后的业务 JSON 投影到 `run.result` / `runs.result_json`，Tecan 仍按 Skill 驱动 A/B 抽取与 Excel。两者均不新增业务 HTTP、状态表或跨 run 恢复接口。
@@ -33,7 +33,7 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 1. 边界与定位：本文件 §1–§2、§4
 2. 对外契约：[`INTERFACES.md`](INTERFACES.md)
 3. 调用链与风险清单：[`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)
-4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-17，`last_mapped_commit` d012362）
+4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）
 5. 改 backend 前必读：[`docs/conventions.md`](docs/conventions.md)
 
 ## 4. 稳定目录职责（`backend/` 顶层源码）
@@ -53,8 +53,8 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 | `runtime/tools.py` | `ToolCatalog` + `default_tool_catalog()` 静态 5 工具 |
 | `integrations/artifacts.py` | `/artifacts/` 安全路径、唯一下载名、不可覆盖 JSON、上传命名 |
 | `integrations/mineru.py` | `parse_documents` / `extract_archives` + `tool_progress` |
-| `skills/philipswgqinboundrecognition/` | Philips 外高桥进境：`SKILL.md` + Pydantic schema + Tracking/Oracle 单一主数据 Tool |
-| `skills/tecanimport/` | Tecan 帝肯进口：`SKILL.md` + references/assets + 2 业务 Tool |
+| `skills/philips-wgq-inbound-recognition/` + `skills/philipswgqinboundrecognition/` | Philips：kebab 资源（`SKILL.md`）+ 可 import 包（Pydantic schema + Tracking/Oracle 主数据 Tool） |
+| `skills/tecan-import/` + `skills/tecanimport/` | Tecan：kebab 资源（`SKILL.md` / references / assets）+ 可 import 包（2 业务 Tool + Excel） |
 
 固定数据目录 `backend/data/`（`ResourceConfig` 锚定，与 CWD 无关）：
 
@@ -149,7 +149,7 @@ running → cancelling → cancelled
 | Structured recovery | `after_model` 有界 `jump_to: "model"`（含空文本、空 `data: {}` 壳；默认 `max_retries=2`）；`can_jump_to` 必须含 `"end"`；耗尽或无法产出 `structured_response` 时显式 `jump_to: "end"`，禁止只返回 `None`；空壳耗尽写 all-null skeleton（见上表说明），**不**编造业务字段 |
 | 工具收窄 | workflow 用 **denylist** 排除他业务工具，保留共享 MinerU（`parse_documents` / `extract_archives`）；禁止业务-only allowlist |
 | Skill | Philips：结构化 `success\|partial_success\|input_problems` + 单一主数据 Tool → `run.result`；Tecan：2 Tool + `status=generated\|input_problems`；无跨 run 状态机 |
-| 工具注册 | 5 工具静态清单；新增 Skill = 新包目录 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |
+| 工具注册 | 5 工具静态清单；新增 Skill = kebab 资源目录 + 可 import 包 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |
 | Provider | 生产 LLM：MiniMax via Anthropic 兼容；文档解析：MinerU HTTP；可选 Oracle（仅 Philips，thick mode 可降级） |
 | OMS 旁路 | 实现只放 `runtime/oms_log.py`；触发在 `api.py`；`create_run` 成功后 best-effort JSONL；**不**进入 `run_events`、**无**查询 API；写失败不阻塞已创建 run；程序内路径不经 OMS |
 | 时间戳 | ledger 与 OMS 统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`；文件名时间戳可能为本机本地时区 |
@@ -160,7 +160,7 @@ running → cancelling → cancelled
 - **文档分层**：根级三件套（边界与导航）→ `SYSTEM_MAP`（系统层视图）→ `docs/*.md`（约定/命令/阅读顺序）→ `backend/.planning/codebase/*`（实现事实）。四层手工保持一致。
 - **系统级文档不堆实现**：表结构、完整配置键、主调用链细节归 backend 事实文档；接口形状归 `INTERFACES.md` + `INTEGRATIONS.md`。
 - **包管理**：`uv`（非 pip）；`cd backend && uv sync`；禁止 `pip install -e .` 绕过 `uv.lock`。
-- **包布局**：安装根 `backend/`；`py-modules=["api"]`，packages `runtime*` / `integrations*` / `skills*`；绝对顶层导入；无 `python -m backend.*`。
+- **包布局**：安装根 `backend/`；`py-modules=["api"]`，packages `runtime*` / `integrations*` / `skills*`；绝对顶层导入；无 `python -m backend.*`。`[tool.setuptools.package-data]` 当前打包 `philips-wgq-inbound-recognition/SKILL.md` 与 `tecan-import/` 下的 `SKILL.md`、`references/*.md`、`assets/*`；新增 Skill 须同步 package-data。
 - **文档语言**：简体中文；标识符/路径/命令/配置键/API 名保持原文；不写密钥与私有连接串。
 
 ## 7. 当前风险（系统级）

@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Integrations
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部 `allow_local=True` 可供测试/程序内路径，业务 Skill 工具只接受显式 artifact 路径。
 
@@ -202,7 +202,8 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 | 项 | 事实 |
 |---|---|
-| 包路径 | `skills/philipswgqinboundrecognition/` |
+| Python 包路径 | `skills/philipswgqinboundrecognition/` |
+| Agent Skill 资源路径 | `skills/philips-wgq-inbound-recognition/` |
 | API workflow | `workflow="philips_wgq_inbound_recognition"`（`WORKFLOW` 常量） |
 | 外部依赖 | MinerU（PDF）+ 可选 Tracking Excel（openpyxl）+ 可选 Oracle |
 | 工具 | `parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`（workflow 排除帝肯工具，保留共享 MinerU 工具） |
@@ -214,7 +215,8 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 
 | 项 | 事实 |
 |---|---|
-| 包路径 | `skills/tecanimport/` |
+| Python 包路径 | `skills/tecanimport/` |
+| Agent Skill 资源路径 | `skills/tecan-import/`（含 `references/` 与 `assets/`） |
 | 触发 | 非 API workflow 字段；由 Skill 描述 + 用户意图驱动（通用 agent + skills 挂载） |
 | 外部依赖 | MinerU（空运 PDF）；订单/信息表 Excel（openpyxl）；模板 `assets/Tecan_进口_发票箱单_空运.xlsx` |
 | 工具 | `save_tecan_extraction`、`generate_tecan_import`（另用通用 `parse_documents`） |

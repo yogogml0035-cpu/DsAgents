@@ -1,16 +1,16 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Architecture
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
-> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` 及其 `scripts/`。结论以源码为准。
+> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` Python 包与 `skills/{philips-wgq-inbound-recognition,tecan-import}/` Agent Skill 资源。结论以源码为准。`last_mapped_commit` 为 `d39ed16`。
 
 ## Pattern Overview
 
-`backend/` 是 **Harness 级 agent runtime 底座**：能力可插拔的运行时壳，不是绑定某一 runner / 容器 / 模型 / 工作流的产品实现。发行名仍为 `dsagents`（`pyproject.toml` `name = "dsagents"`），源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`。
+`backend/` 是 **Harness 级 agent runtime 底座**：能力可插拔的运行时壳，不是绑定某一 runner / 容器 / 模型 / 工作流的产品实现。**无前端子项目**。发行名仍为 `dsagents`（`pyproject.toml` `name = "dsagents"`），源码顶层为 `api.py`、`runtime/`、`integrations/`、`skills/`。
 
 核心模式：
 
@@ -19,7 +19,7 @@ last_mapped_commit: d012362
 | **Run-centric** | `run` 是唯一执行与查询单位；`run_events` 为 append-only 事件源，`runs` 为投影快照 |
 | **Event-sourced run ledger** | 进展以不可变事件追加；状态由 `status` 事件投影到 `runs` 表 |
 | **Harness + Brain 注入** | `HarnessRuntime` 只做 stream→event 规范化；模型/图由 `Brain` / `BrainFactory`（`Protocol`）注入 |
-| **静态 Tool 目录** | `ToolCatalog` 持有普通 callable；`default_tool_catalog()` 静态注册 5 个工具，无插件扫描 |
+| **静态 Tool 目录** | `ToolCatalog` 持有普通 callable；`default_tool_catalog()` 静态注册 **5** 个工具，无插件扫描 |
 | **Skill 打包业务** | Philips 是固定 workflow + 结构化响应 + 单一主数据工具；Tecan 保留 `SKILL.md` / references / assets / A/B extractor |
 | **OMS 旁路索引** | `runtime/oms_log.py` 在 `create_run` 成功后 best-effort 写 JSONL；**不是** `run_events` 路径 |
 
@@ -57,10 +57,10 @@ last_mapped_commit: d012362
                 │                         │
 ┌───────────────▼──────────┐  ┌───────────▼───────────────────┐
 │  业务 Skill 层            │  │  集成层 integrations/          │
-│  skills/philipswgqinbound-│  │  artifacts.py 路径/JSON helper │
-│  recognition/             │  │                                │
-│  skills/tecanimport/      │  │  mineru.py 解析/解压工具       │
-│  scripts/tools.py         │  └───────────────────────────────┘
+│  skills/philips-wgq-     │  │  artifacts.py 路径/JSON helper │
+│  inbound-recognition/    │  │                                │
+│  skills/tecan-import/     │  │  mineru.py 解析/解压工具       │
+│  + Python packages        │  └───────────────────────────────┘
 └───────────────────────────┘
                 │
 ┌───────────────▼─────────────────────────────────────────────┐
@@ -78,7 +78,7 @@ last_mapped_commit: d012362
 | 能力 | 模型工厂、middleware、SubAgent、工具目录 | `runtime/agent.py`、`runtime/middleware.py`、`runtime/tools.py` |
 | 可观测提取 | 纯函数：chunk → usage/thinking/text/assistant payload | `runtime/observability.py` |
 | OMS 索引 | create run 后 JSONL 摘要（旁路） | `runtime/oms_log.py` |
-| 业务 Skill | Philips 识别合同/主数据补齐；Tecan 抽取与 Excel 生成 | `skills/*/` |
+| 业务 Skill | Philips 识别合同/主数据补齐；Tecan 抽取与 Excel 生成 | 连字符 Skill 资源目录 + 对应 Python 包 |
 | 集成 | `/artifacts/` 安全路径、MinerU HTTP | `integrations/` |
 | 持久化 | run ledger、checkpoint、store、虚拟 FS 路由 | `runtime/resources.py`、`runtime/runs.py` |
 
@@ -163,7 +163,7 @@ emit status=running
 
 `run_events` 表 append-only，`event_id` 自增。`runs` 表由 `emit_run_status` 更新 `status` / `reply` / `error` / `result_json` / `updated_at`；`workflow` 在创建 run 时写入。
 
-固定 7 种事件类型（由 `runtime/execution.py` 写出）：
+固定 **7** 种事件类型（由 `runtime/execution.py` 写出）：
 
 ```text
 status · tool_execution · tool_progress · thinking · text_delta · assistant_message · model_usage
@@ -227,7 +227,7 @@ tool_progress / assistant_message / model_usage / ... → status(succeeded)
 | `save_tecan_extraction` | `skills/tecanimport/scripts/tools.py` |
 | `generate_tecan_import` | `skills/tecanimport/scripts/tools.py` |
 
-Philips workflow 用 **denylist** 排除帝肯业务工具，**保留**共享 MinerU 工具，使 `/memories/AGENTS.md` 中的 ZIP 指引与模型工具表一致。Philips 业务结果固定为 `success|partial_success|input_problems` + `data` + `problems`，不解析 `reply`。
+Philips workflow 用 **denylist** 排除帝肯业务工具（`_PHILIPS_EXCLUDED_TOOLS`：`save_tecan_extraction`、`generate_tecan_import`），**保留**共享 MinerU 工具，使 `/memories/AGENTS.md` 中的 ZIP 指引与模型工具表一致。禁止业务-only allowlist。Philips 业务结果固定为 `success|partial_success|input_problems` + `data` + `problems`，不解析 `reply`。
 
 ### Philips 结构化结果合同（`input_problems` 模式）
 
@@ -250,6 +250,7 @@ Philips workflow 用 **denylist** 排除帝肯业务工具，**保留**共享 Mi
   3. `NoProgressMiddleware()`
   4. `StructuredOutputCompatibility()`
   5. 可选：主 Agent 传入 `memory_backend=resources.backend` 时追加内置 `MemoryMiddleware`
+- 主 Agent 含 memory 时约 **5** 个 middleware；SubAgent 各 **4** 个（无 Memory）。
 - 不使用 `create_deep_agent(memory=...)`，以免默认用户偏好记忆语义与重复加载。
 - 声明式 Tecan SubAgent **不继承**主 Agent middleware，故每个 extractor 显式注入 `runtime_middlewares()`（无 handbook）。
 - Philips 工厂对调用方已传入的 middleware 做 **缺则补齐、已有则跳过**：缺 `StructuredOutputCompatibility` 时 **append**；缺 `StructuredOutputRecovery` 时 **insert(0)**。
@@ -267,7 +268,7 @@ Philips workflow 用 **denylist** 排除帝肯业务工具，**保留**共享 Mi
 | 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺嵌套字段或 `items` 空；专用中文 `EMPTY_DATA_SHELL_HINT`；纠错 HumanMessage 附 `PHILIPS_MINIMAL_DATA_SKELETON`（全 null 形状）并优先「完整 JSON 文本 → 同内容 tool args」；**重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（非 `data:{}` / 非 `data:null`），避免 `structured_response missing` |
 | ToolStrategy | Philips 使用 `handle_errors=philips_structured_output_error_message` |
 | 上限 | 默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`（总模型轮次约 `1 + max_retries`） |
-| 耗尽/放行 | `attempts >= max_retries` 时返回 `{"jump_to": "end"}`，**禁止**只返回 `None` |
+| 耗尽/放行 | `attempts >= max_retries` 时：空壳 → skeleton + `jump_to: "end"`；其它失败 → `{"jump_to": "end"}`，**禁止**只返回 `None` |
 | 钩子声明 | `@hook_config(can_jump_to=["model", "end"])` — 必须同时声明 `"end"` |
 | 为何必须 end | 仅有 `ToolStrategy`、业务 tool 被收窄时，缺 `structured_response` 且返回 `None` 会走 model↔model 边无限循环 |
 | 下游 | harness 见 `structured_response missing` → run `failed`（空壳耗尽走 skeleton 成功路径时除外） |
@@ -293,7 +294,7 @@ running → cancelling → cancelled
 | `GET` | `/runs/{run_id}` | 轮询 run + 顶层 `workflow`/`result` + events + `latest_content_event` + `usage` |
 | `POST` | `/runs/{run_id}/cancel` | 协作 drain；`202` cancelling / `200` 已取消中 / `409` 终态 / `404` 未知 |
 
-启动示例：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（在 `backend/` 下，`uv sync` 后）。
+仅上述 **四** 端点；无 SSE、无 session API。启动示例：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`（在 `backend/` 下，`uv sync` 后；端口可按部署调整）。
 
 ### 程序内
 
@@ -352,7 +353,7 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 | `data/internal/run-events/` | 事件大 payload spill |
 | `log/oms_log.log` | OMS run_created JSONL（旁路索引） |
 
-`SqliteRunLedger` 每次方法新开 `sqlite3.connect`；fresh schema，无迁移。时间戳为中国时区（UTC+8）本地时间（`YYYY-MM-DD HH:MM:SS`，如 `2026-07-17 12:01:59`）；`oms_log` 与 ledger 共用同一时区格式。
+`SqliteRunLedger` 每次方法新开 `sqlite3.connect`；fresh schema，无迁移。时间戳为中国时区（UTC+8）本地时间（`YYYY-MM-DD HH:MM:SS`）；`oms_log` 与 ledger 共用同一时区格式。
 
 ### 并发与生命周期
 
@@ -367,6 +368,12 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 - 无 model/tool 请求正文落库；无 SSE。
 - OMS JSONL 仅索引 run 创建元数据与 artifact 文件名，不替代事件账本。
 
+### DeepAgents 配置要点
+
+- `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))`：关闭 auto general-purpose SubAgent，仅保留显式 Tecan extractor。
+- 主 Agent `skills=[SKILLS_SOURCE]`（`SKILLS_SOURCE = "/skills/"`）；`permissions` deny write `/skills/**`。
+- 模型默认经 `init_chat_model("anthropic:{MINIMAX_MODEL}", ...)`，`thinking={"type": "adaptive"}`；Philips ToolStrategy 路径由 `StructuredOutputCompatibility` 关闭 thinking。
+
 ### 范围边界（明确没有）
 
 - session 模块 / session 表 / session 事件回放
@@ -375,6 +382,7 @@ AgentResources(config) → create_harness(resources) → execute_run(messages, s
 - 业务工作流引擎、HITL、跨 run 恢复游标
 - 沙箱 / 脚本执行
 - 单函数 one-shot 入口（必须组合 Resources + harness + execute_run）
+- 前端 UI 子项目
 
 ---
-*Architecture analysis: 2026-07-17*
+*Architecture analysis: 2026-07-18 · last_mapped_commit: d39ed16*

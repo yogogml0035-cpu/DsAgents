@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Technology Stack
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；配置键来自 `backend/.env.example` 与代码默认值。运行命令以仓库 `scripts/start-backend.ps1` 与测试默认值为准。
 
@@ -17,7 +17,7 @@ last_mapped_commit: d012362
 | 包名 / 版本 | `dsagents` / `0.1.0` | `[project]` |
 | 描述 | Agent runtime for DeepAgents with pluggable document parsing. | `[project].description` |
 
-发行名保持 `dsagents`；源码顶层为 `api.py` 与三个包 `runtime/`、`integrations/`、`skills/`（内置 Skill：`philipswgqinboundrecognition`、`tecanimport`）。模块使用绝对顶层导入（如 `from runtime.resources import AgentResources`）。
+发行名保持 `dsagents`；源码顶层为 `api.py` 与三个包 `runtime/`、`integrations/`、`skills/`。运行时 Python 包为 `philipswgqinboundrecognition`、`tecanimport`，Agent Skill 资源目录为 `philips-wgq-inbound-recognition`、`tecan-import`。模块使用绝对顶层导入（如 `from runtime.resources import AgentResources`）。
 
 ### 构建与打包
 
@@ -28,7 +28,7 @@ last_mapped_commit: d012362
 | 安装根 | `backend/`，`package-dir = {"" = "."}` | `[tool.setuptools]` |
 | 顶层模块 | `py-modules = ["api"]` | `[tool.setuptools]` |
 | 包发现 | `include = ["runtime*", "integrations*", "skills*"]` | `[tool.setuptools.packages.find]` |
-| 打包数据 | Philips：`SKILL.md`；Tecan：`SKILL.md`、`references/*.md`、`assets/*` | `[tool.setuptools.package-data]` |
+| 打包数据 | `skills/philips-wgq-inbound-recognition/SKILL.md`；`skills/tecan-import/` 下的 `SKILL.md`、`references/*.md`、`assets/*` | `[tool.setuptools.package-data]` |
 
 ## Runtime
 
@@ -253,8 +253,10 @@ backend/
   runtime/               # agent、execution、middleware、observability、oms_log、resources、runs、tools
   integrations/          # artifacts 路径约定、mineru 客户端
   skills/
-    philipswgqinboundrecognition/  # workflow + schema + Oracle/Tracking tool
-    tecanimport/                   # Excel 生成 + 抽取/一站式 tool + assets/references
+    philipswgqinboundrecognition/   # Python workflow + schema + Oracle/Tracking tool
+    philips-wgq-inbound-recognition/ # Agent Skill SKILL.md
+    tecanimport/                    # Python Excel 生成 + 抽取/一站式 tool
+    tecan-import/                   # Agent Skill + assets/references
   tests/                 # assert 脚本，非 pytest
   data/                  # 运行时生成（通常不入库）
   log/                   # OMS JSONL（oms_log.log）
