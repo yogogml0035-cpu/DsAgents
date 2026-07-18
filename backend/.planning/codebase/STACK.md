@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Technology Stack
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 技术栈事实基于 `backend/pyproject.toml`、`backend/uv.lock` 与 `backend/` 顶层源码（`api.py`、`runtime/`、`integrations/`、`skills/`）核对。不读取真实密钥文件；配置键来自 `backend/.env.example` 与代码默认值。运行命令以仓库 `scripts/start-backend.ps1` 与测试默认值为准。
 

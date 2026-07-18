@@ -1,14 +1,15 @@
 ---
-last_mapped_commit: d012362
-analysis_date: 2026-07-17
+last_mapped_commit: d39ed16
+analysis_date: 2026-07-18
 scope: backend/
 ---
 
 # Codebase Concerns
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
+**last_mapped_commit:** `d39ed16`
 
-> backend 技术债、风险与脆弱点。每条带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对：`api.py`、`runtime/`（含 `oms_log.py`、`middleware.py`、`runs.py`、`execution.py`、`agent.py`、`tools.py`）、`integrations/`、两个内置 Skill、`tests/`、`pyproject.toml`、`.env.example`。不读取 `.env` 内容，不记录任何密钥或连接串值。
+> backend 技术债、已知限制、潜在风险与安全注意点。每条带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对：`api.py`、`runtime/`（含 `oms_log.py`、`middleware.py`、`runs.py`、`execution.py`、`agent.py`、`tools.py`、`resources.py`）、`integrations/`、两个内置 Skill（资源目录 + Python 包）、`tests/`、`pyproject.toml`、`.env.example`。不读取 `.env` 内容，不记录任何密钥或连接串值。
 
 ## Tech Debt
 
@@ -53,18 +54,18 @@ scope: backend/
 ### 6. 无 CI 门禁与静态检查配置（已确认）
 
 - **问题**：`pyproject.toml` 无 pytest / coverage / ruff / mypy / black 配置；回归靠 `python -m tests.test_xxx` 人工选择。
-- **影响**：未强制的脚本易被漏跑；真实集成脚本与本地脚本同目录，误跑风险见下方 Testing Gaps。
+- **影响**：未强制的脚本易被漏跑；真实集成脚本与本地脚本同目录，误跑风险见下方 Known Limitations。
 - **修复方向**：CI 固定跑本地 assert 脚本；真实集成单独 job + env 开关。
 
 ### 7. 真实集成脚本与本地回归同目录（已确认）
 
 - **问题**：
-  - `tests/test_real_image_run.py` / `test_real_multi_pdf_run.py`：`run()` 需 `DSAGENTS_RUN_REAL_*_TEST=1`，但 `python -m ...` 走 `main()` 会立即打真实服务。
+  - `tests/test_real_image_run.py` / `test_real_multi_pdf_run.py`：`run()` 需 `DSAGENTS_RUN_REAL_*_TEST=1`，但 `python -m ...` 走 `main()`（argparse）**绕过 env 门闩**，会立即打真实 HTTP。
   - `tests/test_real_philips_wgq_inbound_recognition.py`：`run()` 需 `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；`__main__` 直接 `run()`（有 env 门闩）。
-  - `tests/test_real_philips_wgq_ups.py`：`__main__` 直接 `run()`，**无** env 开关；默认 `DEFAULT_CASE_DIR` 为开发机本地绝对路径；会打真实 HTTP API。
+  - `tests/test_real_philips_wgq_ups.py`：`__main__` 直接 `run()`，**无** env 开关；默认 `DEFAULT_CASE_DIR` 为开发机本地绝对路径；会打真实 HTTP API；默认端口 `8501`（与 image/multi_pdf 的 `8500` 不一致）。
   - `tests/test_minimax_cache_baseline.py`：`__main__` 直接调用真实 endpoint，无 env 开关。
-- **影响**：误跑产生费用与外部副作用；若引入 pytest 全收集更危险。
-- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集；去掉硬编码本机路径。
+- **影响**：误跑产生费用与外部副作用；若引入 pytest 全收集更危险；默认端口分裂增加「连错服务」排查成本。
+- **修复方向**：真实脚本移到 `tests/manual/` 或强制双重开关；CI 永不收集；去掉硬编码本机路径；统一默认 `DSAGENTS_API_BASE_URL` 端口约定。
 
 ### 8. 无自动化聚合入口（已确认）
 
@@ -72,129 +73,172 @@ scope: backend/
 - **影响**：局部改动易漏跑 `test_workflow_setup` 或业务 Skill 测试。
 - **修复方向**：单命令跑本地套件（排除真实集成）。
 
-## Known Risks / Bugs
+### 9. Skill 资源与 Python 包双轨目录（已确认）
 
-### 1. 结构化输出恢复：必须显式 `jump_to: "end"`，否则 model↔model 无限循环（已确认，已缓解）
+- **问题**：每个内置 Skill 拆成：
+  - 资源目录（连字符）：`skills/philips-wgq-inbound-recognition/`、`skills/tecan-import/`（`SKILL.md`、references、assets）
+  - Python 包（无连字符）：`skills/philipswgqinboundrecognition/`、`skills/tecanimport/`（schema / scripts）
+- **打包证据**：`pyproject.toml` `[tool.setuptools.package-data]` 必须显式列出连字符目录下的 `SKILL.md` / references / assets；注释写明「带连字符的 Skill 目录必须随 wheel 一起打包」。
+- **影响**：漏改 `package-data` → 安装后的 wheel 缺 `SKILL.md`，Agent 无法加载业务手册；新增 Skill 时易只加 Python 包而忘资源或反之路。
+- **修复方向**：新增 Skill 检查清单；`tests/test_workflow_setup.py` 继续断言源码树与 mounted `/skills/` 可读。
+
+---
+
+## Known Limitations（已知限制 / 设计取舍）
+
+下列行为是**当前有意或已文档化的边界**，不是「未修 bug」，但调用方与运维必须按此假设工作。
+
+### 1. OMS 索引 best-effort、不进 `run_events`（已确认）
+
+- **行为**：`api.py` `post_run` 在 `create_run` 成功后调用 `append_run_created_log(...)`；`except Exception: pass`，**永不**阻塞已创建的 run。
+- **证据**：注释 `Best-effort OMS index: never block a successfully created run.`；`runtime/oms_log.py` 模块说明「Not part of the run_events observability path」；I/O 错误时 `append_run_created_log` **会 raise**（由 API 层吞掉）。
+- **限制**：无查询 API；磁盘满/权限错误时索引静默缺失；排障难发现「日志未写」。
+- **可改进**：至少打服务端 warning（不含密钥）；可选指标计数；保持不阻塞语义。
+
+### 2. 取消是协作 drain，非强杀；取消不回滚 artifacts（已确认）
+
+- **行为**：`POST /runs/{run_id}/cancel` → `RunControl.request_drain`；`execute_run` 在 chunk 间检查 `control.drain_requested` 并捕获 `GraphDrained` → `cancelled`。工具/网络阻塞期间可能长时间不回到检查点。
+- **证据**：`runtime/execution.py` `request_cancel` / `GraphDrained`；`api.py` cancel 在无 `RunControl` 时直接标 `cancelled`。
+- **限制**：卡死工具（如 MinerU 长轮询）下取消延迟；已写 `downloads/` 文件不删除。
+
+### 3. daemon 线程 + 启动兜底（已确认）
+
+- **行为**：`api.py` 用 `threading.Thread(..., daemon=True)` 跑 run；进程被强杀时状态可能停在 `queued`/`running`/`cancelling`。
+- **缓解**：lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 标 `failed`（`runtime/runs.py`）。
+- **限制**：强杀后需重启才纠正投影；中断瞬间前端可能看到中间态。
+
+### 4. session 单飞锁仅进程内有效（已确认）
+
+- **行为**：`api.py` `_acquire_session_run` 用 `app.state.session_locks: dict[str, threading.Lock]` + `registry_lock` 实现同 `session_id` 串行。
+- **限制**：`uvicorn --workers N` 或多实例时，同一 `session_id` 可跨进程并发；LangGraph `thread_id=session_id`（`runtime/execution.py`）的 checkpointer 可能交错写入。
+- **运维约束**：默认单 worker；多实例需分布式锁或 session 粘性路由。
+
+### 5. `session_locks` 字典只增不删（已确认）
+
+- **行为**：`setdefault(session_id, threading.Lock())` 永不清理；`active_runs` 在 `_release_session_run` 中 pop。
+- **限制**：Lock 对象通常很小；若 `session_id` 每次随机 UUID，字典无限增长。真正风险是释放逻辑 bug 导致 `active_runs` 残留 → 同 session 永久 `409`。
+
+### 6. 结构化输出：空壳 vs 其它失败的终态语义（已确认，已缓解）
+
+- **空壳耗尽**（`runtime/middleware.py` `_empty_shell_fallback_result`）：仅当 `empty_shell=True` **且** `self.schema is PhilipsWgqRecognitionResult` 时，写入合法 all-null `data` 骨架 + `outcome: "partial_success"` + runtime problem（`_EMPTY_SHELL_FALLBACK_PROBLEM`）；**不**编造业务字段；run 可 `succeeded`。
+- **其它失败耗尽**：`jump_to: "end"` 且无 `structured_response` → harness `structured_response missing` → run 可 `failed`（`runtime/execution.py`）。
+- **限制**：调用方须区分「真实业务 partial」与「空壳降级 partial」——依赖 `problems` 中 runtime 降级条目，而非仅看 `outcome`。
+- **测试**：`tests/test_harness.py` 断言 exhausted empty shell → `partial_success` 与骨架字段。
+
+### 7. 业务 `input_problems` 仍令 run `succeeded`（已确认）
+
+- **行为**：Philips 合同结果进 `run.result`；`outcome == input_problems` 时 harness 仍在拿到合法 `structured_response` 后标 `succeeded`。
+- **限制**：HTTP 状态/投影 status 不能单独表达「业务未通过」；必须读 `result.outcome` / `problems`。
+
+### 8. Oracle 主数据为可选旁路，整批异常合并（已确认）
+
+- **行为**（`skills/philipswgqinboundrecognition/scripts/tools.py` `_oracle_data`）：
+  - 三凭证缺失 → 单条「Oracle 配置缺失」problem，不抛；
+  - 宽 `except Exception` 包住 client 初始化、连接与全部 12NC 查询 → 单条「Oracle 查询失败」；
+  - 单 12NC 未命中 → 对应「Oracle 未命中」；
+  - Tracking 已有值优先，Oracle **仅补齐**仍为 `null` 的 `ORACLE_FIELDS`。
+- **限制**：调用方不能仅凭 problem 区分 Instant Client、网络、SQL 或整批失败；普通回归用 fake connection（`tests/test_philips_wgq_inbound_recognition.py`），真实 DB 不在默认门禁。
+
+### 9. 三库独立、无跨库事务（已确认）
+
+- **行为**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 分属 ledger / SqliteSaver / SqliteStore（`runtime/resources.py`）。
+- **限制**：run 事件与 checkpointer 状态无法原子一致；崩溃窗口靠 `fail_incomplete_runs` 与协作 cancel 兜底。不要假设「事件 succeeded ⇔ checkpoint 终态」强一致。
+
+### 10. 时区：ledger/OMS 用 UTC+8，文件名用本机本地时区（已确认）
+
+- **已对齐**：`runtime/runs.py`、`runtime/oms_log.py` 使用 `_CHINA_TZ`（UTC+8），格式 `YYYY-MM-DD HH:MM:SS`。
+- **未统一**：`api.py` 上传批次、`integrations/artifacts.py` `unique_download_path`、`integrations/mineru.py` 批次名使用 `time.strftime("%Y%m%d%H%M%S")`（**解释器本地时区**）。
+- **限制**：主机 TZ 非 `Asia/Shanghai` 时，文件名与库内/OMS `created_at` 可能差若干小时。
+
+### 11. MinerU 必需键 fail-fast；LLM 三键无启动期校验（已确认）
+
+- **MinerU**：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 缺失即 `RuntimeError`（`_required_env`）；`MINERU_EFFORT` 可为 `""`。
+- **MiniMax**：`DeepAgentsBrainFactory` 无启动期校验，`os.getenv` 可能得到 `None` 直至首次 `create`/调用 → run 进入 `running` 后才失败。
+- **限制**：无本地模型/MinerU 降级路径；未配 MinerU 时文档解析工具直接失败，整 run 可能 `failed`。
+
+### 12. `NoProgressMiddleware` 仅为启发式（已确认）
+
+- **行为**：`NO_PROGRESS_WINDOW = 3`；仅检测最近 HumanMessage 之后，同一 `tool + 归一化 args` 连续 3 次；从 message state 派生。
+- **限制**：A/B 交替失败调用不会触发；args 微调可绕过；窗口不可配置。
+
+### 13. 声明式 SubAgent 不继承主 Agent middleware（已确认）
+
+- **行为**：`workflow_subagents()` 经 extractor 显式注入 `runtime_middlewares()`（无 handbook）。主 Agent 另传 `memory_backend` 追加 `MemoryMiddleware`。
+- **限制**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测；若误给 SubAgent 传 `memory_backend` 会重复注入手册。
+
+---
+
+## Potential Risks（潜在风险 / 脆弱回归点）
+
+下列项若配置错误、重构回退或部署偏离假设，会产生故障或无限循环；其中部分已有测试门禁，仍须人工警惕。
+
+### 1. StructuredOutputRecovery：`can_jump_to` 与耗尽时 `jump_to: "end"`（已确认，已缓解，高危若回退）
 
 - **问题历史**：Philips workflow 使用 `ToolStrategy` 且业务图上无 tool 时，`create_agent` 在缺少 `structured_response` 时会走 model→model 边。若 `after_model` 在重试耗尽后只返回 `None`，图不会退出。
 - **当前缓解**（`runtime/middleware.py` `StructuredOutputRecovery`）：
   - `@hook_config(can_jump_to=["model", "end"])` — **必须**同时声明 `"end"`，禁止只允许 `"model"`
   - 解析/校验失败或空文本：`jump_to: "model"`，计数 `structured_recovery_attempts`，默认 `max_retries=2`
   - 耗尽重试：**必须** `return {"jump_to": "end"}`（源码注释：`Returning None would infinite-loop; jump to end instead.`）
-  - 空 `data: {}` / 缺 `shipment|header|items`：专用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 纠错骨架 + `philips_structured_output_error_message`（ToolStrategy `handle_errors`）；重试耗尽回退 all-null 合法骨架（`partial_success`），不编造业务字段
+  - 空 `data: {}` / 缺 `shipment|header|items`：`EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` + `philips_structured_output_error_message`；耗尽回退 all-null 骨架（见 Known Limitations §6）
   - Skill / `PHILIPS_WORKFLOW_PROMPT` 硬约束禁止空壳提交
-- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径专用纠错。
-- **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。模型仍可能在专用提示后重复空壳，最终由 `NoProgressMiddleware` 或 recovery 耗尽结束。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
-- **关联**：非空壳失败耗尽后 harness 仍可能 `structured_response missing` → run `failed`（`runtime/execution.py`），属预期失败路径，不是挂死。
+- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径。
+- **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
 
-### 2. 空壳耗尽 → `partial_success` 骨架回退（已确认，已缓解）
-
-- **问题**：模型反复提交空 `data` 壳时，若只 `jump_to: "end"` 且无 `structured_response`，run 会 `failed`，调用方拿不到可解析 JSON。
-- **当前行为**（`runtime/middleware.py` `_empty_shell_fallback_result`）：
-  - 仅当 `empty_shell=True` **且** `self.schema is PhilipsWgqRecognitionResult` 时，在重试耗尽后写入合法 all-null `data` 骨架 + `outcome: "partial_success"` + runtime problem（`_EMPTY_SHELL_FALLBACK_PROBLEM`）；保留模型已提交且形状合法的 `problems` 条目。
-  - **不**编造业务字段值；其它失败模式仍无 `structured_response`，可走 `failed`。
-  - schema 约束：`partial_success` 必须带至少一条 problem（`skills/philipswgqinboundrecognition/schema.py`）。
-- **影响 / 残留**：调用方须区分「真实业务 partial」与「空壳降级 partial」——依赖 `problems` 中 runtime 降级条目，而非仅看 `outcome`。
-- **测试证据**：`tests/test_harness.py` 断言 exhausted empty shell → `partial_success` 与骨架字段。
-
-### 3. workflow 工具收窄必须用 denylist，禁止业务-only allowlist（已确认，已缓解）
+### 2. workflow 工具收窄必须用 denylist（已确认，已缓解）
 
 - **正确模式**（`runtime/agent.py`）：
-  - 静态全量目录 `default_tool_catalog()` 含 5 个工具：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`（`runtime/tools.py`）。
+  - 静态全量目录 `default_tool_catalog()` 含 5 个工具（`runtime/tools.py`）：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`。
   - Philips workflow 用 **denylist** `_PHILIPS_EXCLUDED_TOOLS = {"save_tecan_extraction", "generate_tecan_import"}` 只排除**其他业务**（帝肯）工具。
-  - **共享 MinerU 工具** `parse_documents` / `extract_archives` **必须保留**，与 `/memories/AGENTS.md` ZIP 指引及 `skills/philips-wgq-inbound-recognition/SKILL.md` 固定流程一致。
-- **错误模式**：若改成「只 allowlist Philips 业务工具」或「只 allowlist `lookup_philips_wgq_master_data`」，模型工具表会丢失手册里的通用解析/解压能力，导致：
-  - 模型无法按 SKILL 调用 `parse_documents` / 对 MinerU `archive_path` 调用 `extract_archives`；
-  - handbook 与工具表不一致，行为漂移难排查。
-- **测试门禁**：`tests/test_workflow_setup.py` 用真实 catalog 断言 Philips 工具名集合 **含** `extract_archives` / `parse_documents`，**不含**帝肯工具；注释写明 denylist drift 检测。验证命令：`cd backend && python -m tests.test_workflow_setup`。
-- **新增 Skill 时**：在 `default_tool_catalog()` 追加静态注册；其他 workflow 收窄时继续 **denylist 排除他业务工具**，勿 allowlist 收窄到业务-only。
+  - **共享 MinerU 工具** `parse_documents` / `extract_archives` **必须保留**。
+- **错误模式**：业务-only allowlist 会丢掉手册中的解析/解压能力，与 `/memories/AGENTS.md` 及 `SKILL.md` 不一致。
+- **门禁**：`tests/test_workflow_setup.py`；命令：`cd backend && python -m tests.test_workflow_setup`。
+- **新增 Skill**：在 `default_tool_catalog()` 静态注册；其它 workflow 收窄继续 denylist 排除他业务工具。
 
-### 4. 单飞锁仅进程内有效（已确认）
-
-- **问题**：`api.py` `_acquire_session_run` 用 `app.state.session_locks: dict[str, threading.Lock]` + `registry_lock` 实现同 `session_id` 串行。
-- **影响**：`uvicorn --workers N` 或多实例时，同一 `session_id` 可跨进程并发；LangGraph `thread_id=session_id`（`runtime/execution.py`）的 checkpointer 可能交错写入。
-- **修复方向**：单 worker 部署写死运维约束；多实例需分布式锁或 session 粘性路由。
-
-### 5. `session_locks` 字典只增不删（已确认）
-
-- **问题**：`setdefault(session_id, threading.Lock())` 永不清理；`active_runs` 在 `_release_session_run` 中 pop。
-- **影响**：Lock 对象通常很小；若 `session_id` 每次随机 UUID，字典无限增长。真正风险是释放逻辑 bug 导致 `active_runs` 残留 → 同 session 永久 `409`。
-- **修复方向**：可选 LRU/TTL 清理；释放路径加断言/指标。
-
-### 6. 取消是协作 drain，非强杀（已确认）
-
-- **问题**：`POST /runs/{run_id}/cancel` → `RunControl.request_drain`；`execute_run` 在 chunk 间检查 `control.drain_requested` 并捕获 `GraphDrained` → `cancelled`。工具/网络阻塞期间可能长时间不回到检查点。
-- **证据**：`runtime/execution.py` `request_cancel` / `GraphDrained`；`api.py` cancel 在无 `RunControl` 时直接标 `cancelled`。
-- **影响**：卡死工具（如 MinerU 长轮询）下取消延迟；取消不回滚已写 `downloads/` 文件。
-- **修复方向**：工具层尊重超时；文档明确「取消不回滚 artifacts」。
-
-### 7. daemon 线程 + 启动兜底（已确认）
-
-- **问题**：`api.py` 用 `threading.Thread(..., daemon=True)` 跑 run；进程被强杀时状态可能停在 `queued`/`running`/`cancelling`。
-- **缓解**：lifespan 启动调用 `fail_incomplete_runs(INTERRUPTED_RUN_ERROR)` 标 `failed`（`runtime/runs.py`）。
-- **影响**：强杀后需重启才纠正投影；中断瞬间前端可能看到中间态；daemon 线程在解释器退出时可能被硬切断，不保证 finally 释放锁（通常进程已退出）。
-- **修复方向**：保持 lifespan 兜底；运维避免 SIGKILL。
-
-### 8. `NoProgressMiddleware` 仅为启发式（已确认）
-
-- **问题**：`NO_PROGRESS_WINDOW = 3`；`runtime/middleware.py` 仅检测最近 HumanMessage 之后，同一 `tool + 归一化 args` 连续 3 次；从 message state 派生，非业务进度证明。
-- **影响**：A/B 交替失败调用不会触发；args 微调可绕过；窗口不可配置。
-- **修复方向**：可配置窗口；可选总 tool-call 上限；跨工具振荡检测。
-
-### 9. 声明式 SubAgent 不继承主 Agent middleware（已确认）
-
-- **问题**：`workflow_subagents()` 经 extractor 显式注入 `runtime_middlewares()`（无 handbook）。主 Agent 另传 `memory_backend` 追加 `MemoryMiddleware`。
-- **影响**：只在主 Agent 装配处新增 middleware 而忘记 `runtime_middlewares()` → SubAgent 静默缺少 no-progress / 遥测；若误给 SubAgent 传 `memory_backend` 会重复注入手册。
-- **修复方向**：共享 middleware 只改 `runtime_middlewares()`；`tests/test_workflow_setup.py` 继续断言 SubAgent 无 `MemoryMiddleware`。
-
-### 10. Oracle 初始化与整批查询异常合并为一个问题（已确认）
-
-- **问题**：`skills/philipswgqinboundrecognition/scripts/tools.py` 的 `_oracle_data` 用一个宽 `except Exception` 包住 client 初始化、连接与全部 12NC 查询；任一步失败都返回单条「Oracle 查询失败」problem。配置缺失与逐料号未命中能单独区分。
-- **影响**：业务可保留 PDF/Tracking 数据并形成 `partial_success`，但调用方不能仅凭 problem 区分 Instant Client、网络、SQL 或整批失败。
-- **修复方向**：如运维确需定位，再把初始化/连接与逐料号查询分开记录；保持不抛弃已有识别结果。
-
-### 11. cancel 与 execute_run 启动竞态（需确认）
+### 3. cancel 与 `execute_run` 启动竞态（需确认）
 
 - **问题**：`cancel_run` 先投影 `cancelling`，再 `request_cancel`；若返回 `False`（尚无 `RunControl`）则直接 `cancelled`。同时 `_run_background` 可能刚进入 `execute_run` 注册 control。
-- **影响**：极端时序下可能出现「已 cancelled 投影」与随后 `running`/`succeeded` 事件交错（取决于 ledger 写顺序与线程调度）。
-- **修复方向**：用 ledger 状态机约束终态不可再前进；cancel 与 register control 共用同一把 per-run 锁。
+- **影响**：极端时序下可能出现「已 cancelled 投影」与随后 `running`/`succeeded` 事件交错。
+- **修复方向**：ledger 状态机约束终态不可再前进；cancel 与 register control 共用 per-run 锁。
 
-### 12. 并发 / 多 worker / SQLite 锁压力未覆盖（已确认）
+### 4. SQLite 并发与无 WAL / busy_timeout（已确认）
 
-- **问题**：本地测试用 `TestClient` + 单进程；无多 worker、无 `runs.db` 写锁压力测试。
-- **影响**：单飞锁跨进程与 SQLite 写争用只能在部署暴露。
-- **修复方向**：可选压测：同 session 冲突、跨 session 并行 emit、busy timeout。
+- **问题**：`SqliteRunLedger` 每次操作 `sqlite3.connect(self.db_path)`，`_setup` 未设 `PRAGMA journal_mode=WAL` 或 `busy_timeout`。
+- **影响**：run 执行期间高频 `emit_run_event` 与轮询 `get_run_events` 并发时，默认 delete journal 易出现 `database is locked`。本地测试为 `TestClient` + 单进程，无多 worker / 写锁压测。
+- **修复方向**：连接时 `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000`；可选写队列。
 
-### 13. Oracle 普通回归仅使用替身（已确认）
+### 5. 外部依赖抖动：MinerU / HTTP / LLM（已确认）
 
-- **问题**：`tests/test_philips_wgq_inbound_recognition.py` 用 fake connection 覆盖命中、配置缺失、查询失败和未命中；普通回归无真实 DB 连通测试。
-- **影响**：SQL、Instant Client 与真实超时行为不在默认门禁内。
-- **修复方向**：发布前 Oracle 探针保持 opt-in，与普通回归隔离。
+- **MinerU**：同步 `requests` + `MINERU_POLL_INTERVAL_SECONDS = 30.0` 轮询，总超时可达 `MINERU_TIMEOUT_SECONDS`（`.env.example` 示例 `7200`）；占用 daemon 工作线程；取消依赖协作点。
+- **LLM**：协议/thinking/cache/tool_choice 变更或 endpoint 不稳定 → run `failed`；cache 字段缺失时 `cache_hit_rate` / savings 失真（真实基线靠 `test_minimax_cache_baseline.py` 人工跑）。
+- **Oracle**：thick client / 网络 / 串行 12NC 延迟；降级见 Operational Prerequisites。
 
-### 14. MiniMax cache 字段端到端需人工（需确认）
+### 6. Oracle thick mode 与 `ORACLE_CLIENT_LIB_DIR` 误配（已确认）
 
-- **问题**：库侧 usage 规范化已有单测；真实端点是否回传 `cache_read_input_tokens` / `cache_creation_input_tokens` 依赖 `test_minimax_cache_baseline.py` 人工跑。
-- **影响**：缺失时字段为 0，`cache_hit_rate` 失真，计价 savings 偏低。
-- **修复方向**：定期跑基线；端点变更时重验。
+- **证据**：`_init_oracle_client(os.getenv("ORACLE_CLIENT_LIB_DIR"))` — 仅当 `lib_dir` 非空且进程内未初始化时调用 `oracledb.init_oracle_client`；全局 `_ORACLE_CLIENT_INITIALIZED` 只一次。
+- **风险**：需 thick 的环境未设 `ORACLE_CLIENT_LIB_DIR` 或路径错误 → 查询失败并入「Oracle 查询失败」problem，业务字段无法补齐；一旦进程内初始化成功，后续改 env 不生效直至重启。
+- **优雅降级**：凭证缺失 / 查询异常均不抛穿工具、不崩 run（见 Operational Prerequisites §1）。
 
-### 15. OMS 日志 best-effort 失败静默（已确认）
+### 7. Skill 打包遗漏（已确认）
 
-- **问题**：`api.py` `post_run` 在 `create_run` 成功后调用 `append_run_created_log(...)`；`except Exception: pass`，**永不**阻塞已创建的 run，也**不**记录失败原因。
-- **证据**：`api.py` 注释 `Best-effort OMS index: never block a successfully created run.`；`runtime/oms_log.py` 的 `append_run_created_log` 在 I/O 错误时 **会 raise**（由 API 层吞掉）。
-- **影响**：磁盘满、权限错误、路径不可写时，运维侧 OMS 索引静默缺失，run 本身仍 `queued` 并执行；排障时难发现「日志未写」。
-- **修复方向**：至少打服务端 warning（不含密钥）；可选指标计数；保持不阻塞 run 创建的语义。
+- **风险**：修改 `pyproject.toml` package-data 或重命名连字符目录后，wheel 缺 `SKILL.md` / 模板，生产加载 Skill 失败。
+- **缓解**：`tests/test_workflow_setup.py` 对源码树与 `AgentResources` mount 断言；发布前 `uv build` 并检查 wheel 内容。
 
-### 16. 时区一致性：ledger/OMS 用中国时区，文件名时间戳用本机本地时区（已确认）
+### 8. MiniMax cache 字段端到端需人工（需确认）
 
-- **已对齐**：
-  - `runtime/runs.py`：`_CHINA_TZ = timezone(timedelta(hours=8))`，`created_at` / `updated_at` / 事件时间为 `YYYY-MM-DD HH:MM:SS`（中国标准时间，无夏令时）。
-  - `runtime/oms_log.py`：同一 `_CHINA_TZ` 与同一时间格式，注释写明与 ledger 一致。
-- **未统一**：
-  - `api.py` 上传批次、`integrations/artifacts.py` `unique_download_path`、`integrations/mineru.py` 批次名使用 `time.strftime("%Y%m%d%H%M%S")`（**解释器本地时区**，非强制 UTC+8）。
-- **影响**：主机 TZ 非 `Asia/Shanghai` 时，文件名时间戳与库内/OMS `created_at` 可能差若干小时；跨区部署或容器默认 UTC 时易混淆。
-- **修复方向**：artifact 时间戳也改用 `_CHINA_TZ`（或统一 UTC + 文档约定）；部署固定 `TZ=Asia/Shanghai` 作为短期缓解。
+- **问题**：库侧 usage 规范化已有单测；真实端点是否回传 `cache_read_input_tokens` / `cache_creation_input_tokens` 依赖人工基线脚本。
+- **影响**：缺失时字段为 0，计价 savings 偏低。
 
-## Security
+### 9. 依赖升级清单（已确认）
+
+- 升级 `deepagents` / `langgraph` / `langchain-anthropic` 前：
+  1. `uv lock` 后跑全部本地脚本；
+  2. 核对 `FakeBrain` 契约（`stream_mode` / `subgraphs` / `version=v2` / `RunControl`）；
+  3. 核对 harness profile API 是否仍用 `register_harness_profile`；
+  4. 抽样真实 run 验证 usage 与 cancel。
+
+---
+
+## Security Notes（安全注意）
 
 ### 1. HTTP API 无鉴权 / 无用户隔离（已确认）
 
@@ -228,7 +272,7 @@ scope: backend/
   - Philips Oracle：`ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS`
   - 模板：`backend/.env.example`（仅键名与空值/占位说明）；真实密钥应在 `backend/.env`（根 `.gitignore` 忽略 `backend/.env` 与 `backend/.oracle/`）
 - **硬约束**：规划文档、codebase 事实文档、PR 描述、事件 payload **禁止**写入密钥、`.env` 值或私有连接串；只记录键名与行为。
-- **影响**：密钥不进仓库前提下仍可能经进程环境、异常文本或日志泄漏；任何把 `.env` 提交或打印环境的操作都是事故面。
+- **影响**：密钥不进仓库前提下仍可能经进程环境、异常文本或日志泄漏。
 - **修复方向**：禁止把 env **值**写入事件/日志（只打键名）；部署用密钥管理；代码评审禁止提交 `.env`。
 
 ### 6. `parse_documents` 允许本地绝对路径（已确认）
@@ -243,37 +287,33 @@ scope: backend/
 - **影响**：主 Agent 工具链可改写 artifacts 区文件（业务产物设计为 exclusive create，但通用文件工具仍可能覆盖/写入意外路径）。
 - **修复方向**：收紧主 Agent 写权限到 `/artifacts/downloads/**` 或仅工具 API 写盘。
 
+---
+
 ## Performance
 
 ### 1. `runs.db` 无 WAL / 无 busy_timeout（已确认）
 
-- **问题**：`SqliteRunLedger` 每次操作 `sqlite3.connect(self.db_path)`，`_setup` 未设 `PRAGMA journal_mode=WAL` 或 `busy_timeout`。
-- **影响**：run 执行期间高频 `emit_run_event` 与轮询 `get_run_events` 并发时，默认 delete journal + 默认 busy 超时易出现 `database is locked`。
-- **修复方向**：连接时 `PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000`（或更高）；评估长连接或写队列。
+- 见 Potential Risks §4。高频 emit + 轮询易锁库。
 
-### 2. 三库独立连接、无跨库事务（已确认）
-
-- **问题**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 分属 ledger / SqliteSaver / SqliteStore（`runtime/resources.py`）。
-- **影响**：run 事件与 checkpointer 状态无法原子一致；崩溃窗口靠 `fail_incomplete_runs` 与协作 cancel 语义兜底。
-- **修复方向**：接受最终一致并文档化；避免假设「事件 succeeded ⇔ checkpoint 终态」强一致。
-
-### 3. 事件流写放大（已确认）
+### 2. 事件流写放大（已确认）
 
 - **问题**：每个 stream chunk 可写 `thinking` / `text_delta` / `tool_*` / `model_usage` 等事件，且常带 `raw=chunk`；超 `max_inline_bytes` 外溢到磁盘。
 - **影响**：长思考 / 多工具 run 导致 SQLite 与 spill 目录膨胀，轮询响应变大。
 - **修复方向**：raw 采样或仅 failed 保留；合并连续 text_delta；客户端善用 `after_event_id`。
 
-### 4. MinerU 同步轮询阻塞工具线程（已确认）
+### 3. MinerU 同步轮询阻塞工具线程（已确认）
 
-- **问题**：`integrations/mineru.py` 默认 `MINERU_POLL_INTERVAL_SECONDS = 30.0`，总超时 `MINERU_TIMEOUT_SECONDS`（`.env.example` 示例 `7200`）；在工具调用栈内同步 `requests` + sleep 轮询。
-- **影响**：占用 daemon 工作线程直至完成/超时；取消依赖协作点，轮询中可能延迟响应 cancel。
-- **修复方向**：轮询循环检查 drain 标志；缩短 interval 可配置；避免同进程过多并行长解析。
+- **问题**：默认 30s 轮询间隔、总超时可达 7200s；在工具调用栈内同步 `requests` + sleep。
+- **影响**：占用 daemon 工作线程直至完成/超时；取消响应延迟。
+- **修复方向**：轮询循环检查 drain 标志；interval 可配置；避免同进程过多并行长解析。
 
-### 5. Oracle 按 12NC 串行查询（已确认）
+### 4. Oracle 按 12NC 串行查询（已确认）
 
-- **问题**：`_oracle_data` 在同一连接上对每个 `product_id` 循环 `cursor.execute`（`skills/philipswgqinboundrecognition/scripts/tools.py`）。
+- **问题**：`_oracle_data` 在同一连接上对每个 `product_id` 循环 `cursor.execute`。
 - **影响**：大批量料号时延迟线性增加；受 `ORACLE_TIMEOUT_SECONDS`（默认 30）与 `call_timeout` 约束。
 - **修复方向**：如业务需要，可评估批量 IN 查询或连接池；保持超时与 problem 降级语义。
+
+---
 
 ## Fragile Areas
 
@@ -315,33 +355,25 @@ scope: backend/
 - 业务写盘用 `unique_download_path` / `write_json_artifact`（不可覆盖）。
 - 改 `allow_local` 默认值会影响 MinerU 与测试夹具路径。
 
-### 6. Skill 业务工具契约
+### 6. Skill 业务工具契约与打包
 
 - Philips 只使用 `lookup_philips_wgq_master_data`，最终合同是 `PhilipsWgqRecognitionResult`；结构化响应缺失/非法令 run `failed`，业务 `input_problems` 仍令 run `succeeded`；空壳降级 `partial_success` 亦可 `succeeded`。
-- Philips schema/Tracking/Oracle：Python 逻辑在 `skills/philipswgqinboundrecognition/`，Skill 资源在 `skills/philips-wgq-inbound-recognition/`；Tecan：`save_tecan_extraction` + `generate_tecan_import`，逻辑在 `skills/tecanimport/`，资源在 `skills/tecan-import/`。
+- 资源目录 vs Python 包双轨 + `package-data` 清单见 Tech Debt §9。
 - 改 Philips 字段或主数据规则必须同步 `skills/philips-wgq-inbound-recognition/SKILL.md`、schema、业务测试和真实验收；改 Tecan 字段/模板同步 `skills/tecan-import/references/`、`assets/` 与 `test_tecan_import.py`。
 
-### 7. 依赖升级清单
-
-- 升级 `deepagents` / `langgraph` / `langchain-anthropic` 前：
-  1. `uv lock` 后跑全部本地脚本；
-  2. 核对 `FakeBrain` 契约（`stream_mode` / `subgraphs` / `version=v2` / `RunControl`）；
-  3. 核对 harness profile API 是否仍用 `register_harness_profile`；
-  4. 抽样真实 run 验证 usage 与 cancel。
-
-### 8. 存储与部署一致性
+### 7. 存储与部署一致性
 
 - 不要单独替换三库之一；schema 变更默认整清 `data/`。
 - 多 worker 前先解决 session 单飞与 SQLite 写模型。
 - 生产若启用 Philips 单位查询，必须外部提供 Oracle Instant Client；MinerU 必须可达。
 
-### 9. OMS 索引与时间字段
+### 8. OMS 索引与时间字段
 
 - OMS JSONL 非 `run_events` 路径，失败不得阻塞 run（`api.py` best-effort）。
 - 改 `created_at` 格式时必须同步 `SqliteRunLedger` 与 `oms_log._now_text`。
-- 文件名 `strftime` 与库内中国时区差异见 Known Risks §16。
+- 文件名 `strftime` 与库内中国时区差异见 Known Limitations §10。
 
-### 10. 外部依赖矩阵
+### 9. 外部依赖矩阵
 
 | 依赖 | 证据 | 风险 | 降级 / 备注 |
 |------|------|------|-------------|
@@ -353,6 +385,9 @@ scope: backend/
 | SQLite 三库 | `runtime/resources.py` / `runs.py` | 锁、磁盘、无迁移、无 WAL | checkpoints/store 由 LangGraph 管理 |
 | OMS JSONL | `runtime/oms_log.py` + `api.py` best-effort | 写失败静默；无轮转 | 不影响 run 创建 |
 | FastAPI / uvicorn / python-multipart | `api.py` | 上传无限制、无鉴权 | 依赖部署面防护 |
+| Skill package-data | `pyproject.toml` | wheel 缺 SKILL.md/assets | workflow_setup + 装包抽检 |
+
+---
 
 ## Operational Prerequisites
 
@@ -375,17 +410,17 @@ scope: backend/
 
 ### 2. MinerU 必需环境变量 fail-fast（已确认）
 
-- **前提**：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 缺失即 `RuntimeError`（`_required_env`）；`MINERU_EFFORT` 可为 `""` 并原样提交。
+- **前提**：`MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS` 缺失即 `RuntimeError`；`MINERU_EFFORT` 可为 `""` 并原样提交。
 - **协议假设**：`POST {base}/tasks` → 轮询 `status_url` → 下载 `result_url`（JSON 或 ZIP）；状态枚举 `pending` / `processing` / `completed` / `failed`。
-- **影响**：未配 MinerU 时文档解析工具直接失败，整 run 可能 `failed`；默认长超时（示例 7200s）占用工作线程。
+- **影响**：未配 MinerU 时文档解析工具直接失败，整 run 可能 `failed`；默认长超时占用工作线程。
 - **运维清单**：部署健康检查验证三键与服务可达；文档标明 `MINERU_EFFORT` 空值语义；注意与 cancel 协作点的延迟。
 
 ### 3. MiniMax / LLM provider 三键（已确认）
 
 - **前提**：`MINIMAX_API_KEY` / `MINIMAX_BASE_URL` / `MINIMAX_MODEL`（见 `.env.example`；示例 base `https://api.minimaxi.com/anthropic`，model `MiniMax-M3`）。
-- **问题**：`DeepAgentsBrainFactory` 无启动期校验，`os.getenv` 可能得到 `None` 直至首次 `create`/调用。
+- **问题**：`DeepAgentsBrainFactory` 无启动期校验。
 - **影响**：run 进入 `running` 后才失败并透传错误；无本地模型降级路径。
-- **运维清单**：lifespan 或工厂构造时校验非空；密钥轮换后重启进程以刷新 `load_dotenv` 已加载环境（取决于 dotenv 与进程生命周期）。
+- **运维清单**：lifespan 或工厂构造时校验非空；密钥轮换后重启进程以刷新已加载环境。
 
 ### 4. 部署数据目录生命周期（已确认）
 
@@ -408,18 +443,20 @@ scope: backend/
 
 - **前提**：包管理用 `uv`（`cd backend && uv sync`），勿用 `pip install -e .` 绕过 `uv.lock`。
 - **入口**：HTTP `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`；程序内 `AgentResources` + `create_harness(...).execute_run(...)`。
-- **运维清单**：变更 backend 后先同步 `backend/.planning/codebase/`，再按影响更新根级系统文档；真实模型 / MinerU / Oracle 测试与本地回归分开。
+- **运维清单**：变更 backend 后先同步 `backend/.planning/codebase/`，再按影响更新根级系统文档；真实模型 / MinerU / Oracle 测试与本地回归分开；发版检查 wheel 内 Skill 资源是否齐全。
 
 ### 8. 关键回归命令（改 fragile 区域后）
 
 | 场景 | 命令 |
 |------|------|
 | middleware `jump_to` / 空壳 `partial_success` / 重试封顶 | `cd backend && python -m tests.test_harness` |
-| Philips 工具 denylist / 共享 MinerU | `cd backend && python -m tests.test_workflow_setup` |
+| Philips 工具 denylist / 共享 MinerU / Skill 挂载 | `cd backend && python -m tests.test_workflow_setup` |
 | API / cancel / input_problems / OMS log | `cd backend && python -m tests.test_api` |
 | ledger / spill | `cd backend && python -m tests.test_run_ledger` |
 | 工具与 MinerU 客户端（可 mock） | `cd backend && python -m tests.test_tools` |
+| Philips 业务（fake Oracle） | `cd backend && python -m tests.test_philips_wgq_inbound_recognition` |
+| Tecan 业务 | `cd backend && python -m tests.test_tecan_import` |
 
 ---
 
-*Concerns analysis: 2026-07-17 · last_mapped_commit: d012362*
+*Concerns analysis: 2026-07-18 · last_mapped_commit: d39ed16*

@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Integrations
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 外部集成边界基于 `api.py`、`runtime/`、`integrations/`、`skills/` 与 `backend/.env.example` 核对。只记键名与用途，不记录真实密钥或本地 `.env` 值。`POST /upload` 与 `RunMessage` 的 `artifact` block 只暴露 `/artifacts/...` 虚拟路径；`parse_documents` 内部 `allow_local=True` 可供测试/程序内路径，业务 Skill 工具只接受显式 artifact 路径。
 

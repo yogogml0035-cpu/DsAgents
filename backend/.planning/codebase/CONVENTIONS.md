@@ -1,10 +1,10 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Coding Conventions
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
 > 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准，不以注释或外部文档臆测。
 
@@ -238,4 +238,4 @@ brain.stream(
 - **禁止模式**：不从 `backend.xxx` 导入；不在约定层依赖相对跨包 `from ...` 穿透 Skill 边界以外的随意路径；工具目录不动态 `importlib` 扫描；不重新引入已删除的 session API、SSE 或旧顶层辅助模块。
 
 ---
-*Conventions analysis: 2026-07-17*
+*Conventions analysis: 2026-07-18*

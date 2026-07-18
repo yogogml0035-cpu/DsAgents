@@ -1,12 +1,12 @@
 ---
-last_mapped_commit: d012362
+last_mapped_commit: d39ed16
 ---
 
 # Codebase Structure
 
-**Analysis Date:** 2026-07-17
+**Analysis Date:** 2026-07-18
 
-> 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。
+> 事实来源：`backend/` 工作树布局与源码。发行名 `dsagents`；安装根为 `backend/`（`package-dir=""`）。旧 `backend/dsagents/` 包壳已删除。`last_mapped_commit` 为 `d39ed16`。
 
 ## Directory Layout
 
@@ -64,7 +64,7 @@ backend/
 │   ├── test_philips_wgq_inbound_recognition.py
 │   ├── test_tecan_import.py
 │   ├── test_real_philips_wgq_inbound_recognition.py
-│   ├── test_real_philips_wgq_ups.py    # 真实集成（env 守卫）
+│   ├── test_real_philips_wgq_ups.py    # 真实集成（诊断/HTTP）
 │   ├── test_real_image_run.py
 │   ├── test_real_multi_pdf_run.py
 │   └── test_minimax_cache_baseline.py
@@ -81,7 +81,7 @@ backend/
         └── run-events/                 # 大 payload spill（按需创建）
 ```
 
-构建/安装产物（非源码事实，可能出现在工作树）：`dist/`、`dsagents.egg-info/`、`__pycache__/`。
+构建/安装产物（非源码事实，可能出现在工作树）：`dist/`、`dsagents.egg-info/`、`build/`、`__pycache__/`。分析时跳过数据产物与缓存。
 
 ## Directory Purposes
 
@@ -100,7 +100,7 @@ backend/
 
 ### Skill 目录角色
 
-运行时 Python 包目录使用合法包名，可直接绝对导入；Agent Skill 资源目录使用符合规范的连字符名称，并通过 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载到虚拟 FS；无动态 loader。Philips Python 包目录为 `philipswgqinboundrecognition`，Skill 资源目录为 `philips-wgq-inbound-recognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`（`schema.WORKFLOW`）。
+运行时 Python 包目录使用合法包名，可直接绝对导入；Agent Skill 资源目录使用符合规范的 **kebab-case** 连字符名称，并通过 `skills=[SKILLS_SOURCE]`（`/skills/`）挂载到虚拟 FS；无动态 loader。Philips Python 包目录为 `philipswgqinboundrecognition`，Skill 资源目录为 `philips-wgq-inbound-recognition`，其 workflow 常量为 `philips_wgq_inbound_recognition`（`schema.WORKFLOW`）。
 
 | 子路径 | 角色 |
 |--------|------|
@@ -109,6 +109,8 @@ backend/
 | `tecan-import/references/` / `tecan-import/assets/` | Tecan 字段参考与 Excel 模板 |
 | `scripts/tools.py` | 暴露给模型的业务 Tool；Philips 1 个、Tecan 2 个 |
 | `scripts/documents.py` | 仅 Tecan 的模板写入实现，不直接注册为 Tool |
+
+Skill 包布局约定：**kebab-case `SKILL.md` 资源目录** + **可 import 的 Python 包目录** 成对存在（两套内置 Skill 均如此）。
 
 ## Key File Locations
 
@@ -290,4 +292,4 @@ backend/
 - 不要把 OMS 日志写入 `run_events` 或依赖其作为执行真相源。
 
 ---
-*Structure analysis: 2026-07-17*
+*Structure analysis: 2026-07-18 · last_mapped_commit: d39ed16*

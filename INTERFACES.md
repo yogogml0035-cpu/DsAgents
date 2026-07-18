@@ -1,13 +1,13 @@
 # INTERFACES
 
 > 系统级接口边界。已确认契约直接陈述；证据不足或推断的标 **需确认**。底层契约细节（完整请求/响应 JSON 形状、表结构、配置键清单、工具入参）以 [`backend/.planning/codebase/INTEGRATIONS.md`](backend/.planning/codebase/INTEGRATIONS.md) 为准。
-> 本轮刷新（2026-07-17）对齐 backend 事实文档（Analysis Date: 2026-07-17，`last_mapped_commit` d012362）：固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；HTTP `POST /runs` 在 `create_run` 成功后 **best-effort OMS** 旁路索引（`runtime/oms_log.py` → `backend/log/oms_log.log`，非 `run_events`、无查询 API）；时间字段中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
+> 本轮刷新（2026-07-18）对齐 backend 事实文档（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）：固定 `philips_wgq_inbound_recognition` workflow、`run.result` 结构化响应通道、`runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist**（保留共享 MinerU）、主 Agent middleware 共约 5 个 / SubAgent 各 4 个、5 个静态工具与仅保留的 2 个 Tecan SubAgent；HTTP `POST /runs` 在 `create_run` 成功后 **best-effort OMS** 旁路索引（`runtime/oms_log.py` → `backend/log/oms_log.log`，非 `run_events`、无查询 API）；时间字段中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 资源以 `/skills/` kebab 目录挂载；四 HTTP 端点、7 类事件、协作 cancel、三 SQLite + artifacts 边界保持。
 
 HTTP 与业务 Skill 的文件边界只接受显式 `/artifacts/...` 路径；`parse_documents` 的程序内调用为测试便利保留 `allow_local`，不改变对外 API 契约。
 
 ## 1. HTTP API 边界
 
-四个端点（入口 `api.py`；`create_app(*, resource_config=None, harness_factory=create_harness)`；模块级 `app = create_app()`；`uv run uvicorn api:app --host 0.0.0.0 --port 8500`）。**无 SSE** / `StreamingResponse` / `text/event-stream`，事件靠轮询。
+四个端点（入口 `api.py`；`create_app(*, resource_config=None, harness_factory=create_harness)`；模块级 `app = create_app()`；生产默认 `uv run uvicorn api:app --host 0.0.0.0 --port 8500`，或 `scripts/start-backend.ps1`）。部分真实集成脚本可用 env 覆盖默认 `8500`/`8501`。**无 SSE** / `StreamingResponse` / `text/event-stream`，事件靠轮询。
 
 | 方法 / 路径 | 入参 | 行为 | 返回 |
 |---|---|---|---|
@@ -145,7 +145,7 @@ brain.stream(
 | `data/artifacts/downloads/` | `/artifacts/downloads/` | MinerU、解压、Tecan JSON/Excel（唯一下载名） |
 | `backend/skills/` | `/skills/` | 只读 Skill 源（主 Agent write deny `/skills/**`） |
 
-路径解析：`integrations/artifacts.py`（拒绝 `..`）。Tecan generator 默认 `allow_local=False`；`parse_documents` 为测试/程序内保留 `allow_local`。Tecan 模板在 `/skills/tecan-import/assets/`，生成时复制填充。Philips Tracking `.xlsx` 由专用工具只读，不生成 Excel。取消/失败不回滚 downloads。
+路径解析：`integrations/artifacts.py`（拒绝 `..`）。Tecan generator 默认 `allow_local=False`；`parse_documents` 为测试/程序内保留 `allow_local`。`/skills/` 挂载 `backend/skills/` 下 kebab 资源目录（Philips：`philips-wgq-inbound-recognition/`；Tecan：`tecan-import/`）。Tecan 模板在 `/skills/tecan-import/assets/`，生成时复制填充。Philips Tracking `.xlsx` 由专用工具只读，不生成 Excel。取消/失败不回滚 downloads。
 
 ### 5.3 Skills / 业务工具
 
