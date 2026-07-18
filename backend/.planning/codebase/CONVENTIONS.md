@@ -15,7 +15,7 @@ last_mapped_commit: d012362
 - **常量**：`UPPER_SNAKE_CASE`（如 `RUN_STATUSES`、`INTERRUPTED_RUN_ERROR`、`MAIN_AGENT_NAME`、`MAIN_AGENT_MODEL`、`NO_PROGRESS_WINDOW`、`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`、`ARTIFACT_REFERENCE_HINT`、`BACKEND_ENV_PATH`、`RUNTIME_AGENTS_PATH`、`WORKFLOW`、`EMPTY_DATA_SHELL_HINT`、`PHILIPS_MINIMAL_DATA_SKELETON`、`SKILLS_SOURCE`、`_PHILIPS_EXCLUDED_TOOLS`、`DEFAULT_OMS_LOG_PATH`）。
 - **私有符号**：单下划线前缀 `_`（如 `_normalize_messages`、`_error_text`、`_problem`、`_problems`、`_required_env`、`_retry_or_give_up`、`_safe_writer`、`_now_text`）。测试内部检查函数同惯例：`_check_*`。
 - **类型别名**：`ToolHandler = Callable[..., Any]`（`runtime/tools.py`）；协议名用名词：`Brain`、`BrainFactory`。
-- **Skill / 包标识符**：Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；`SKILL.md` frontmatter 名可使用连字符（`philips-wgq-inbound-recognition`）。声明式 SubAgent 显示名用连字符（`tecan-extractor-a` / `tecan-extractor-b`）。
+- **Skill / 包标识符**：运行时 Python 包目录不含连字符（`philipswgqinboundrecognition`、`tecanimport`）；Agent Skill 资源目录使用连字符（`philips-wgq-inbound-recognition`、`tecan-import`），其 `SKILL.md` frontmatter `name` 必须与资源目录名一致，以符合 Agent Skills specification。声明式 SubAgent 显示名也用连字符（`tecan-extractor-a` / `tecan-extractor-b`）。
 - **业务工具函数名**：按实际职责命名。Philips 使用单一查询工具 `lookup_philips_wgq_master_data`；Tecan 保留 `save_tecan_extraction` + `generate_tecan_import`；通用 MinerU 工具为 `parse_documents`、`extract_archives`。
 - **HTTP / 事件字段**：请求与事件 payload 用 `snake_case` JSON 键（`session_id`、`run_id`、`after_event_id`、`input_tokens`、`cache_read_input_tokens`、`structured_response`、`result_json`）。
 - **run 状态字面量**：`queued` / `running` / `succeeded` / `failed` / `cancelling` / `cancelled`（集合 `RUN_STATUSES` 于 `runtime/runs.py`）。
@@ -71,8 +71,8 @@ last_mapped_commit: d012362
   - `api.py` — FastAPI HTTP 入口（`create_app`、`app`）；端点 `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`
   - `runtime/` — 运行时：`agent.py`（Brain/工厂/SubAgent 装配）、`middleware.py`（可复用 middleware）、`execution.py`（Harness）、`resources.py`（资源装配）、`runs.py`（ledger）、`tools.py`（ToolCatalog）、`observability.py`（纯提取器）、`oms_log.py`（HTTP run 创建 JSONL 检索索引）
   - `integrations/` — 外部集成：`artifacts.py`（路径/JSON）、`mineru.py`（解析与解压）
-  - `skills/` — 内置 Skill 包：`philipswgqinboundrecognition/`（`SKILL.md`、`schema.py`、`scripts/tools.py`）与 `tecanimport/`（`SKILL.md`、`references/`、`assets/`、`scripts/{tools.py,documents.py}`）
-- **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Philips 打包 `SKILL.md`，Tecan 另打包 `references/*.md` / `assets/*`。
+  - `skills/` — 运行时 Python 包 `philipswgqinboundrecognition/`、`tecanimport/` 与带连字符的 Agent Skill 资源目录 `philips-wgq-inbound-recognition/`、`tecan-import/`
+- **发行名**仍为 `dsagents`；`[tool.setuptools] py-modules = ["api"]`，包发现 `runtime*` / `integrations*` / `skills*`；Skill 资源由 `skills` package-data 打包，包含 `SKILL.md`、Tecan `references/*.md` / `assets/*`。
 - **导入一律绝对顶层**，无 `backend.` 前缀：
 
   ```python

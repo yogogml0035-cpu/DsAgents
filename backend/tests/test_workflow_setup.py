@@ -31,8 +31,8 @@ from runtime.tools import default_tool_catalog
 
 def run() -> None:
     skills_root = Path(__file__).resolve().parents[1] / "skills"
-    philips = (skills_root / "philipswgqinboundrecognition" / "SKILL.md").read_text(encoding="utf-8")
-    tecan = (skills_root / "tecanimport" / "SKILL.md").read_text(encoding="utf-8")
+    philips = (skills_root / "philips-wgq-inbound-recognition" / "SKILL.md").read_text(encoding="utf-8")
+    tecan = (skills_root / "tecan-import" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
     assert len(tecan.splitlines()) <= 100
     assert "重复 12NC 保留" in philips
@@ -40,10 +40,12 @@ def run() -> None:
     assert "两个以上真实票次" in philips
     assert "同一个主模型回合并行" in tecan
     assert "普通 PDF" in philips and "普通 PDF" in tecan
+    assert "name: philips-wgq-inbound-recognition" in philips
+    assert "name: tecan-import" in tecan
     assert "普通 PDF 抽取请求不够" in DEFAULT_SYSTEM_PROMPT
     assert "Persist important notes under /memories/" not in DEFAULT_SYSTEM_PROMPT
     assert "业务 Skill" in DEFAULT_SYSTEM_PROMPT
-    assert "philipswgqinboundrecognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
+    assert "philips-wgq-inbound-recognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
 
     # Subagents get recovery + telemetry stack — no shared handbook.
     sub_middleware = runtime_middlewares()
@@ -192,11 +194,11 @@ def run() -> None:
             listing = mounted.backend.ls("/skills/")
             assert listing.error is None
             paths = {entry["path"].rstrip("/") for entry in listing.entries}
-            assert "/skills/philipswgqinboundrecognition" in paths
-            assert "/skills/tecanimport" in paths
-            skill = mounted.backend.read("/skills/philipswgqinboundrecognition/SKILL.md")
+            assert "/skills/philips-wgq-inbound-recognition" in paths
+            assert "/skills/tecan-import" in paths
+            skill = mounted.backend.read("/skills/philips-wgq-inbound-recognition/SKILL.md")
             assert skill.error is None and skill.file_data is not None
-            assert "philips-wgq-inbound-recognition" in skill.file_data["content"]
+            assert "name: philips-wgq-inbound-recognition" in skill.file_data["content"]
 
     # _update_events turns an `updates`-mode node diff into tool_execution /
     # assistant_message events. Two tool calls on one assistant message -> two

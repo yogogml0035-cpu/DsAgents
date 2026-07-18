@@ -102,7 +102,7 @@ scope: backend/
 - **正确模式**（`runtime/agent.py`）：
   - 静态全量目录 `default_tool_catalog()` 含 5 个工具：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`save_tecan_extraction`、`generate_tecan_import`（`runtime/tools.py`）。
   - Philips workflow 用 **denylist** `_PHILIPS_EXCLUDED_TOOLS = {"save_tecan_extraction", "generate_tecan_import"}` 只排除**其他业务**（帝肯）工具。
-  - **共享 MinerU 工具** `parse_documents` / `extract_archives` **必须保留**，与 `/memories/AGENTS.md` ZIP 指引及 `skills/philipswgqinboundrecognition/SKILL.md` 固定流程一致。
+  - **共享 MinerU 工具** `parse_documents` / `extract_archives` **必须保留**，与 `/memories/AGENTS.md` ZIP 指引及 `skills/philips-wgq-inbound-recognition/SKILL.md` 固定流程一致。
 - **错误模式**：若改成「只 allowlist Philips 业务工具」或「只 allowlist `lookup_philips_wgq_master_data`」，模型工具表会丢失手册里的通用解析/解压能力，导致：
   - 模型无法按 SKILL 调用 `parse_documents` / 对 MinerU `archive_path` 调用 `extract_archives`；
   - handbook 与工具表不一致，行为漂移难排查。
@@ -306,7 +306,7 @@ scope: backend/
 
 - 收窄 `tools` 时必须 denylist **其他业务**工具，**保留** `parse_documents` / `extract_archives`。
 - 证据：`runtime/agent.py` `_PHILIPS_EXCLUDED_TOOLS` + 过滤列表推导；`tests/test_workflow_setup.py` 断言集合。
-- 触达：`runtime/agent.py`、`runtime/tools.py`、`runtime/resources.py`（handbook ZIP 指引）、Philips/Tecan `SKILL.md`、`tests/test_workflow_setup.py`。
+- 触达：`runtime/agent.py`、`runtime/tools.py`、`runtime/resources.py`（handbook ZIP 指引）、`skills/philips-wgq-inbound-recognition/SKILL.md`、`skills/tecan-import/SKILL.md`、`tests/test_workflow_setup.py`。
 - 回归：`python -m tests.test_workflow_setup`。
 
 ### 5. artifact 路径安全
@@ -318,8 +318,8 @@ scope: backend/
 ### 6. Skill 业务工具契约
 
 - Philips 只使用 `lookup_philips_wgq_master_data`，最终合同是 `PhilipsWgqRecognitionResult`；结构化响应缺失/非法令 run `failed`，业务 `input_problems` 仍令 run `succeeded`；空壳降级 `partial_success` 亦可 `succeeded`。
-- Philips schema/Tracking/Oracle：`skills/philipswgqinboundrecognition/`；Tecan：`save_tecan_extraction` + `generate_tecan_import`，逻辑在 `skills/tecanimport/`。
-- 改 Philips 字段或主数据规则必须同步 `SKILL.md`、schema、业务测试和真实验收；改 Tecan 字段/模板同步 references、assets 与 `test_tecan_import.py`。
+- Philips schema/Tracking/Oracle：Python 逻辑在 `skills/philipswgqinboundrecognition/`，Skill 资源在 `skills/philips-wgq-inbound-recognition/`；Tecan：`save_tecan_extraction` + `generate_tecan_import`，逻辑在 `skills/tecanimport/`，资源在 `skills/tecan-import/`。
+- 改 Philips 字段或主数据规则必须同步 `skills/philips-wgq-inbound-recognition/SKILL.md`、schema、业务测试和真实验收；改 Tecan 字段/模板同步 `skills/tecan-import/references/`、`assets/` 与 `test_tecan_import.py`。
 
 ### 7. 依赖升级清单
 

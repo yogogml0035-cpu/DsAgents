@@ -6,7 +6,7 @@ last_mapped_commit: d012362
 
 **Analysis Date:** 2026-07-17
 
-> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` 及其 `scripts/`。结论以源码为准。
+> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` Python 包与 `skills/{philips-wgq-inbound-recognition,tecan-import}/` Agent Skill 资源。结论以源码为准。
 
 ## Pattern Overview
 
@@ -57,10 +57,10 @@ last_mapped_commit: d012362
                 │                         │
 ┌───────────────▼──────────┐  ┌───────────▼───────────────────┐
 │  业务 Skill 层            │  │  集成层 integrations/          │
-│  skills/philipswgqinbound-│  │  artifacts.py 路径/JSON helper │
-│  recognition/             │  │                                │
-│  skills/tecanimport/      │  │  mineru.py 解析/解压工具       │
-│  scripts/tools.py         │  └───────────────────────────────┘
+│  skills/philips-wgq-     │  │  artifacts.py 路径/JSON helper │
+│  inbound-recognition/    │  │                                │
+│  skills/tecan-import/     │  │  mineru.py 解析/解压工具       │
+│  + Python packages        │  └───────────────────────────────┘
 └───────────────────────────┘
                 │
 ┌───────────────▼─────────────────────────────────────────────┐
@@ -78,7 +78,7 @@ last_mapped_commit: d012362
 | 能力 | 模型工厂、middleware、SubAgent、工具目录 | `runtime/agent.py`、`runtime/middleware.py`、`runtime/tools.py` |
 | 可观测提取 | 纯函数：chunk → usage/thinking/text/assistant payload | `runtime/observability.py` |
 | OMS 索引 | create run 后 JSONL 摘要（旁路） | `runtime/oms_log.py` |
-| 业务 Skill | Philips 识别合同/主数据补齐；Tecan 抽取与 Excel 生成 | `skills/*/` |
+| 业务 Skill | Philips 识别合同/主数据补齐；Tecan 抽取与 Excel 生成 | 连字符 Skill 资源目录 + 对应 Python 包 |
 | 集成 | `/artifacts/` 安全路径、MinerU HTTP | `integrations/` |
 | 持久化 | run ledger、checkpoint、store、虚拟 FS 路由 | `runtime/resources.py`、`runtime/runs.py` |
 

@@ -10,7 +10,7 @@
 
 - **能力可插拔**：`Brain` / `BrainFactory` 是 `typing.Protocol`（`runtime/agent.py`）；middleware 实现集中在 `runtime/middleware.py`，由 `runtime_middlewares()` 与 agent 工厂装配；工具保持普通 callable + `ToolCatalog`；资源 / ledger 保持具体类。默认装配从 `create_harness` 进入（`DeepAgentsBrainFactory` + `default_tool_catalog()`）；本地测试用 `FakeBrainFactory` 替换。
 - **工具静态注册**：`default_tool_catalog()` 静态注册 5 个工具（2 个 MinerU 通用、Philips 1 个主数据工具、Tecan 2 个业务工具）；普通 Python import，不自动扫描、无插件平台。
-- **业务能力按 Skill 打包**：`skills/philipswgqinboundrecognition/` 提供固定响应合同、专用 Skill 与 `lookup_philips_wgq_master_data`；`skills/tecanimport/` 保留抽取保存与 Excel 生成。`workflow_subagents()` 当前只注册 2 个 Tecan extractor（`tecan-extractor-a` / `tecan-extractor-b`），Philips workflow 不使用 SubAgent。
+- **业务能力按 Skill 打包**：Agent Skill 资源位于 `skills/philips-wgq-inbound-recognition/` 与 `skills/tecan-import/`；Python 实现分别位于 `skills/philipswgqinboundrecognition/` 与 `skills/tecanimport/`。Philips 提供固定响应合同与 `lookup_philips_wgq_master_data`，Tecan 保留抽取保存与 Excel 生成。`workflow_subagents()` 当前只注册 2 个 Tecan extractor（`tecan-extractor-a` / `tecan-extractor-b`），Philips workflow 不使用 SubAgent。
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为事件投影快照。`session_id` 仅作 LangGraph `thread_id` 与进程内单飞锁键，不是一等持久化对象。
 - **入口形态**：HTTP（`POST /runs` 立即返回 `queued`，后台 daemon 线程执行；纯轮询增量事件，无 SSE）+ 程序内组合（`AgentResources` + `create_harness(...).execute_run(...)`）；无 one-shot 单函数 API。
 - **业务工作流形态**：`POST /runs` 可显式选择唯一固定 workflow `philips_wgq_inbound_recognition`；Philips 用 `ToolStrategy(PhilipsWgqRecognitionResult)` 将验证后的业务 JSON 投影到 `run.result` / `runs.result_json`，Tecan 仍按 Skill 驱动 A/B 抽取与 Excel。两者均不新增业务 HTTP、状态表或跨 run 恢复接口。
@@ -53,8 +53,8 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 | `runtime/tools.py` | `ToolCatalog` + `default_tool_catalog()` 静态 5 工具 |
 | `integrations/artifacts.py` | `/artifacts/` 安全路径、唯一下载名、不可覆盖 JSON、上传命名 |
 | `integrations/mineru.py` | `parse_documents` / `extract_archives` + `tool_progress` |
-| `skills/philipswgqinboundrecognition/` | Philips 外高桥进境：`SKILL.md` + Pydantic schema + Tracking/Oracle 单一主数据 Tool |
-| `skills/tecanimport/` | Tecan 帝肯进口：`SKILL.md` + references/assets + 2 业务 Tool |
+| `skills/philips-wgq-inbound-recognition/` + `skills/philipswgqinboundrecognition/` | Philips 外高桥进境：Agent Skill `SKILL.md` + Pydantic schema + Tracking/Oracle 单一主数据 Tool |
+| `skills/tecan-import/` + `skills/tecanimport/` | Tecan 帝肯进口：Agent Skill `SKILL.md` + references/assets + 2 业务 Tool |
 
 固定数据目录 `backend/data/`（`ResourceConfig` 锚定，与 CWD 无关）：
 

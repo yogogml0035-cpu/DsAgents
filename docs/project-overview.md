@@ -19,8 +19,8 @@
 ## 源码阅读入口
 
 - 运行时主链：`backend/runtime/execution.py`（`HarnessRuntime.execute_run`）、`backend/runtime/agent.py`（Brain/SubAgent 装配）、`backend/runtime/middleware.py`（middleware hook）
-- Philips 识别：`backend/skills/philipswgqinboundrecognition/`（`SKILL.md` + `schema.py` + `scripts/tools.py`）及 [`philips-wgq-inbound-recognition-prd.md`](philips-wgq-inbound-recognition-prd.md)
-- Tecan：`backend/skills/tecanimport/`（`SKILL.md` + `scripts/{tools.py,documents.py}` + `references/` + `assets/`）
+- Philips 识别：Agent Skill 资源 `backend/skills/philips-wgq-inbound-recognition/SKILL.md`，Python 实现 `backend/skills/philipswgqinboundrecognition/`（`schema.py` + `scripts/tools.py`），以及 [`philips-wgq-inbound-recognition-prd.md`](philips-wgq-inbound-recognition-prd.md)
+- Tecan：Agent Skill 资源 `backend/skills/tecan-import/`（`SKILL.md` + `references/` + `assets/`），Python 实现 `backend/skills/tecanimport/scripts/{tools.py,documents.py}`
 - artifact 基础设施：`backend/integrations/artifacts.py` — 文件名清洗、artifact 虚拟路径与物理路径互转、原子落盘
 - MinerU 集成：`backend/integrations/mineru.py` — `parse_documents` / `extract_archives`
 - Run 持久化：`backend/runtime/runs.py`

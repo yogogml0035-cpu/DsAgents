@@ -145,7 +145,7 @@ brain.stream(
 | `data/artifacts/downloads/` | `/artifacts/downloads/` | MinerU、解压、Tecan JSON/Excel（唯一下载名） |
 | `backend/skills/` | `/skills/` | 只读 Skill 源（主 Agent write deny `/skills/**`） |
 
-路径解析：`integrations/artifacts.py`（拒绝 `..`）。Tecan generator 默认 `allow_local=False`；`parse_documents` 为测试/程序内保留 `allow_local`。Tecan 模板在 `/skills/tecanimport/assets/`，生成时复制填充。Philips Tracking `.xlsx` 由专用工具只读，不生成 Excel。取消/失败不回滚 downloads。
+路径解析：`integrations/artifacts.py`（拒绝 `..`）。Tecan generator 默认 `allow_local=False`；`parse_documents` 为测试/程序内保留 `allow_local`。Tecan 模板在 `/skills/tecan-import/assets/`，生成时复制填充。Philips Tracking `.xlsx` 由专用工具只读，不生成 Excel。取消/失败不回滚 downloads。
 
 ### 5.3 Skills / 业务工具
 

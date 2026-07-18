@@ -16,7 +16,7 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 | 能力可插拔 | `Brain` / `BrainFactory` 为 `typing.Protocol`（`runtime/agent.py`）；middleware 集中在 `runtime/middleware.py`；工具为 callable + `ToolCatalog` |
 | 默认装配 | `create_harness` → `DeepAgentsBrainFactory` + `default_tool_catalog()`；测试用 `FakeBrainFactory` |
 | 工具注册 | `default_tool_catalog()` **静态**注册 5 工具；普通 import，无自动扫描 / 插件平台 |
-| 业务 Skill | Philips：`skills/philipswgqinboundrecognition/`（固定 workflow + 结构化合同 + 1 主数据 Tool）；Tecan：`skills/tecanimport/`（2 业务 Tool + Excel） |
+| 业务 Skill | Philips：`skills/philips-wgq-inbound-recognition/` + Python 包 `skills/philipswgqinboundrecognition/`（固定 workflow + 结构化合同 + 1 主数据 Tool）；Tecan：`skills/tecan-import/` + Python 包 `skills/tecanimport/`（2 业务 Tool + Excel） |
 | SubAgent | 仅 `tecan-extractor-a` / `tecan-extractor-b`；Philips **无** SubAgent |
 | OMS 旁路 | `runtime/oms_log.py`：HTTP `POST /runs` 在 `create_run` **成功之后** best-effort 追加 `backend/log/oms_log.log`（JSONL，`event=run_created`）；**不是** `run_events`；写失败不阻塞 run |
 | 时间戳 | 中国时区 UTC+8 本地格式 `YYYY-MM-DD HH:MM:SS`；`SqliteRunLedger` 与 `oms_log` 共用同一约定 |
@@ -47,7 +47,9 @@ DsAgents 是一个 **agent 运行时底座**：把能力（Brain、工具）做�
 | `runtime/runs.py` | `SqliteRunLedger`；`workflow` / `result_json` 投影；spill；中国时区时间戳 |
 | `runtime/tools.py` | `ToolCatalog` + 5 工具静态注册 |
 | `integrations/` | artifacts 路径安全；MinerU `parse_documents` / `extract_archives` |
+| `skills/philips-wgq-inbound-recognition/` | Philips 固定流程 `SKILL.md` |
 | `skills/philipswgqinboundrecognition/` | 固定响应合同 + Tracking/Oracle 主数据 Tool |
+| `skills/tecan-import/` | Tecan `SKILL.md` + references/assets |
 | `skills/tecanimport/` | 抽取保存 + Excel 生成 |
 | `backend/log/` | 运行时生成：`oms_log.log`（OMS 检索索引；非 git 源码；非 ledger） |
 
@@ -277,7 +279,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 - 虚拟路径 `/artifacts/...` 经 `integrations/artifacts.py` 解析，拒绝 `..`。
 - HTTP/业务 Skill 只接受显式 `/artifacts/...`；`parse_documents` 为测试/程序内保留 `allow_local`。
-- Tecan 模板在 `/skills/tecanimport/assets/`；Philips Tracking 只读，不生成 Excel。
+- Tecan 模板在 `/skills/tecan-import/assets/`；Philips Tracking 只读，不生成 Excel。
 - 取消/失败**不回滚**已写 downloads。
 
 **Provider 配置键（仅键名）：**
@@ -334,8 +336,8 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 
 | 任务 | 先读 |
 |------|------|
-| Philips 识别 | `docs/philips-wgq-inbound-recognition-prd.md` → `skills/philipswgqinboundrecognition/{SKILL.md,schema.py,scripts/tools.py}` → `tests/test_philips_wgq_inbound_recognition.py` |
-| Tecan 生成 | `skills/tecanimport/SKILL.md` + `references/` → `scripts/tools.py` / `documents.py` → `tests/test_tecan_import.py` |
+| Philips 识别 | `docs/philips-wgq-inbound-recognition-prd.md` → `skills/philips-wgq-inbound-recognition/SKILL.md` + `skills/philipswgqinboundrecognition/{schema.py,scripts/tools.py}` → `tests/test_philips_wgq_inbound_recognition.py` |
+| Tecan 生成 | `skills/tecan-import/{SKILL.md,references/,assets/}` → `skills/tecanimport/scripts/{tools.py,documents.py}` → `tests/test_tecan_import.py` |
 | 新增 Skill | CONVENTIONS 工具静态注册约定 → `runtime/tools.py` 追加 import/注册 → `pyproject.toml` package-data → 新建 Skill 包目录；其它 workflow 收窄用 denylist |
 | Excel 模板 / 单元格 | 当前仅 Tecan `assets/` + `scripts/documents.py`；Philips Tracking 为只读输入，不生成 Excel |
 
