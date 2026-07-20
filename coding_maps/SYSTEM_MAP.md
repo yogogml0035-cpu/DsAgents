@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（基线 `last_mapped_commit` d39ed16，含当前工作树修复）与根级三件套：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳的精确 `tool_call_id` 文本恢复、纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。
+> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: **2026-07-20**，`last_mapped_commit`: **555bca7**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md`：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳的精确 `tool_call_id` 文本恢复、纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。
 
 ## 1. 系统目的和仓库形态
 
@@ -392,13 +392,14 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 ### 7.5 middleware / 结构化输出 / 工具裁剪 / OMS / 依赖
 
 - [ ] 改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`；空壳路径不编造字段；空壳耗尽走 all-null `partial_success` skeleton，其它失败模式可 `failed`；用 `python -m tests.test_harness` 验证重试封顶与空壳路径。
-- [ ] workflow 收窄用 **denylist** 排除他业务工具，保留 `parse_documents` / `extract_archives`；`test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具。
+- [ ] **SubAgent recovery schema 错位**：`runtime_middlewares()` 无参时 `StructuredOutputRecovery` 默认 schema 仍为 `PhilipsWgqRecognitionResult`；Tecan SubAgent 的 `response_format` 是 `ExtractionReference`——工具路径正常，但**文本后备 recovery 对 Tecan 语义错位**。改 SubAgent 结构化输出时传入正确 schema，或明确禁用文本 recovery 路径（见 CONCERNS §2.1）。
+- [ ] workflow 收窄用 **denylist** 排除他业务工具，保留 `parse_documents` / `extract_archives`；`test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具；新增业务工具须同步评估 `_PHILIPS_EXCLUDED_TOOLS`。
 - [ ] 共享 middleware 只改 `runtime_middlewares()`；SubAgent 勿误传 `memory_backend`；`test_workflow_setup` 断言 Sub 无 `MemoryMiddleware`（各 4 个）。
 - [ ] 改 OMS 索引字段时保持 best-effort、不进入 `run_events`；同步 `test_api._check_oms_run_created_log`。
 - [ ] stream chunk 形状依赖 langchain/deepagents 约定；升级靠 `uv.lock` + FakeBrain 回归。
 - [ ] MiniMax 强绑 Anthropic 协议与 thinking/cache 中间件；换 provider 需同步解析与 profile。
-- [ ] 四层文档手工同步；pricing 常量硬编码于 `api.py`。
-- [ ] 无 CI/lint/pytest 门禁；本地 7 脚本需按影响范围人工跑；真实集成脚本与本地回归同目录，部分无完整 env 门闸（易误跑）。
+- [ ] 四层文档手工同步；pricing 常量硬编码于 `api.py`（仅 MiniMax-M3 可估 CNY，未知 model → `estimated_*` 为 `null`）。
+- [ ] 无 CI/lint/pytest 门禁；本地 7 脚本需按影响范围人工跑（`python -m tests.<name>`，**非 pytest**）；真实集成脚本与本地回归同目录，部分无完整 env 门闸（易误跑）。
 
 ### 7.6 验证入口
 
@@ -423,7 +424,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 - [`INTERFACES.md`](../INTERFACES.md)
 
-子项目事实（backend 实现细节事实来源，Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）：
+子项目事实（backend 实现细节事实来源，Analysis Date: **2026-07-20**，`last_mapped_commit`: **555bca7**）：
 
 - [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md)
 - [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md)
@@ -440,4 +441,4 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`docs/commands.md`](../docs/commands.md)
 - [`docs/reading-order.md`](../docs/reading-order.md)
 
-本轮（2026-07-18，coding-maps skill）在 backend 7 份事实文档（`last_mapped_commit` d39ed16，Analysis Date: 2026-07-18）与根级三件套对齐后**刷新**：核心边界（run-first / 四端点 / 7 事件 / 无 SSE / 无前端 / denylist / 5 工具 / 2 SubAgent / StructuredOutputRecovery / OMS 旁路 / UTC+8 时间戳）仍成立；相对上一轮主要补强 Skill **kebab 资源目录 + 可 import 包** 成对布局与 `package-data` 清单、启动/真实集成默认端口说明，以及源索引 commit 对齐。
+本轮（2026-07-20，coding-maps skill）在 backend 全部 7 份事实文档（`last_mapped_commit` **555bca7**，Analysis Date: **2026-07-20**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md` 对齐后**刷新**：核心边界（run-first / 四端点 / 7 事件 / 无 SSE / 无前端 / denylist / 5 工具 / 2 SubAgent / StructuredOutputRecovery / OMS 旁路 / UTC+8 时间戳 / Skill 成对目录）仍成立；相对上一轮主要对齐源索引 commit、补强 SubAgent recovery 默认 schema 错位风险，以及 denylist/pricing/测试门禁表述与最新 CONCERNS 一致。

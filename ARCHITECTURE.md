@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-18）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局与 `package-data` 打包。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-20，`last_mapped_commit` 555bca7）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局与 `package-data` 打包。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
 
 ## 1. 系统定位
 
@@ -33,7 +33,7 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 1. 边界与定位：本文件 §1–§2、§4
 2. 对外契约：[`INTERFACES.md`](INTERFACES.md)
 3. 调用链与风险清单：[`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)
-4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）
+4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-20，`last_mapped_commit` 555bca7）
 5. 改 backend 前必读：[`docs/conventions.md`](docs/conventions.md)
 
 ## 4. 稳定目录职责（`backend/` 顶层源码）
@@ -173,7 +173,7 @@ running → cancelling → cancelled
 - **安全面**：HTTP 匿名、无 CORS、无用户隔离；`/upload` 无大小/类型/数量限制；错误与 raw 未脱敏可经 `GET /runs` 回传；`parse_documents` 的 `allow_local` 仅宜测试/程序内使用。
 - **存储与留存**：`runs.db` 无 WAL / 无 busy_timeout（高频 emit+轮询可能锁冲突）；`run_events` 与 spill 只增不删；fresh schema 无迁移，破坏性变更需整清 `backend/data/`；OMS `backend/log/oms_log.log` 只追加、无轮转/TTL，备份/清理与 `data/` 分开。
 - **OMS best-effort / 时区一致性**：OMS 写失败由 API 吞异常，run 仍 `queued` 并执行（运维不可依赖索引完备）；改 `created_at` 格式须同步 `SqliteRunLedger` 与 `oms_log`；文件名 `strftime` 用解释器本地时区，主机 TZ 非 `Asia/Shanghai` 时可能与库内/OMS UTC+8 差若干小时。
-- **middleware / 结构化输出 / 工具裁剪**：改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`（含空 data 壳路径与 skeleton 回退，不编造字段）；用 `python -m tests.test_harness` 验证重试封顶。SubAgent 勿误传 `memory_backend`。workflow 收窄用 denylist，用 `python -m tests.test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具。
+- **middleware / 结构化输出 / 工具裁剪**：改 `StructuredOutputRecovery` 时必须保留 `can_jump_to` 含 `"end"` 与耗尽时 `jump_to: "end"`（含空 data 壳路径与 skeleton 回退，不编造字段）；空壳须用 `ToolMessage.tool_call_id` 对齐**同一** AIMessage 的 schema call，禁止扫历史消息；用 `python -m tests.test_harness` 验证重试封顶。SubAgent 勿误传 `memory_backend`。**注意**：`runtime_middlewares()` 无参时 recovery 默认 schema 仍为 `PhilipsWgqRecognitionResult`，Tecan SubAgent 的 `response_format` 是 `ExtractionReference`——工具路径正常，但文本后备 recovery 语义错位；改 SubAgent 结构化输出须传入正确 schema 或禁用文本 recovery。workflow 收窄用 denylist，用 `python -m tests.test_workflow_setup` 断言 Philips 含 `extract_archives`、不含帝肯工具。
 - **测试门禁**：本地 7 个 assert 脚本人工选择（`python -m tests.*`，非 pytest）；无 CI/lint；真实模型/MinerU/Oracle 脚本 opt-in，勿并入默认回归；改 OMS 索引时跑 `python -m tests.test_api`（含 `_check_oms_run_created_log`）。
 - **Oracle thick client**：Philips 可用 Oracle 补齐 Tracking 缺失的稳定字段；配置缺失、client/查询失败或未命中写入 `problems`，保留已有结果并形成 `partial_success`；依赖外部 `ORACLE_CLIENT_LIB_DIR`；Tecan 不消费 Oracle。
 

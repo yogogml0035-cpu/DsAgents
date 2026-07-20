@@ -38,6 +38,8 @@
 - **进程内边界**：同 `session_id` 单飞锁、`run_controls` cancel 字典均为进程内；多 worker 不提供跨进程互斥或强杀。
 - **SQLite 三库分离**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 互不共享连接；新 schema 无迁移，部署切换需整目录一致清空或替换。
 - **Philips 空壳 vs 业务问题**：`data: {}` 是非法形状（recovery 纠错 / 耗尽 skeleton），不是 `input_problems`；`input_problems` 要求 `data=null` 且至少一条 problem。空壳耗尽的 all-null skeleton 使用 `partial_success` + runtime problem，**禁止**用编造业务值“凑成功”。
+- **空壳恢复只认同回合 tool_call_id**：空 `data: {}` 壳不得扫描历史 AI 文本；必须以当前 `ToolMessage.tool_call_id` 精确匹配**同一** AIMessage 上的 schema tool call，合法文本 JSON 才可直接写 `structured_response` 并 `jump_to: "end"`。正常路径只要求 tool args；文本 JSON 仅后备。
+- **SubAgent recovery 默认 schema 是 Philips**：`runtime_middlewares()` 无参构造的 `StructuredOutputRecovery` 默认校验 `PhilipsWgqRecognitionResult`。Tecan SubAgent 使用 `ExtractionReference` 时工具路径可正常，但**文本后备 recovery 语义错位**；改 SubAgent 结构化输出须显式传入正确 schema，或明确禁用文本 recovery 路径。
 - **Philips consolidated 票次**：同一 HAWB/运单下多张商业发票或多个 PO/DN 视为一票；header 字段可逗号拼接，items 按发票顺序展开。规则见 Skill 与 `PHILIPS_WORKFLOW_PROMPT`，改提示词时两边同步。
 - **OMS 旁路索引（非 run_events）**：实现在 `runtime/oms_log.py`。仅 HTTP `POST /runs` 在 `create_run` **成功之后** best-effort 追加 JSONL（默认 `backend/log/oms_log.log`，锚定 `backend/`）；写失败吞异常、不阻塞已创建 run。**不是**第 8 类事件，不进入 `run_events`。`/upload`、422、409 不写；程序内 `execute_run` 不经此路径。细节见 backend `INTEGRATIONS.md` / `ARCHITECTURE.md`。
 - **时间戳中国时区**：`SqliteRunLedger` 与 `oms_log` 统一使用 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`；改格式须两边同步。
