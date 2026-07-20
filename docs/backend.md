@@ -22,7 +22,7 @@
 
 - `backend/api.py`：FastAPI 工厂、四个 HTTP 端点、上传、同 `session_id` 单飞锁、启动恢复；`create_run` 成功后触发 OMS 旁路索引。
 - `backend/runtime/agent.py`：Brain 工厂、Philips ToolStrategy / **denylist** 工具裁剪（排除帝肯业务工具，保留 `parse_documents` / `extract_archives` / 主数据工具）、两个 Tecan extractor SubAgent 与 middleware 装配。
-- `backend/runtime/middleware.py`：`StructuredOutputRecovery`（有界重试 + 空 `data: {}` 壳纠错；`EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**写 all-null `data` + `partial_success` + runtime problem，其它失败模式无 `structured_response` → `failed`）、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`；主 Agent 约 5 个 middleware，SubAgent 各 4 个（无 memory）。
+- `backend/runtime/middleware.py`：`StructuredOutputRecovery`（有界重试；空 `data: {}` 壳按 `ToolMessage.tool_call_id` 恢复同 AIMessage 的合法文本 JSON，否则走 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**写 all-null `data` + `partial_success` + runtime problem，其它失败模式无 `structured_response` → `failed`）、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、主 Agent 受限 `MemoryMiddleware` 及 `runtime_middlewares(*, memory_backend=None)`；主 Agent 约 5 个 middleware，SubAgent 各 4 个（无 memory）。
 - `backend/runtime/execution.py`：stream chunk 到 `RunEvent` 的规范化、结构化响应捕获/复验、协作式 cancel 和默认 harness 工厂。
 - `backend/runtime/oms_log.py`：HTTP `POST /runs` 在 `create_run` 成功后 best-effort 追加 `backend/log/oms_log.log`（JSONL `run_created`）；非 `run_events`；程序内路径不经此模块。
 - `backend/runtime/runs.py`：SQLite run ledger、workflow/result 投影、事件追加、用量聚合和大 payload 外溢；中国时区 UTC+8 时间戳。

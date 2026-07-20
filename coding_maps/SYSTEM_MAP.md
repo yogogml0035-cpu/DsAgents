@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-18）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-18，`last_mapped_commit` d39ed16）与根级三件套：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。
+> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（基线 `last_mapped_commit` d39ed16，含当前工作树修复）与根级三件套：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳的精确 `tool_call_id` 文本恢复、纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。
 
 ## 1. 系统目的和仓库形态
 
@@ -217,8 +217,8 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - **workflow 工具收窄必须用 denylist**：Philips 用 `_PHILIPS_EXCLUDED_TOOLS` 排除帝肯工具（`save_tecan_extraction` / `generate_tecan_import`），**保留**共享 MinerU 工具 `parse_documents` / `extract_archives` 与 `lookup_philips_wgq_master_data`；禁止只 allowlist 业务工具导致手册中的通用工具从模型工具表消失。无 SubAgent。验证：`python -m tests.test_workflow_setup`。
 - `StructuredOutputCompatibility.wrap_model_call`：仅在 `ToolStrategy` 请求上用 `request.override(model=...)` 关闭该次 Anthropic thinking；工厂原始模型与通用/Tecan adaptive thinking 不变。
 - **`StructuredOutputRecovery`（硬性约定，`runtime/middleware.py`）**：
-  - `after_model` 从纯文本 JSON 恢复 `structured_response`；失败（含空文本、空 `data: {}` 壳）则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`；总模型轮次约 `1 + max_retries`）。
-  - 空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示，**不**编造业务字段。
+  - `after_model` 从纯文本 JSON 恢复 `structured_response`；空 `data: {}` 壳先按最新 ToolMessage 的 `tool_call_id` 精确验证同 AIMessage 文本，合法则直接 `jump_to: "end"`；其它失败（含空文本、无法恢复空壳）则 `jump_to: "model"`（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`；总模型轮次约 `1 + max_retries`）。
+  - 未恢复空壳用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状提示；正常提示只要求 tool args，文本 JSON 只作无法调用工具时的后备，**不**编造业务字段。
   - 耗尽或无法继续时**必须** `jump_to: "end"`，且 `@hook_config(can_jump_to=["model", "end"])`。禁止只返回 `None`——在仅有 `ToolStrategy`、无业务 tool 的图上会触发 model↔model 无限循环。
   - **空壳耗尽**：写入 schema 合法的 all-null `data` + `partial_success` + runtime problem → harness 可投影 `succeeded`；**其它失败模式**耗尽后无 `structured_response` → harness 标 `failed`。
   - 验证：`cd backend && python -m tests.test_harness`。

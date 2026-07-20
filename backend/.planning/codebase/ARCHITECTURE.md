@@ -4,9 +4,9 @@ last_mapped_commit: d39ed16
 
 # Architecture
 
-**Analysis Date:** 2026-07-18
+**Analysis Date:** 2026-07-20
 
-> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` Python 包与 `skills/{philips-wgq-inbound-recognition,tecan-import}/` Agent Skill 资源。结论以源码为准。`last_mapped_commit` 为 `d39ed16`。
+> 事实来源：`backend/` 源码（run-first runtime）。本轮已逐文件核对：`api.py`、`runtime/{agent,execution,middleware,observability,oms_log,resources,runs,tools}.py`、`integrations/{artifacts,mineru}.py`、`skills/{philipswgqinboundrecognition,tecanimport}/` Python 包与 `skills/{philips-wgq-inbound-recognition,tecan-import}/` Agent Skill 资源。结论以源码为准。基线 `last_mapped_commit` 为 `d39ed16`，另覆盖 2026-07-20 工作树中的结构化空壳恢复修复。
 
 ## Pattern Overview
 
@@ -262,10 +262,10 @@ Philips workflow 用 **denylist** 排除帝肯业务工具（`_PHILIPS_EXCLUDED_
 
 | 要点 | 行为 |
 |------|------|
-| 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含空文本结束）；或 ToolStrategy 校验失败后最新消息为 ToolMessage 且结构化参数是空 `data` 壳 |
-| 成功路径 | 从 fenced/raw 文本解析 JSON → `schema.model_validate` → 写入 `structured_response`，计数归零 |
+| 触发 | 最新 AI 消息无 tool_calls，且 state 尚无 `structured_response`（含空文本结束）；或 ToolStrategy 校验失败后最新消息为 ToolMessage 且其 `tool_call_id` 精确指向同回合 schema 的空 `data` 壳 |
+| 成功路径 | 从 fenced/raw 文本解析 JSON → `schema.model_validate` → 写入 `structured_response`，计数归零；空壳 ToolMessage 场景只验证其配对 AIMessage 的文本，合法则写入结果并 `jump_to: "end"` |
 | 失败重试 | 无合法 JSON、校验失败、空文本、或空 `data: {}` 壳：追加校正 `HumanMessage`，`jump_to: "model"`，`structured_recovery_attempts += 1` |
-| 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺嵌套字段或 `items` 空；专用中文 `EMPTY_DATA_SHELL_HINT`；纠错 HumanMessage 附 `PHILIPS_MINIMAL_DATA_SKELETON`（全 null 形状）并优先「完整 JSON 文本 → 同内容 tool args」；**重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（非 `data:{}` / 非 `data:null`），避免 `structured_response missing` |
+| 空 data 壳 | `is_empty_recognition_data_shell`：`success`/`partial_success` 且 `data` 为 `{}`、缺嵌套字段或 `items` 空；先仅解析同一 AIMessage 的合法文本 JSON；未恢复时用 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 纠错。正常提示只要求结构化 tool args，文本 JSON 仅作无法调用工具时的后备；**重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（非 `data:{}` / 非 `data:null`），避免 `structured_response missing` |
 | ToolStrategy | Philips 使用 `handle_errors=philips_structured_output_error_message` |
 | 上限 | 默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`（总模型轮次约 `1 + max_retries`） |
 | 耗尽/放行 | `attempts >= max_retries` 时：空壳 → skeleton + `jump_to: "end"`；其它失败 → `{"jump_to": "end"}`，**禁止**只返回 `None` |

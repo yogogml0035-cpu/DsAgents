@@ -515,6 +515,69 @@ def _check_empty_data_shell_coaching() -> None:
         ],
         "structured_recovery_attempts": 0,
     }
+
+    # A valid text payload on the same AIMessage wins over the rejected empty
+    # tool args. This mirrors the MiniMax dual-channel response seen in production.
+    valid_text_payload = _recognition_result("success")
+    valid_text_payload["problems"] = [
+        {
+            "source": "pdf",
+            "location": "header",
+            "issue": "recovered from paired text",
+            "action": "keep recognized values",
+        }
+    ]
+    paired_ai = AIMessage(
+        content="done\n```json\n"
+        + json.dumps(valid_text_payload, ensure_ascii=False)
+        + "\n```",
+        tool_calls=[
+            {
+                "id": "struct-empty-text-1",
+                "name": "PhilipsWgqRecognitionResult",
+                "args": {"outcome": "success", "data": {}, "problems": []},
+                "type": "tool_call",
+            }
+        ],
+    )
+    paired = recovery.after_model(
+        {
+            "messages": [
+                paired_ai,
+                ToolMessage(
+                    content=empty_err,
+                    tool_call_id="struct-empty-text-1",
+                    name="PhilipsWgqRecognitionResult",
+                ),
+            ],
+            "structured_recovery_attempts": 1,
+        },
+        None,
+    )
+    assert paired is not None
+    assert paired["jump_to"] == "end"
+    assert paired["structured_recovery_attempts"] == 0
+    assert paired["structured_response"].data is not None
+    assert paired["structured_response"].data.header.original_waybill_number == "9198153694"
+
+    # Matching by call ID prevents unrelated historical JSON from being recovered.
+    assert (
+        recovery.after_model(
+            {
+                "messages": [
+                    paired_ai,
+                    ToolMessage(
+                        content=empty_err,
+                        tool_call_id="other-call",
+                        name="PhilipsWgqRecognitionResult",
+                    ),
+                ],
+            },
+            None,
+        )
+        is None
+    )
+
     tool_retry = recovery.after_model(tool_error_state, None)
     assert tool_retry is not None
     assert tool_retry["jump_to"] == "model"
@@ -523,12 +586,12 @@ def _check_empty_data_shell_coaching() -> None:
     assert '"data": {}' in tool_retry["messages"][0].content or "data: {}" in (
         tool_retry["messages"][0].content
     )
-    # Empty-shell coaching must include minimal legal shape + text-first order.
+    # Empty-shell coaching must include the minimal legal shape and tool-first guidance.
     coach = tool_retry["messages"][0].content
     assert "```json" in coach
     assert "shipment" in coach and "original_waybill_number" in coach
     assert "product_id" in coach
-    assert "先" in coach or "①" in coach
+    assert "只调用结构化工具" in coach
     assert "只补 problems" in coach or "只改 problems" in EMPTY_DATA_SHELL_HINT
     # Skeleton itself is a valid success payload (all-null fields).
     assert PhilipsWgqRecognitionResult.model_validate(PHILIPS_MINIMAL_DATA_SKELETON)

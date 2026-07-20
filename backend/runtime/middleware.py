@@ -107,8 +107,8 @@ EMPTY_DATA_SHELL_HINT = (
     "outcome 为 input_problems 时，data 必须为 null（不能是 {}），且至少一条 problem。"
     "不要编造业务值；复用已从 PDF 与主数据查询得到的字段。禁止重复提交相同的空 data 壳。"
     "只补 problems 而 data 仍为 {} 不算修正。"
-    "推荐：先输出完整 ```json```（形状见纠错消息中的最小合法骨架，把 null 换成已识别值；"
-    "多商品复制 items[] 元素），再调用结构化工具且 args 与该 JSON 相同。"
+    "正常路径只调用结构化工具提交完整结果，不要在助手文本重复业务 JSON，以免两个输出通道分叉。"
+    "仅在无法形成有效工具调用时，才输出一个完整 ```json``` 作为后备；文本仍须通过 schema 校验。"
 )
 
 _FENCED_JSON = re.compile(
@@ -234,10 +234,11 @@ class StructuredOutputRecovery(AgentMiddleware):
     ``structured_response missing``.
 
     Also intercepts empty ``data: {}`` structured tool attempts (ToolStrategy
-    validation failures that only produce a generic ToolMessage). When the
-    latest tool-error turn is an empty recognition shell, append a specific
-    correction (with minimal legal data skeleton) and jump back to the model
-    (bounded by the same retry budget).
+    validation failures that only produce a generic ToolMessage). If the
+    matching AIMessage already contains a schema-valid text JSON, recover that
+    result directly. Otherwise append a specific correction (with minimal
+    legal data skeleton) and jump back to the model (bounded by the same retry
+    budget).
 
     When empty-shell retries are exhausted on the Philips schema, emit a
     schema-valid all-null ``data`` skeleton (not ``data: {}`` / not ``data:
@@ -270,6 +271,13 @@ class StructuredOutputRecovery(AgentMiddleware):
             return None
         latest = messages[-1]
         if not _is_ai_message(latest):
+            recovered = _validated_text_from_rejected_empty_call(messages, self.schema)
+            if recovered is not None:
+                return {
+                    "structured_response": recovered,
+                    "structured_recovery_attempts": 0,
+                    "jump_to": "end",
+                }
             # ToolStrategy validation failures end with ToolMessage(s). When the
             # rejected structured args were an empty data shell, coach a full
             # resubmit. Do not invent field values.
@@ -655,47 +663,71 @@ def _schema_tool_name(schema: type[BaseModel]) -> str:
     return getattr(schema, "__name__", "structured schema")
 
 
-def _empty_structured_shell_from_ai(
-    message: Any,
+def _rejected_empty_structured_call(
+    messages: list[Any],
     schema: type[BaseModel],
-) -> dict[str, Any] | None:
-    """Return empty-shell structured tool args from an AI message, if any."""
+) -> tuple[Any, dict[str, Any]] | None:
+    """Return the AI message and empty schema args paired to the latest error.
+
+    ToolStrategy appends a ToolMessage for a rejected structured call. The
+    ``tool_call_id`` is the only safe link back to that AIMessage: scanning
+    arbitrary JSON in older messages could recover a result for another call.
+    """
+    if not messages or not _is_tool_message(messages[-1]):
+        return None
+    tool_message = messages[-1]
+    tool_call_id = _tool_message_call_id(tool_message)
+    if tool_call_id is None:
+        return None
     expected = _schema_tool_name(schema)
-    for tool_call in observability.tool_calls_of(message):
-        if not isinstance(tool_call, dict):
+    tool_name = _tool_message_name(tool_message)
+    if tool_name is not None and tool_name != expected:
+        return None
+    for message in reversed(messages[:-1]):
+        if _is_human_message(message):
+            break
+        if not _is_ai_message(message):
             continue
-        if tool_call.get("name") != expected:
-            continue
-        args = tool_call.get("args")
-        if isinstance(args, dict) and is_empty_recognition_data_shell(args):
-            return args
+        for tool_call in observability.tool_calls_of(message):
+            if not isinstance(tool_call, dict):
+                continue
+            if (
+                tool_call.get("id") != tool_call_id
+                or tool_call.get("name") != expected
+            ):
+                continue
+            args = tool_call.get("args")
+            if isinstance(args, dict) and is_empty_recognition_data_shell(args):
+                return message, args
+            return None
     return None
+
+
+def _validated_text_from_rejected_empty_call(
+    messages: list[Any],
+    schema: type[BaseModel],
+) -> BaseModel | None:
+    """Recover only text paired to the empty structured call ToolStrategy rejected."""
+    rejected = _rejected_empty_structured_call(messages, schema)
+    if rejected is None:
+        return None
+    ai_message, _ = rejected
+    payload = _extract_json_object(_message_text(ai_message))
+    if payload is None:
+        return None
+    try:
+        return schema.model_validate(payload)
+    except ValidationError:
+        return None
 
 
 def _latest_empty_structured_shell(
     messages: list[Any],
     schema: type[BaseModel],
 ) -> dict[str, Any] | None:
-    """Find empty Philips structured args in the current turn after a tool error.
-
-    Scans newest-first until a human message. Requires a recent ToolMessage that
-    looks like a structured-output validation error, then the AI tool call shell.
-    """
-    saw_structured_error = False
-    for message in reversed(messages):
-        if _is_human_message(message):
-            break
-        if _is_tool_message(message):
-            text = _message_text(message)
-            name = _tool_message_name(message)
-            if name == _schema_tool_name(schema) or _looks_like_structured_parse_error(text):
-                saw_structured_error = True
-            continue
-        if _is_ai_message(message):
-            if not saw_structured_error:
-                return None
-            return _empty_structured_shell_from_ai(message, schema)
-    return None
+    """Return empty structured args paired to the latest ToolStrategy error."""
+    rejected = _rejected_empty_structured_call(messages, schema)
+    return rejected[1] if rejected is not None else None
 
 
 def _is_tool_message(message: Any) -> bool:
@@ -715,16 +747,12 @@ def _tool_message_name(message: Any) -> str | None:
     return name if isinstance(name, str) else None
 
 
-def _looks_like_structured_parse_error(text: str) -> bool:
-    lowered = text.lower()
-    return (
-        "failed to parse structured output" in lowered
-        or "please fix your mistakes" in lowered
-        or "请修正后重试" in text
-        or "data 不能是 {}" in text
-        or "data must not be {}" in lowered
-        or "data.shipment" in lowered
-    )
+def _tool_message_call_id(message: Any) -> str | None:
+    if isinstance(message, dict):
+        tool_call_id = message.get("tool_call_id")
+    else:
+        tool_call_id = getattr(message, "tool_call_id", None)
+    return tool_call_id if isinstance(tool_call_id, str) else None
 
 
 def _build_recovery_retry_message(
@@ -749,9 +777,9 @@ def _build_recovery_retry_message(
         )
         lead = (
             f"结构化输出被拒绝：`{schema_name}` 使用了空的 `data` 壳。"
-            "请按顺序修正：① 在文本中输出恰好一个完整 ```json``` 对象"
-            "（含 data.shipment / data.header / 非空 data.items；未知 null）；"
-            "② 再调用结构化工具，args 与该 JSON 相同。"
+            "请只调用结构化工具，并在 args 中提交完整 data.shipment / data.header / 非空 data.items"
+            "（未知 null）。正常路径不要在助手文本重复业务 JSON；"
+            "仅无法形成有效工具调用时才输出一个完整 ```json``` 作为后备。"
             "不要编造业务值；复用 PDF 与主数据已识别字段。禁止再次提交 data: {}；"
             "只补 problems 不算修正。\n\n"
             f"最小合法形状（把 null 换成真实值；多行复制 items 元素）：\n"
@@ -760,8 +788,8 @@ def _build_recovery_retry_message(
     else:
         lead = (
             f"结构化输出被拒绝。请重新提交合法的 `{schema_name}`："
-            "优先在文本中输出恰好一个符合 schema 的完整 JSON 对象，"
-            "再调用结构化输出工具（args 与 JSON 相同）。"
+            "优先只通过结构化输出工具提交完整 args；"
+            "仅无法形成有效工具调用时才输出一个符合 schema 的完整 JSON 对象。"
             "不要编造字段；未知填 null。仅自然语言摘要不能作为业务结果。\n\n"
         )
     return (
