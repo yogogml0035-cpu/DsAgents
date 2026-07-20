@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 555bca7
+last_mapped_commit: 3dadbc4
 analysis_date: 2026-07-20
 focus: tech
 ---
@@ -7,7 +7,7 @@ focus: tech
 # STACK — backend 技术栈事实
 
 Analysis Date: **2026-07-20**
-`last_mapped_commit`: **555bca7**
+`last_mapped_commit`: **3dadbc4**
 
 本文档描述 `backend/` 子项目的语言运行时、包管理、框架、关键依赖、配置与平台要求。标识符、路径、命令、配置键与 API 名保留原文。
 

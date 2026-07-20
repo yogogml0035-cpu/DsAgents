@@ -1,6 +1,7 @@
 ---
 title: backend 架构事实
-last_mapped_commit: 555bca7
+last_mapped_commit: 3dadbc4
+last_mapped_commit_full: 3dadbc4feada64f2f4e70d292a67d343beb77c10
 analysis_date: 2026-07-20
 focus: arch
 ---
@@ -8,8 +9,8 @@ focus: arch
 # ARCHITECTURE — backend（dsagents）
 
 > 分析日期：2026-07-20
-> 映射提交：`555bca7`
-> 范围：`backend/` 源码与包结构（不含 venv、artifacts 大文件、egg-info）
+> 映射提交：`3dadbc4`（完整 `3dadbc4feada64f2f4e70d292a67d343beb77c10`）
+> 范围：`backend/` 源码与包结构（不含 venv、artifacts 大文件、egg-info、`.oracle` 客户端二进制）
 
 ## Pattern Overview
 
@@ -20,11 +21,13 @@ focus: arch
 | **run-first harness runtime** | 执行与查询的唯一单位是 `run`；`HarnessRuntime.execute_run(...)` 驱动 brain 流式执行，并将观测写入 ledger |
 | **事件溯源 ledger** | `run_events` append-only；`runs` 表为投影快照（status / reply / error / result） |
 | **Brain Protocol** | `typing.Protocol` 仅用于 `Brain` / `BrainFactory`；默认实现 `DeepAgentsBrainFactory` → `create_deep_agent` |
-| **ToolCatalog** | 静态 5 个 callable 工具注册；workflow 用 **denylist** 收窄业务工具，不扫描目录 |
+| **ToolCatalog** | 静态 **5** 个 callable 工具注册；workflow 用 **denylist** 收窄业务工具，不扫描目录 |
 | **Skill 成对目录** | kebab-case 资源目录（`SKILL.md` / references / assets，挂载 `/skills/`）+ 可 import 的 Python 包 |
 | **OMS 旁路** | `append_run_created_log` 写 JSONL 索引；best-effort，不阻塞已创建 run，不进入 `run_events` |
 
 无 session 业务 API、无 SSE。`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁键。
+
+映射提交 `3dadbc4` 删除了 `backend/build/` 下冗余构建副本，源码布局不变：`api.py` + `runtime/` + `integrations/` + `skills/` + `tests/`。
 
 ## Layers
 
@@ -75,7 +78,7 @@ Ledger / 集成    runtime/runs.py（SqliteRunLedger、RunEvent、RunSnapshot）
 POST /upload (multipart files)
   → clean_filename + make_timestamped_name
   → 写入 data/artifacts/uploads/
-  → 返回 { file_path: "/artifacts/uploads/...", name, mime_type, size }
+  → 返回 { files: [{ file_path: "/artifacts/uploads/...", name, mime_type, size }] }
 ```
 
 虚拟路径前缀固定为 `/artifacts/...`，与 `CompositeBackend` 的 `/artifacts/` 路由一致。
@@ -152,7 +155,7 @@ POST /runs/{run_id}/cancel
 - 持有 `AgentResources`、`ToolCatalog`、`BrainFactory`、`run_controls: dict[str, RunControl]`。
 - `execute_run`：唯一执行入口；yield `RunEvent`。
 - `request_cancel`：协作 drain；无 control 返回 `False`。
-- `create_harness(resources)`：默认 `default_tool_catalog()` + `DeepAgentsBrainFactory()`。
+- `create_harness(resources)`：默认 `default_tool_catalog()` + `DeepAgentsBrainFactory()`（延迟 import 避免循环依赖）。
 
 ### Brain / BrainFactory Protocol（`runtime/agent.py`）
 
@@ -168,12 +171,12 @@ class BrainFactory(Protocol):
 
 - 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`。
 - `create_deep_agent`：backend / checkpointer / store / skills=`["/skills/"]` / permissions deny write `/skills/**`。
-- 注册 harness profile `anthropic` 且 **关闭** auto general-purpose subagent。
-- 主 Agent 名：`MAIN_AGENT_NAME = "dsagents-main"`。
+- 注册 harness profile `anthropic` 且 **关闭** auto general-purpose subagent（`GeneralPurposeSubagentProfile(enabled=False)`）。
+- 主 Agent 名：`MAIN_AGENT_NAME = "dsagents-main"`（定义于 `runtime/observability.py`）。
 
 ### AgentResources / ResourceConfig（`runtime/resources.py`）
 
-- 数据根：`backend/data/`（与 CWD 无关）。
+- 数据根：`backend/data/`（`_BACKEND_DIR` 锚定，与 CWD 无关）。
 - `dsagents_runs.db`、`dsagents_store.db`、`dsagents_checkpoints.db`、`artifacts/`、`internal/run-events/`。
 - `CompositeBackend` 路由：
   - `/memories/` → `StoreBackend`（跨 run 共享；启动写 baseline `AGENTS.md`）
@@ -189,9 +192,9 @@ class BrainFactory(Protocol):
 |------|------|
 | `parse_documents` | `integrations.mineru` |
 | `extract_archives` | `integrations.mineru` |
-| `lookup_philips_wgq_master_data` | Philips skill |
-| `save_tecan_extraction` | Tecan skill |
-| `generate_tecan_import` | Tecan skill |
+| `lookup_philips_wgq_master_data` | Philips skill `scripts.tools` |
+| `save_tecan_extraction` | Tecan skill `scripts.tools` |
+| `generate_tecan_import` | Tecan skill `scripts.tools` |
 
 新增 Skill：静态 import + 注册一行；不自动扫描。
 
@@ -222,9 +225,11 @@ Philips workflow 额外：
 - `DeepAgentsBrainFactory` 确保 `StructuredOutputCompatibility` + 将 `StructuredOutputRecovery` **insert(0)**（after_model 最后跑）。
 - `response_format = ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message)`。
 
+无参 `StructuredOutputRecovery` 默认绑定 **Philips** schema（`PhilipsWgqRecognitionResult` / skeleton）；Tecan SubAgent 若走文本后备路径会语义错位（Tecan 主要靠 `ExtractionReference` ToolStrategy）。
+
 ### Workflow denylist
 
-唯一固定 workflow：`philips_wgq_inbound_recognition`（常量 `WORKFLOW`，schema 模块）。
+唯一固定 HTTP workflow：`philips_wgq_inbound_recognition`（常量 `WORKFLOW`，见 `skills/philipswgqinboundrecognition/schema.py`）。
 
 ```python
 _PHILIPS_EXCLUDED_TOOLS = frozenset({
@@ -233,16 +238,16 @@ _PHILIPS_EXCLUDED_TOOLS = frozenset({
 })
 ```
 
-- **denylist** 排除其他业务（帝肯）工具；**保留**共享 MinerU（`parse_documents` / `extract_archives`）与本业务主数据工具。
+- **denylist** 排除其他业务（帝肯）工具；**保留**共享 MinerU（`parse_documents` / `extract_archives`）与本业务主数据工具 `lookup_philips_wgq_master_data`。
 - 禁止业务-only allowlist。
 - workflow 时 `subagents=[]`（不挂 Tecan 抽取器）；系统提示追加 `PHILIPS_WORKFLOW_PROMPT`。
 
-### SubAgent（Tecan）
+### SubAgent（Tecan，2 个）
 
 非 Philips workflow 时 `workflow_subagents()` 注册两个无状态抽取器：
 
 - `tecan-extractor-a` / `tecan-extractor-b`
-- 工具仅 `save_tecan_extraction`；只读 FS permission；`response_format=ToolStrategy(ExtractionReference)`
+- 工具仅 `save_tecan_extraction`；只读 FS permission（deny write `/**`）；`response_format=ToolStrategy(ExtractionReference)`
 - 各自 `runtime_middlewares()`（无 memory）
 - 主 Agent 技能资源：`/skills/tecan-import/SKILL.md`；生成侧 `generate_tecan_import`
 
@@ -285,7 +290,7 @@ with AgentResources(ResourceConfig(...)) as resources:
   1. LangGraph `config["configurable"]["thread_id"]`（checkpoint 线程）
   2. 进程内 `_acquire_session_run` / `_release_session_run` 单飞锁（`threading.Lock`，非阻塞）
 - 不是业务会话 API；无 list sessions、无 session CRUD。
-- `workflow` 与客户端 `session_id` 同时出现 → 校验失败（workflow 必须新 server-generated session）。
+- `workflow` 与客户端 `session_id` 同时出现 → `RunRequest` 校验失败（workflow 必须新 server-generated session）。
 
 ## 唯一固定 workflow
 
@@ -297,7 +302,7 @@ with AgentResources(ResourceConfig(...)) as resources:
   - `success` / `partial_success`：完整 `data.shipment` / `header` / `items`（未知 `null`）
 - 工具：MinerU 共享 + `lookup_philips_wgq_master_data`（Tracking xlsx + 可选 Oracle）
 
-Tecan 无 HTTP workflow 字面量；走默认（`workflow=None`）+ Skill 引导 + SubAgent。
+Tecan 无 HTTP workflow 字面量；走默认（`workflow=None`）+ Skill 引导 + SubAgent。Tecan 包内另有字符串 `WORKFLOW = "tecan-import"`（资源/业务标识，非 API `Literal`）。
 
 ## 事件 7 类
 
@@ -347,7 +352,7 @@ API 层线程异常：`_ensure_failed_run` 仅在非终态时补 `failed`。
 
 ### 集成降级
 
-- **Oracle**（`lookup_philips_wgq_master_data`）：缺 `ORACLE_DSN`/`USERNAME`/`PASSWORD` → problems 提示，不抛死；`ORACLE_CLIENT_LIB_DIR` 存在时 thick `init_oracle_client`，缺失则跳过 init（依赖 thin/默认行为）；查询异常 → problems，不拖垮整次 lookup。
+- **Oracle**（`lookup_philips_wgq_master_data`）：缺连接 env → problems 提示，不抛死；`ORACLE_CLIENT_LIB_DIR` 存在时 thick `init_oracle_client`，缺失则跳过 init（依赖 thin/默认行为）；查询异常 → problems，不拖垮整次 lookup。
 - **MinerU**：缺 env 或任务失败 → 工具异常 / failed progress；部分无效路径记入 `failed` 列表。
 - **OMS 日志**：I/O 异常吞掉，不影响 run 创建。
 
@@ -356,6 +361,14 @@ API 层线程异常：`_ensure_failed_run` 仅在非终态时补 `failed`。
 - 写 `/skills/**`：**deny**（主 Agent permissions）。
 - Tecan SubAgent：写 `/**` deny（只读文件）。
 - 业务产物写 `/artifacts/downloads/` 等。
+
+## OMS 旁路索引
+
+- 模块：`runtime/oms_log.py`
+- 默认路径：`backend/log/oms_log.log`（JSON Lines）
+- 时机：`POST /runs` 在 `create_run` 成功之后、后台线程启动之前；`try/except` 吞掉异常
+- 记录字段：`event=run_created`、`created_at`、`run_id`、`session_id`、`workflow`、`files[{name,path}]`
+- **不是** `run_events`；无查询 API；仅运维 grep
 
 ## 测试形态（架构相关）
 

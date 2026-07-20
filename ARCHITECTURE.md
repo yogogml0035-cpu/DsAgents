@@ -2,7 +2,7 @@
 
 > 系统级总览。底层实现事实以 [`backend/.planning/codebase/`](backend/.planning/codebase/) 为准；本文件只沉淀系统边界、子系统职责、理解路径与维护约定。
 > 跨子项目系统视图见 [`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)。
-> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-20，`last_mapped_commit` 555bca7）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局与 `package-data` 打包。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。
+> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: 2026-07-20，`last_mapped_commit` **3dadbc4**）与 `SYSTEM_MAP`：固定 `philips_wgq_inbound_recognition` workflow、经 Pydantic 校验的 `run.result` 通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳纠错与耗尽 all-null skeleton）、workflow **denylist** 收窄（保留共享 MinerU）、主 Agent middleware 共约 5 个 / Tecan SubAgent 各 4 个、5 静态工具、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（HTTP `create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局与 `package-data` 打包。run-first、四 HTTP 端点、7 类事件、通用/Tecan 行为和无 SSE/session 持久化层边界保持。映射提交 `3dadbc4` 删除了 `backend/build/` 冗余构建副本，**源码布局与运行时语义不变**。
 
 ## 1. 系统定位
 
@@ -33,7 +33,7 @@ backend 内部分层、目录与配置事实见 [`backend/.planning/codebase/ARC
 1. 边界与定位：本文件 §1–§2、§4
 2. 对外契约：[`INTERFACES.md`](INTERFACES.md)
 3. 调用链与风险清单：[`coding_maps/SYSTEM_MAP.md`](coding_maps/SYSTEM_MAP.md)
-4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-20，`last_mapped_commit` 555bca7）
+4. 实现事实：`backend/.planning/codebase/` 对应 fact docs（Analysis Date: 2026-07-20，`last_mapped_commit` 3dadbc4）
 5. 改 backend 前必读：[`docs/conventions.md`](docs/conventions.md)
 
 ## 4. 稳定目录职责（`backend/` 顶层源码）

@@ -2,7 +2,7 @@
 
 > 系统层跨子项目理解手册。本文件只描述系统形态、边界与读图指南；底层实现细节以 [`backend/.planning/codebase/`](../backend/.planning/codebase/) 为事实来源。
 > 上游事实：[`ARCHITECTURE.md`](../ARCHITECTURE.md)、[`INTERFACES.md`](../INTERFACES.md)、[`AGENTS.md`](../AGENTS.md)。
-> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: **2026-07-20**，`last_mapped_commit`: **555bca7**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md`：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳的精确 `tool_call_id` 文本恢复、纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。
+> 本轮刷新（2026-07-20）对齐 backend 全部 7 份事实文档（Analysis Date: **2026-07-20**，`last_mapped_commit`: **3dadbc4** / 完整 **3dadbc4feada64f2f4e70d292a67d343beb77c10**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md`：固定 Philips workflow、`run.result` 结构化通道、独立 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳的精确 `tool_call_id` 文本恢复、纠错与耗尽 skeleton）、5 静态工具、workflow **denylist** 收窄（保留共享 MinerU）、2 个 Tecan SubAgent；**OMS 旁路索引** `runtime/oms_log.py`（`create_run` 成功后 best-effort 写 `backend/log/oms_log.log` JSONL，`event=run_created`，非 `run_events`）；时间戳统一为中国时区 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（`SqliteRunLedger` 与 OMS 一致）；Skill 采用 **kebab-case 资源目录 + 可 import Python 包** 成对布局（`package-data` 打包 `SKILL.md` / references / assets）；run-first、四 HTTP 端点、7 类事件、**无前端子项目**、无 SSE/session 持久化层/独立下载路由边界保持。映射提交 `3dadbc4` 删除了 `backend/build/` 下冗余构建副本，**源码布局与运行时语义不变**。
 
 ## 1. 系统目的和仓库形态
 
@@ -424,7 +424,7 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 - [`INTERFACES.md`](../INTERFACES.md)
 
-子项目事实（backend 实现细节事实来源，Analysis Date: **2026-07-20**，`last_mapped_commit`: **555bca7**）：
+子项目事实（backend 实现细节事实来源，Analysis Date: **2026-07-20**，`last_mapped_commit`: **3dadbc4** / 完整 **3dadbc4feada64f2f4e70d292a67d343beb77c10**）：
 
 - [`backend/.planning/codebase/ARCHITECTURE.md`](../backend/.planning/codebase/ARCHITECTURE.md)
 - [`backend/.planning/codebase/STRUCTURE.md`](../backend/.planning/codebase/STRUCTURE.md)
@@ -441,4 +441,4 @@ AgentResources(ResourceConfig) → create_harness(resources) → runs.create_run
 - [`docs/commands.md`](../docs/commands.md)
 - [`docs/reading-order.md`](../docs/reading-order.md)
 
-本轮（2026-07-20，coding-maps skill）在 backend 全部 7 份事实文档（`last_mapped_commit` **555bca7**，Analysis Date: **2026-07-20**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md` 对齐后**刷新**：核心边界（run-first / 四端点 / 7 事件 / 无 SSE / 无前端 / denylist / 5 工具 / 2 SubAgent / StructuredOutputRecovery / OMS 旁路 / UTC+8 时间戳 / Skill 成对目录）仍成立；相对上一轮主要对齐源索引 commit、补强 SubAgent recovery 默认 schema 错位风险，以及 denylist/pricing/测试门禁表述与最新 CONCERNS 一致。
+本轮（2026-07-20，coding-maps skill）在 backend 全部 7 份事实文档（`last_mapped_commit` **3dadbc4**，Analysis Date: **2026-07-20**）与根级 `AGENTS.md` / `ARCHITECTURE.md` / `INTERFACES.md` 对齐后**刷新**：核心边界（run-first / 四端点 / 7 事件 / 无 SSE / 无前端 / denylist / 5 工具 / 2 SubAgent / StructuredOutputRecovery / OMS 旁路 / UTC+8 时间戳 / Skill 成对目录）仍成立；相对上一映射点（`555bca7`）主要对齐源索引 commit 至 **3dadbc4**（删除 `backend/build/` 冗余构建副本，源码与运行时语义不变），并保留 SubAgent recovery 默认 schema 错位风险与 denylist/pricing/测试门禁表述与最新 CONCERNS 一致。

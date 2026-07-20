@@ -1,6 +1,6 @@
 # backend 架构与约定
 
-`backend/` 是 DsAgents 的唯一产品子项目，安装根是 `backend/`，源码顶层布局是 `api.py` 与 `runtime/`、`integrations/`、`skills/`；发行名仍为 `dsagents`。实现细节以 `backend/.planning/codebase/` 事实文档为准。
+`backend/` 是 DsAgents 的唯一产品子项目，安装根是 `backend/`，源码顶层布局是 `api.py` 与 `runtime/`、`integrations/`、`skills/`；发行名仍为 `dsagents`。**不要**把 `backend/build/`（setuptools 构建产物）当源码或读进 VCS；权威实现以上述顶层目录为准。实现细节以 `backend/.planning/codebase/` 事实文档为准（Analysis Date: 2026-07-20，`last_mapped_commit` **3dadbc4**）。
 
 ## 核心模型
 

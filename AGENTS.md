@@ -6,6 +6,16 @@
 
 DsAgents 是**单子项目** agent 运行时底座：产品代码在 `backend/`，发行名 `dsagents`，以可注入 Brain、执行器、工具和资源承载通用运行与 Philips / Tecan 内置 Skill。**无前端子项目**。
 
+## 技术栈（摘要）
+
+| 技术 | 用途 |
+|------|------|
+| Python `>=3.11` + **`uv`** | 运行时与包管理（以 `backend/uv.lock` 为准） |
+| FastAPI / uvicorn | 四 HTTP 端点（轮询，无 SSE） |
+| DeepAgents / LangGraph | Brain 与 checkpointer / store |
+| SQLite（三库） | run ledger / checkpoints / store |
+| MinerU / openpyxl / 可选 oracledb | 文档解析、Tecan Excel、Philips 主数据 |
+
 ## 关键约定
 
 - 包管理器使用 **`uv`**（`cd backend && uv sync`）；不要用 `pip install -e .` 绕过 `uv.lock`。
@@ -16,9 +26,10 @@ DsAgents 是**单子项目** agent 运行时底座：产品代码在 `backend/`�
 - **Skill 成对目录**：kebab-case 资源目录（`SKILL.md` / references / assets，挂载 `/skills/`）+ 可 import 的 Python 包；新增 Skill 须两套目录并更新 `package-data`。
 - `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具用 callable + `ToolCatalog`；资源与 ledger 用具体类。
 - 事件固定 **7** 类；业务问题统一 `input_problems`；不要重新引入 session API、SSE 或旧顶层辅助模块。
-- `StructuredOutputRecovery`（`after_model` + `jump_to: "model"`）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`（否则 model↔model 死循环）。空 data 壳以 `ToolMessage.tool_call_id` 精确匹配**同一** AIMessage；合法文本 JSON 可直接结束，否则 `EMPTY_DATA_SHELL_HINT` + skeleton 纠错。正常路径只要求 tool args；**空壳耗尽** → all-null skeleton + `partial_success`（可 `succeeded`）；**其它失败**耗尽 → 无 `structured_response`（可 `failed`）；不编造业务字段。无参 middleware 的 recovery **默认 Philips schema**，Tecan SubAgent 文本后备路径语义错位。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
+- **`StructuredOutputRecovery`**（`after_model` + `jump_to: "model"`）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。空 data 壳按同回合 `tool_call_id` 恢复或 skeleton 纠错；空壳耗尽 → all-null + `partial_success`；其它失败耗尽 → 无 `structured_response`。无参 recovery **默认 Philips schema**（Tecan SubAgent 文本后备可能错位）。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
 - OMS 旁路索引 best-effort、不阻塞已创建 run（非 `run_events`、无查询 API）；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS）。
 - 测试为可执行 assert 脚本（`cd backend && python -m tests.<name>`，**非 pytest**）；真实模型 / MinerU / Oracle / 外部 HTTP 与本地回归分开。
+- 权威源码是 `backend/` 顶层 `api.py` + `runtime/` + `integrations/` + `skills/`；**不要**把 setuptools 构建产物（历史 `backend/build/`）当源码或读进 VCS。
 - 改 backend 代码后先同步子项目 codebase 事实文档，再按影响更新根级系统文档与系统地图；文档变更至少 `git diff --check`。
 - 长期文档用简体中文；保留标识符、路径、命令、配置键、API 名；不写密钥 / `.env` 值 / 私有连接串。
 - Oracle thick mode 依赖 `ORACLE_CLIENT_LIB_DIR`；缺失时优雅降级（见 backend 风险文档）。
@@ -52,6 +63,6 @@ python -m tests.test_tecan_import
 | 按任务阅读顺序 | [docs/reading-order.md](docs/reading-order.md) |
 | backend 概览 | [docs/backend.md](docs/backend.md) |
 | 项目总览与源码入口 | [docs/project-overview.md](docs/project-overview.md) |
-| backend 实现事实（Analysis Date: 2026-07-20，`last_mapped_commit` 555bca7） | [backend/.planning/codebase/](backend/.planning/codebase/) |
+| backend 实现事实（Analysis Date: 2026-07-20，`last_mapped_commit` 3dadbc4） | [backend/.planning/codebase/](backend/.planning/codebase/) |
 
 修改 backend 前先读 `docs/conventions.md`，再按任务读 codebase 事实文档；涉及 HTTP 或跨边界时回看 `INTERFACES.md` 与 `SYSTEM_MAP.md`。

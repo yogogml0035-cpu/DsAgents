@@ -1,6 +1,7 @@
 ---
 title: backend 目录结构事实
-last_mapped_commit: 555bca7
+last_mapped_commit: 3dadbc4
+last_mapped_commit_full: 3dadbc4feada64f2f4e70d292a67d343beb77c10
 analysis_date: 2026-07-20
 focus: arch
 ---
@@ -8,7 +9,7 @@ focus: arch
 # STRUCTURE — backend（dsagents）
 
 > 分析日期：2026-07-20
-> 映射提交：`555bca7`
+> 映射提交：`3dadbc4`（完整 `3dadbc4feada64f2f4e70d292a67d343beb77c10`）
 > 范围：`backend/` 源码与包结构（跳过 venv、artifacts 大文件、egg-info 内容展开）
 
 ## Directory Layout
@@ -18,6 +19,7 @@ backend/
 ├── api.py                          # FastAPI 入口：四端点 + create_app
 ├── pyproject.toml                  # 发行名 dsagents、package-data、依赖
 ├── uv.lock
+├── .env.example                    # 环境变量模板（映射不读 .env 值）
 │
 ├── runtime/                        # 运行时核心包
 │   ├── __init__.py                 # 对外稳定导出
@@ -91,10 +93,11 @@ backend/
 ├── .planning/
 │   └── codebase/                   # 本目录：架构/结构事实文档
 │
-├── build/                          # setuptools 构建产物（映射时跳过）
 ├── dist/                           # wheel 产物（映射时跳过）
 └── dsagents.egg-info/              # 元数据（映射时跳过）
 ```
+
+说明（`3dadbc4`）：历史 `backend/build/` 构建副本已删除；源码不再依赖该目录。本地可能存在 `.venv/`、`.oracle/`、`.env`（均不在包布局内，映射跳过内容）。
 
 ## Directory Purposes
 
@@ -172,6 +175,7 @@ backend/
 | 上传 / 下载 | `backend/data/artifacts/uploads/`、`.../downloads/` |
 | 事件大 blob | `backend/data/internal/run-events/` |
 | OMS JSONL | `backend/log/oms_log.log` |
+| Skills 源目录 | `backend/skills/`（`ResourceConfig.skills_dir`） |
 
 ## Naming Conventions
 
@@ -236,6 +240,10 @@ setuptools：`py-modules = ["api"]`；`packages.find` include `runtime*`、`inte
 3. 结构化输出相关须遵守 `can_jump_to` 含 `"end"` 等 harness 约束
 4. 用 `tests/test_harness.py` 覆盖
 
+### 新 HTTP 端点（默认禁止）
+
+架构固定四端点。若产品强制新增，只放 `api.py` 边界层，且不得绕过 `SqliteRunLedger` / `HarnessRuntime` 另起执行路径。优先扩展 `run.result` 与 events，而非 session/SSE。
+
 ### 新测试
 
 | 类型 | 放置 | 运行 |
@@ -267,6 +275,7 @@ python -m tests.test_tecan_import
 | 新增 session REST / SSE | 架构固定四端点 + run 查询 |
 | 把密钥写入 codebase 文档或源码常量 | 仅通过 env；映射文档不读 `.env` 值 |
 | 业务工具 allowlist 替代 denylist | 会误删共享 MinerU 工具 |
+| 恢复 `backend/build/` 源码镜像 | 已由 `3dadbc4` 删除；构建产物用 `dist/` / 临时目录 |
 
 ## 模块依赖方向（简图）
 
@@ -299,3 +308,17 @@ skills.philipswgqinboundrecognition.scripts.tools
 ```
 
 依赖原则：`integrations` 不依赖 `skills`；`skills` 可依赖 `integrations` 与标准库；`runtime` 可编排两者；`api` 只依赖 `runtime` + 少量 `integrations`。
+
+## 关键路径速查（绝对路径）
+
+| 主题 | 绝对路径 |
+|------|----------|
+| HTTP | `D:\AgentProject\DsAgents-feat-wsq\backend\api.py` |
+| 执行 | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\execution.py` |
+| Brain / denylist / SubAgent | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\agent.py` |
+| Middleware | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\middleware.py` |
+| Ledger | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\runs.py` |
+| 资源装配 | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\resources.py` |
+| 工具目录 | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\tools.py` |
+| OMS | `D:\AgentProject\DsAgents-feat-wsq\backend\runtime\oms_log.py` |
+| 包定义 | `D:\AgentProject\DsAgents-feat-wsq\backend\pyproject.toml` |

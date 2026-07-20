@@ -1,5 +1,5 @@
 ---
-last_mapped_commit: 555bca7
+last_mapped_commit: 3dadbc4
 analysis_date: 2026-07-20
 focus: tech
 ---
@@ -7,7 +7,7 @@ focus: tech
 # INTEGRATIONS — backend 外部集成事实
 
 Analysis Date: **2026-07-20**
-`last_mapped_commit`: **555bca7**
+`last_mapped_commit`: **3dadbc4**
 
 本文档描述 `backend/` 与外部系统、本地持久化及 HTTP 对外面的集成边界。标识符、路径、配置键、API 名保留原文；**不记录**真实密钥 / token / 连接串。
 

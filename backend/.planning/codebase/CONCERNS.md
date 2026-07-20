@@ -1,14 +1,15 @@
 ---
 title: CONCERNS — backend 风险、脆弱点与改动陷阱
 analysis_date: 2026-07-20
-last_mapped_commit: 555bca7
+last_mapped_commit: 3dadbc4
 focus: concerns
 ---
 
 # CONCERNS — backend 可操作警告
 
-> 基于 `backend/` 源码事实（commit `555bca7`）。区分**有意设计取舍**与**真实脆弱点**；勿把产品边界当 bug。
+> 基于 `backend/` 源码事实（commit `3dadbc4`）。区分**有意设计取舍**与**真实脆弱点**；勿把产品边界当 bug。
 > 路径均相对仓库内 `backend/`，除非写明仓库根。
+> 说明：`3dadbc4` 相对先前文档映射点 `555bca7` 主要删除 `backend/build/` 冗余产物；runtime / skills / API 行为面未因该清理提交而改语义。
 
 ---
 
@@ -206,6 +207,20 @@ focus: concerns
 
 - uploads / downloads / run-events / SQLite 默认都在 `backend/data/`（OMS 在 `backend/log/`）。
 - 无自动清理策略；真实联调产物易堆积（仓库中已有示例 downloads）。
+- **勿**再把 `setuptools` / `build` 产物树 `backend/build/` 提交进库：易与 `backend/runtime` 真源双份漂移；`3dadbc4` 已清理该目录。
+
+### 5.5 Oracle thick 与部署机
+
+**位置：** `skills/philipswgqinboundrecognition/scripts/tools.py` `_init_oracle_client` / `_oracle_data`。
+
+| 条件 | 行为 |
+|------|------|
+| 缺 `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` | 返回 `problems`「Oracle 配置缺失」；Tracking 命中项仍可合并 |
+| 有完整凭证但未设 / 错误 `ORACLE_CLIENT_LIB_DIR` | 可能 thin 失败或 thick init 异常 → `problems`「Oracle 查询失败：…」 |
+| 有 `ORACLE_CLIENT_LIB_DIR` | 进程内 `_ORACLE_CLIENT_INITIALIZED` 只 init 一次；lib 路径错误则后续查询持续失败 |
+| `ORACLE_TIMEOUT_SECONDS`（默认 30） | `tcp_connect_timeout` + `connection.call_timeout`；超时进同一失败 problems 通道 |
+
+本地门禁 `tests/test_philips_wgq_inbound_recognition.py` 的 `_check_oracle_degradation` mock `oracledb.connect`；**不证明** Instant Client 布局。
 
 ---
 
@@ -219,26 +234,27 @@ focus: concerns
 
 特点：Mock MinerU/Oracle/模型；**不证明**真实 PDF 识别率、Oracle 权限、MiniMax 工具调用形态。
 
-### 6.2 真实 / 可选测试（默认 skip）
+### 6.2 真实 / 可选测试（默认 skip 或本机路径）
 
-| 模块 | 门控 env（名） |
-|------|----------------|
-| `test_real_philips_wgq_inbound_recognition` | `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；样本根 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` 等 |
-| `test_real_philips_wgq_ups` | 同类真实开关 |
+| 模块 | 门控 / 前提（名） |
+|------|-------------------|
+| `test_real_philips_wgq_inbound_recognition` | `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；样本根等 `DSAGENTS_PHILIPS_WGQ_*` |
+| `test_real_philips_wgq_ups` | **无**统一 `DSAGENTS_RUN_REAL_*` 门控；默认 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` 或硬编码本机路径；部分 assert 注释掉 |
 | `test_real_image_run` | `DSAGENTS_RUN_REAL_IMAGE_TEST=1` |
-| `test_real_multi_pdf_run` | 真实多 PDF |
+| `test_real_multi_pdf_run` | `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1` |
 | `test_minimax_cache_baseline` | 显式对活服务；注释标明非默认门禁 |
 
-样本路径常写开发者本机目录；CI 无样本即 skip → **渠道 PDF 回归盲区**。
+样本路径常写开发者本机目录；CI 无样本即 skip → **渠道 PDF 回归盲区**。`test_real_philips_wgq_ups` 比其它 real 测试更脆：易误跑、依赖桌面路径、断言可被注释。
 
 ### 6.3 覆盖薄弱点
 
 - 多进程 / 多 worker 下 session 锁与 checkpoint 竞态。
 - cancel 在 MinerU 长轮询中的时序。
 - zip-slip / 超大 upload。
-- OMS 失败静默路径（仅 `test_api` 可测成功写日志）。
+- OMS 失败静默路径（仅 `test_api` 可测成功写日志；失败 `pass` 无负例强制断言）。
 - SubAgent 默认 Philips recovery schema 与 `ExtractionReference` 不一致。
 - package-data 漏文件（需装 wheel 后检查，本地 editable 不易发现）。
+- 误把历史 `backend/build/lib/` 当源码（`3dadbc4` 已删；勿再生成进 VCS）。
 
 ---
 
@@ -279,4 +295,4 @@ focus: concerns
 
 ---
 
-*Analysis Date: 2026-07-20 · last_mapped_commit: 555bca7*
+*Analysis Date: 2026-07-20 · last_mapped_commit: 3dadbc4*
