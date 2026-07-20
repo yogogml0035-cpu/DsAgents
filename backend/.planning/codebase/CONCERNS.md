@@ -1,15 +1,15 @@
 ---
 last_mapped_commit: d39ed16
-analysis_date: 2026-07-18
+analysis_date: 2026-07-20
 scope: backend/
 ---
 
 # Codebase Concerns
 
-**Analysis Date:** 2026-07-18
+**Analysis Date:** 2026-07-20
 **last_mapped_commit:** `d39ed16`
 
-> backend 技术债、已知限制、潜在风险与安全注意点。每条带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对：`api.py`、`runtime/`（含 `oms_log.py`、`middleware.py`、`runs.py`、`execution.py`、`agent.py`、`tools.py`、`resources.py`）、`integrations/`、两个内置 Skill（资源目录 + Python 包）、`tests/`、`pyproject.toml`、`.env.example`。不读取 `.env` 内容，不记录任何密钥或连接串值。
+> backend 技术债、已知限制、潜在风险与安全注意点。每条带代码证据（路径 / 行为）。状态分 **已确认**（源码可证）与 **需确认**（推断，需人工核实）。本轮核对：`api.py`、`runtime/`（含 `oms_log.py`、`middleware.py`、`runs.py`、`execution.py`、`agent.py`、`tools.py`、`resources.py`）、`integrations/`、两个内置 Skill（资源目录 + Python 包）、`tests/`、`pyproject.toml`、`.env.example`，并覆盖 2026-07-20 工作树中的结构化空壳恢复修复。不读取 `.env` 内容，不记录任何密钥或连接串值。
 
 ## Tech Debt
 
@@ -179,9 +179,9 @@ scope: backend/
   - `@hook_config(can_jump_to=["model", "end"])` — **必须**同时声明 `"end"`，禁止只允许 `"model"`
   - 解析/校验失败或空文本：`jump_to: "model"`，计数 `structured_recovery_attempts`，默认 `max_retries=2`
   - 耗尽重试：**必须** `return {"jump_to": "end"}`（源码注释：`Returning None would infinite-loop; jump to end instead.`）
-  - 空 `data: {}` / 缺 `shipment|header|items`：`EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` + `philips_structured_output_error_message`；耗尽回退 all-null 骨架（见 Known Limitations §6）
-  - Skill / `PHILIPS_WORKFLOW_PROMPT` 硬约束禁止空壳提交
-- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径。
+  - 空 `data: {}` / 缺 `shipment|header|items`：先按最新 ToolMessage 的 `tool_call_id` 精确找到同回合 AI schema call；仅该 AIMessage 的 text JSON 通过 schema 时直接写 `structured_response` + `jump_to: "end"`。否则走 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`，耗尽回退 all-null 骨架（见 Known Limitations §6）
+  - Skill / `PHILIPS_WORKFLOW_PROMPT` 硬约束禁止空壳；正常路径只提交 tool，文本 JSON 只作无法形成工具调用时的后备，避免两条输出通道分叉
+- **测试证据**：`tests/test_harness.py` 覆盖 exhausted → `jump_to == "end"`、graph 上 `initial + max_retries` 次调用后封顶、空 data 壳文本/ToolMessage 路径，以及“合法文本 + 同消息空壳 tool args”的精确 `tool_call_id` 恢复。
 - **残留风险**：若未来重构去掉 `can_jump_to` 中的 `"end"`、或改写 `_retry_or_give_up` 为返回 `None`，无限循环会回归。改 middleware 后必须跑 `cd backend && python -m tests.test_harness`。
 
 ### 2. workflow 工具收窄必须用 denylist（已确认，已缓解）

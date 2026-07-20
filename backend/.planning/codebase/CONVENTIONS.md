@@ -4,9 +4,9 @@ last_mapped_commit: d39ed16
 
 # Coding Conventions
 
-**Analysis Date:** 2026-07-18
+**Analysis Date:** 2026-07-20
 
-> 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准，不以注释或外部文档臆测。
+> 事实来源：`backend/` 源码（`api.py`、`runtime/*`、`integrations/*`、`skills/*`、`tests/*`、`pyproject.toml`）。约定以可执行代码为准，不以注释或外部文档臆测；本次包含 2026-07-20 工作树中的结构化空壳恢复修复。
 
 ## Naming Patterns
 
@@ -166,7 +166,7 @@ last_mapped_commit: d39ed16
 
 | Middleware | 钩子 | 行为 |
 | --- | --- | --- |
-| `StructuredOutputRecovery` | `after_model`（`can_jump_to=["model","end"]`） | 从纯文本 JSON 恢复 `structured_response`；有界重试 |
+| `StructuredOutputRecovery` | `after_model`（`can_jump_to=["model","end"]`） | 从纯文本 JSON 恢复 `structured_response`；空壳 ToolMessage 只验证同 `tool_call_id` 的 AI 文本；有界重试 |
 | `ToolTelemetry` | `wrap_tool_call` | `started` / `completed` / `error` + `duration_ms` + `agent_name` |
 | `NoProgressMiddleware` | `before_model` | 从**当前消息状态**派生连续 `NO_PROGRESS_WINDOW=3` 次同一 tool+args → `NoProgressLoop`；**不**把计数写在 middleware 实例或 graph state |
 | `StructuredOutputCompatibility` | `wrap_model_call` | ToolStrategy 路径关闭 thinking，原始模型保持 adaptive |

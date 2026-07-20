@@ -4,9 +4,9 @@ last_mapped_commit: d39ed16
 
 # Testing Patterns
 
-**Analysis Date:** 2026-07-18
+**Analysis Date:** 2026-07-20
 
-> 事实来源：`backend/tests/*`、`backend/pyproject.toml`、以及被测 `runtime/` / `api.py` / `skills/` 行为。
+> 事实来源：`backend/tests/*`、`backend/pyproject.toml`、以及被测 `runtime/` / `api.py` / `skills/` 行为；本次包含 2026-07-20 工作树中的结构化空壳恢复回归。
 
 ## Test Framework
 
@@ -92,7 +92,7 @@ python -m tests.test_minimax_cache_baseline
 | `tests/test_support.py` | 无独立 `run()` | `FakeBrain` / `FakeBrainFactory`、`StreamControl`、消息构造、`wait_for_run`、Philips 结构化结果 fixture |
 | `tests/test_tools.py` | `run()` | MinerU env guard、解析/ZIP/解压、`default_tool_catalog` 精确 5 工具名 |
 | `tests/test_run_ledger.py` | `run()` | 资源、`/memories/AGENTS.md` seed/不覆盖、run ledger、`workflow` / `result_json` 持久化、外溢、usage、时间戳 |
-| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility`、`StructuredOutputRecovery` 文本 JSON 恢复 / 校验失败 `jump_to: model` / 耗尽 `jump_to: end`、空 data 壳纠错、artifact 归一、七类事件、Philips `structured_response` 成功/缺失/`input_problems` |
+| `tests/test_harness.py` | `run()` | Brain 装配、ToolTelemetry、主 Agent MemoryMiddleware、NoProgressMiddleware 消息状态检测、Philips `StructuredOutputCompatibility`、`StructuredOutputRecovery` 文本 JSON 恢复 / 配对空壳 ToolMessage 文本恢复 / 校验失败 `jump_to: model` / 耗尽 `jump_to: end`、空 data 壳纠错、artifact 归一、七类事件、Philips `structured_response` 成功/缺失/`input_problems` |
 | `tests/test_api.py` | `run()` | upload/runs/workflow/result/cancel/usage/recovery/session 单飞；OMS `run_created` JSONL 索引（`_check_oms_run_created_log`） |
 | `tests/test_workflow_setup.py` | `run()` | Skill 文件、Philips ToolStrategy/工具 denylist/无 SubAgent、Tecan 两个 SubAgent、主/Sub middleware 差异（Sub **4** 个、主含 Memory）、`_update_events` |
 | `tests/test_philips_wgq_inbound_recognition.py` | `run()` | Pydantic 结果合同、Tracking 严格倒序选行、申报页优先、Oracle 补缺/降级、交易字段隔离 |
@@ -134,7 +134,7 @@ python -m tests.test_minimax_cache_baseline
 - 验证 artifact block 进入 Brain 前全部转为 text block（`ARTIFACT_REFERENCE_HINT`）。
 - 覆盖 subagent usage 保留但文本过滤、thinking/text/tool progress/tool execution/assistant message/model usage **七类事件**。
 - Philips invocation 验证 `BrainFactory.create(..., workflow=...)` 注册 `StructuredOutputCompatibility`，原始模型保持 adaptive、实际 handler 请求关闭 Anthropic thinking；独立 fake chat model 还实际经过 `create_agent` 的 `wrap_model_call` 链并保留 `structured_response`，Harness 再从 `updates` 捕获并做 Pydantic 校验。
-- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；非空壳 `attempts >= max_retries` → `jump_to: "end"` 且无 `structured_response`；空 `data: {}` 耗尽 → `partial_success` + all-null `data` + runtime problem；端到端模型调用次数 = 1 + `max_retries` 后退出；空壳文本/ToolMessage 路径使用 `EMPTY_DATA_SHELL_HINT` 与 `PHILIPS_MINIMAL_DATA_SKELETON`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
+- `StructuredOutputRecovery`：fenced JSON 成功恢复；无 JSON / 校验失败 → `jump_to: "model"` 且 `structured_recovery_attempts` 递增；非空壳 `attempts >= max_retries` → `jump_to: "end"` 且无 `structured_response`；空 `data: {}` 耗尽 → `partial_success` + all-null `data` + runtime problem；端到端模型调用次数 = 1 + `max_retries` 后退出；空壳 ToolMessage 仅按 `tool_call_id` 读取同一 AIMessage 的合法 text JSON 并直接结束，其它空壳路径使用 `EMPTY_DATA_SHELL_HINT` 与 `PHILIPS_MINIMAL_DATA_SKELETON`；`philips_structured_output_error_message` 对空壳返回专用 ToolMessage。
 - `test_harness` 验证 `NoProgressMiddleware` 从当前 HumanMessage 之后的消息序列识别连续三次同一 tool+args，新 human turn 与参数变化不会误触发；middleware 不依赖实例级计数；主 Agent 仅一个 `MemoryMiddleware` 且手册进入 system prompt。
 - `test_workflow_setup` 断言 Philips **denylist**：排除帝肯工具、保留 `parse_documents` / `extract_archives` / `lookup_philips_wgq_master_data`、`subagents=[]`；通用/Tecan 路径仍注册 `tecan-extractor-a/b`；SubAgent middleware 无 `MemoryMiddleware`（各 **4** 个 runtime middleware）；受限记忆提示不含默认用户偏好语义。
 - `test_run_ledger` 断言 `/memories/AGENTS.md` 首次 seed 含 ZIP/`result_path` 基线，人工/追加内容在重开资源后不被覆盖。

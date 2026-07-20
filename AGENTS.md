@@ -14,7 +14,7 @@ DsAgents 是**单子项目** agent 运行时底座：产品代码在 `backend/`�
 - **Skill 成对目录**：kebab-case 资源目录（`SKILL.md` / references / assets，挂载 `/skills/`）+ 可 import 的 Python 包；新增 Skill 须两套目录并更新 `package-data`。
 - `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具用 callable + `ToolCatalog`；资源与 ledger 用具体类。
 - 事件固定 **7** 类；业务问题统一 `input_problems`；不要重新引入 session API、SSE 或旧顶层辅助模块。
-- `StructuredOutputRecovery`（`after_model` + `jump_to: "model"`）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`（否则 model↔model 死循环）。空 data 壳：`EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽** → all-null skeleton + `partial_success`（可 `succeeded`）；**其它失败**耗尽 → 无 `structured_response`（可 `failed`）；不编造业务字段。验证：`python -m tests.test_harness`。
+- `StructuredOutputRecovery`（`after_model` + `jump_to: "model"`）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`（否则 model↔model 死循环）。空 data 壳先以 `ToolMessage.tool_call_id` 精确匹配同一 AIMessage 的 schema call；若该 AI 文本 JSON 合法则直接写 `structured_response` + `jump_to: "end"`，否则走 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON`。正常提示只要求 tool args，文本 JSON 只作无法调用工具时的后备；**空壳耗尽** → all-null skeleton + `partial_success`（可 `succeeded`）；**其它失败**耗尽 → 无 `structured_response`（可 `failed`）；不编造业务字段。验证：`python -m tests.test_harness`。
 - OMS 旁路索引 best-effort、不阻塞已创建 run（非 `run_events`、无查询 API）；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS）。
 - 测试为可执行 assert 脚本（`cd backend && python -m tests.<name>`，**非 pytest**）；真实模型 / MinerU / Oracle / 外部 HTTP 与本地回归分开。
 - 改 backend 代码后先同步子项目 codebase 事实文档，再按影响更新根级系统文档与系统地图；文档变更至少 `git diff --check`。

@@ -139,6 +139,8 @@ def run() -> None:
     assert "data: {}" in kwargs["system_prompt"]
     assert "shipment" in kwargs["system_prompt"]
     assert "```json" in kwargs["system_prompt"]
+    assert "正常路径只调用 PhilipsWgqRecognitionResult" in kwargs["system_prompt"]
+    assert "args 与该 JSON 相同" not in kwargs["system_prompt"]
     assert "consolidated" in kwargs["system_prompt"]
     assert callable(kwargs["response_format"].handle_errors)
     empty_shell_msg = kwargs["response_format"].handle_errors(

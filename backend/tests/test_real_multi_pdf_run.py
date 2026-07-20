@@ -12,9 +12,9 @@ import requests
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8500"
-DEFAULT_PDF_DIR = Path(r"C:\Users\0325\Desktop\Agent测试用例\回标分析测试用例\回标分析测试用例2")
+DEFAULT_PDF_DIR = Path(r"C:\Users\0325\Desktop\Agent测试用例\回标分析测试用例\回标分析测试")
 DEFAULT_REQUEST = "将这些pdf调用工具解析并下载下来，要ZIP的格式"
-DEFAULT_TIMEOUT_SECONDS = 7200.0
+DEFAULT_TIMEOUT_SECONDS = 14400.0
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 600.0
 DEFAULT_POLL_SECONDS = 0.1
 

@@ -146,7 +146,7 @@ running → cancelling → cancelled
 | 面 | 约定 |
 |----|------|
 | Middleware | 实现只放 `runtime/middleware.py`；`runtime_middlewares()` 顺序为 `StructuredOutputRecovery` → `ToolTelemetry` → `NoProgressMiddleware` → `StructuredOutputCompatibility`（主 Agent 再挂受限 `MemoryMiddleware`，**共 5 个**）。Tecan SubAgent **不继承**主 Agent middleware，须各自注入无 memory 实例（**各 4 个**） |
-| Structured recovery | `after_model` 有界 `jump_to: "model"`（含空文本、空 `data: {}` 壳；默认 `max_retries=2`）；`can_jump_to` 必须含 `"end"`；耗尽或无法产出 `structured_response` 时显式 `jump_to: "end"`，禁止只返回 `None`；空壳耗尽写 all-null skeleton（见上表说明），**不**编造业务字段 |
+| Structured recovery | `after_model` 有界 `jump_to: "model"`（含空文本、空 `data: {}` 壳；默认 `max_retries=2`）；空壳 ToolMessage 以 `tool_call_id` 精确读取同 AIMessage 的合法文本 JSON 并直接 `jump_to: "end"`；`can_jump_to` 必须含 `"end"`；其它耗尽或无法产出 `structured_response` 时显式 `jump_to: "end"`，禁止只返回 `None`；空壳耗尽写 all-null skeleton（见上表说明），**不**编造业务字段 |
 | 工具收窄 | workflow 用 **denylist** 排除他业务工具，保留共享 MinerU（`parse_documents` / `extract_archives`）；禁止业务-only allowlist |
 | Skill | Philips：结构化 `success\|partial_success\|input_problems` + 单一主数据 Tool → `run.result`；Tecan：2 Tool + `status=generated\|input_problems`；无跨 run 状态机 |
 | 工具注册 | 5 工具静态清单；新增 Skill = kebab 资源目录 + 可 import 包 + `default_tool_catalog()` 静态注册 + `package-data`；无动态 loader |

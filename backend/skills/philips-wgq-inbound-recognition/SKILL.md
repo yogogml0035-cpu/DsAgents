@@ -59,7 +59,7 @@ API 已选择本工作流。只处理本轮消息显式给出的 artifact，不�
 
 最终必须通过 `PhilipsWgqRecognitionResult` 结构化工具提交；`reply` 只作摘要，**不能**代替 tool 参数。
 
-**提交顺序（降空壳）：** ① 文本中先写恰好一个完整 ```json```（含完整 `data`，未知 `null`）；② 再调用工具且 **args 与该 JSON 相同**；运行时可从合法文本 JSON 恢复。**`data: {}` 永远无效**；只改 `problems` 不算修正。
+**提交方式：** 正常路径只调用结构化工具并在 args 中提交完整 `data`（未知 `null`）；不要在文本重复业务 JSON，避免 text/tool 两个输出通道分叉。仅在无法形成有效工具调用时，才输出恰好一个完整 ```json``` 作为后备；它不能替代 tool 参数。**`data: {}` 永远无效**；只改 `problems` 不算修正。
 
 - **禁止** `data: {}`、省略 `data`、或只填顶层 `outcome`/`problems` 却空业务体。
 - `success` / `partial_success`：`data` 须含 `shipment`（`pieces`、`total_gross_weight`）、`header`（全部固定英文字段）、`items`（非空，每行全字段）；未知 `null`。
