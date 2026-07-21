@@ -40,5 +40,4 @@ include = ["runtime*", "integrations*", "skills*"]
     "philips-wgq-inbound-recognition/SKILL.md",
     "tecan-import/SKILL.md",
     "tecan-import/references/*.md",
-    "tecan-import/assets/*",
 ]

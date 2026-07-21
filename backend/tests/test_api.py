@@ -494,7 +494,7 @@ def _check_workflow_api(tmp: str) -> None:
         problem = client.post("/runs", json=problem_request).json()
         problem_run = wait_for_run(client, problem["run_id"], "succeeded")
         assert problem_run["result"]["outcome"] == "input_problems"
-        assert problem_run["result"]["data"] is None
+        assert problem_run["result"]["data"]["items"] == []
 
 
 def _check_startup_recovery(tmp: str) -> None:

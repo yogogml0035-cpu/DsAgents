@@ -1,23 +1,15 @@
-# 字段合同
+# Tecan JSON 字段合同
 
-`save_tecan_extraction` 使用与 Philips 相同的 envelope：
+`finalize_tecan_overseas_recognition(result)` 接收并校验：
 
-- `extractor`：`tecan-extractor-a|b|c`
-- `source_artifact`：本轮 MinerU 结果的显式 `/artifacts/...` 路径
-- `logistics`：只允许 `pieces`、`gross_weight`
-- `items`：必须是空数组
+```json
+{"outcome":"success|partial_success|input_problems","data":{"header":{},"items":[]},"problems":[{"source":"","location":"","issue":"","action":""}]}
+```
 
-每个物流字段只能是 `{value, confidence}`；`confidence` 只允许 `high|medium|low`。缺失值必须是 `{value:null, confidence:"low"}`。不要增加 schema version、risk wrapper、别名或 PDF 之外字段。
+Tecan `header`：`po`、`dn`、`original_waybill_number`、`buyer`、`seller`、`shipper`、`consignee`、`payment_terms`、`contract_number`、`invoice_number`、`invoice_date`、`trade_terms`、`port_of_departure`、`port_of_arrival`。
 
-AWB 以 `No. of Pieces RCP` / `Gross Weight` 为主要锚点；海运表格按货柜去重求和；德文版以 `Anzahl` / `Gewicht kg` 为锚点。尺寸、体积、箱号、封号、Rate、Chargeable Weight 不是目标值。
+所有 `items[]` 行均须出现这 24 个字段：`invoice_number`、`invoice_date`、`so_item`、`product_id`、`new_or_used`、`chinese_name`、`specification`、`quantity`、`unit`、`currency`、`unit_price`、`total_price`、`trade_terms`、`origin_country`、`customs_code`、`declaration_elements`、`legal_quantity_1`、`legal_unit_1`、`legal_quantity_2`、`legal_unit_2`、`gross_weight`、`net_weight`、`business_unit`、`pre_or_post_sales`。
 
-`generate_tecan_import` 接收：
-
-- `extraction_artifacts`：A/B（必要时加 C）的显式 extraction artifact 路径列表
-- `order_artifact`：订单 `.xlsx` artifact 路径
-- `information_artifacts`：一个或多个信息 `.xlsx` artifact 路径
-- `decisions`：可选，冲突裁决列表，每项 `{conflict_id, value, reason}`
-
-成功返回 `{"status":"generated","canonical_artifact","artifacts","manual_checks"}`；
-业务问题返回 `{"code":"input_problems","problems":[{"source","location","issue","action"}]}`。
-信息表对一个料号存在多套不一致记录时，作为 `input_problems` 返回；不再提供来源偏好或按料号覆盖参数。
+- 未知为 `null`；`input_problems` 仍给完整 header，`items` 可为空。
+- 数量、金额、重量为无千分位、非科学计数法字符串；日期为 `YYYY-MM-DD`。
+- 编号保留原始字符与前导零；`currency` 是 ISO 三位大写，`trade_terms` 大写；`new_or_used` 仅“新/旧”，`pre_or_post_sales` 仅“售前/售后”。

@@ -57,8 +57,17 @@ def _check_result_contract() -> None:
             "action": "无需处理",
         }
     ]
-    assert PhilipsWgqRecognitionResult.model_validate(partial).outcome == "partial_success"
-    assert PhilipsWgqRecognitionResult.model_validate(_recognition_result("input problems")).data is None
+    assert PhilipsWgqRecognitionResult.model_validate(partial).outcome == "success"
+    partial_with_unlisted_missing = copy.deepcopy(partial)
+    partial_with_unlisted_missing["data"]["items"][0]["chinese_name"] = None
+    checked_partial = PhilipsWgqRecognitionResult.model_validate(partial_with_unlisted_missing)
+    assert checked_partial.outcome == "partial_success"
+    assert "data.items[0].chinese_name" in checked_partial.problems[-1].issue
+    partial_without_core_fact = copy.deepcopy(partial)
+    partial_without_core_fact["data"]["items"][0]["product_id"] = None
+    _assert_invalid(partial_without_core_fact)
+    input_problems = PhilipsWgqRecognitionResult.model_validate(_recognition_result("input problems"))
+    assert input_problems.data.items == []
 
     extra = copy.deepcopy(payload)
     extra["unexpected"] = True
@@ -72,11 +81,24 @@ def _check_result_contract() -> None:
     )
     bad_partial = copy.deepcopy(payload)
     bad_partial["outcome"] = "partial_success"
+    bad_partial["data"]["items"][0]["chinese_name"] = None
     bad_partial["problems"] = []
     _assert_invalid(bad_partial)
     bad_input = _recognition_result("input problems")
-    bad_input["data"] = payload["data"]
+    bad_input["problems"] = []
     _assert_invalid(bad_input)
+
+    normalized = copy.deepcopy(payload)
+    item = normalized["data"]["items"][0]
+    item["quantity"] = "1,000.00"
+    item["currency"] = "usd"
+    item["trade_terms"] = "fob"
+    assert PhilipsWgqRecognitionResult.model_validate(normalized).model_dump(mode="json")["data"]["items"][0] == {
+        **result["data"]["items"][0],
+        "quantity": "1000",
+        "currency": "USD",
+        "trade_terms": "FOB",
+    }
 
 
 def _check_tracking_and_oracle() -> None:

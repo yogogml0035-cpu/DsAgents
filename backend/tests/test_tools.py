@@ -81,8 +81,8 @@ def run() -> None:
         "parse_documents",
         "extract_archives",
         "lookup_philips_wgq_master_data",
-        "save_tecan_extraction",
-        "generate_tecan_import",
+        "inspect_supply_chain_workbooks",
+        "finalize_tecan_overseas_recognition",
     ]
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

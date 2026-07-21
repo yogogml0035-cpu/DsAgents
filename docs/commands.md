@@ -26,9 +26,9 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
-改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：Philips 工具名集合须**含** `parse_documents` / `extract_archives`（及本业务主数据工具），**不含**帝肯业务工具；禁止业务-only allowlist 导致共享 MinerU 工具从模型工具表消失。
+改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：Philips 工具名集合须**含** `parse_documents` / `extract_archives`、`inspect_supply_chain_workbooks` 与本业务主数据工具，**不含** Tecan finalizer；禁止业务-only allowlist 导致共享材料工具从模型工具表消失。
 
-改 `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON，否则用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。改 Tecan SubAgent 结构化输出时另核 recovery schema（默认仍是 Philips，见 `docs/conventions.md`）。
+改 Philips `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON，否则用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。普通/Tecan run 传 `structured_schema=None`，Tecan 终态由 finalizer 工具校验。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、中国时区本地时间戳、状态机与 usage 聚合的本地 assert 脚本。
 

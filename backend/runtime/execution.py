@@ -12,6 +12,8 @@ from runtime.resources import AgentResources
 from runtime.runs import RunEvent
 from runtime.tools import ToolCatalog
 from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecanimport.schema import TecanOverseasRecognitionResult
+from skills.tecanimport.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
 ARTIFACT_REFERENCE_HINT = (
@@ -44,6 +46,7 @@ class HarnessRuntime:
         text_parts: list[str] = []
         result: dict[str, Any] | None = None
         structured_response: Any = None
+        tecan_response: TecanOverseasRecognitionResult | None = None
         normalized_messages = _normalize_messages(messages)
         yield self.resources.runs.emit_run_status(run_id, "running")
         control = RunControl()
@@ -51,7 +54,10 @@ class HarnessRuntime:
         try:
             brain = self.brain_factory.create(
                 resources=self.resources,
-                middleware=runtime_middlewares(memory_backend=self.resources.backend),
+                middleware=runtime_middlewares(
+                    memory_backend=self.resources.backend,
+                    structured_schema=PhilipsWgqRecognitionResult if workflow == WORKFLOW else None,
+                ),
                 tools=self.tools.as_list(),
                 workflow=workflow,
             )
@@ -111,6 +117,9 @@ class HarnessRuntime:
                     candidate = _structured_response(data)
                     if candidate is not None:
                         structured_response = candidate
+                    finalized_tecan = _tecan_finalized_response(data)
+                    if finalized_tecan is not None:
+                        tecan_response = finalized_tecan
                     for event_type, payload in _update_events(data):
                         if event_type == "assistant_message" and payload.get("text"):
                             assistant_text = payload["text"]
@@ -123,6 +132,8 @@ class HarnessRuntime:
                 result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
                     mode="json",
                 )
+            elif tecan_response is not None:
+                result = tecan_response.model_dump(mode="json")
         except GraphDrained:
             yield self.resources.runs.emit_run_status(
                 run_id, "cancelled", error="run cancelled", raw={"status": "cancelled"}
@@ -241,6 +252,25 @@ def _structured_response(data: Any) -> Any:
     return None
 
 
+def _tecan_finalized_response(data: Any) -> TecanOverseasRecognitionResult | None:
+    """Read only the dedicated Tecan finalizer ToolMessage, never arbitrary tool text."""
+    if not isinstance(data, dict):
+        return None
+    for node_value in data.values():
+        messages = node_value.get("messages") if isinstance(node_value, dict) else None
+        if not isinstance(messages, list):
+            continue
+        for message in messages:
+            if _message_role(message) != "tool" or _message_name(message) != FINALIZE_TECAN_RESULT_TOOL:
+                continue
+            text = _message_content(message)
+            try:
+                return TecanOverseasRecognitionResult.model_validate_json(text)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _message_role(message: Any) -> str | None:
     role = getattr(message, "role", None)
     if isinstance(role, str):
@@ -253,6 +283,26 @@ def _message_role(message: Any) -> str | None:
         if isinstance(value, str):
             return "assistant" if value == "ai" else value
     return None
+
+
+def _message_name(message: Any) -> str | None:
+    value = message.get("name") if isinstance(message, dict) else getattr(message, "name", None)
+    return value if isinstance(value, str) else None
+
+
+def _message_content(message: Any) -> str:
+    value = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for block in value:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    return ""
 
 
 def _error_text(exc: Exception) -> str:

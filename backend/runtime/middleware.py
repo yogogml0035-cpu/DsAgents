@@ -33,7 +33,6 @@ from skills.philipswgqinboundrecognition.schema import (
     OrderHeader,
     OrderItem,
     RecognitionData,
-    Shipment,
 )
 
 
@@ -88,23 +87,29 @@ def _null_fields(model_cls: type[BaseModel]) -> dict[str, None]:
 
 # 最小合法 data 骨架：从 schema 字段推导，全 null；仅形状提示，不编造业务值。
 PHILIPS_MINIMAL_DATA_SKELETON: dict[str, Any] = PhilipsWgqRecognitionResult(
-    outcome="success",
+    outcome="partial_success",
     data=RecognitionData(
-        shipment=Shipment(**_null_fields(Shipment)),
         header=OrderHeader(**_null_fields(OrderHeader)),
         items=[OrderItem(**_null_fields(OrderItem))],
     ),
-    problems=[],
+    problems=[
+        {
+            "source": "runtime",
+            "location": "structured_response",
+            "issue": "minimal recovery shape",
+            "action": "replace nulls with confirmed document values",
+        }
+    ],
 ).model_dump(mode="json")
 
-# 模型提交 success/partial 却 data:{} 或缺 shipment/header/items 时的共享纠错文案。
+# 模型提交 success/partial 却 data:{} 或缺 header/items 时的共享纠错文案。
 # 供 ToolStrategy handle_errors 与 recovery 重试使用。
 EMPTY_DATA_SHELL_HINT = (
-    "PhilipsWgqRecognitionResult 无效：data 不能是 {}，也不能省略 shipment/header/items。"
+    "PhilipsWgqRecognitionResult 无效：data 不能是 {}，也不能省略 header/items。"
     "outcome 为 success 或 partial_success 时，请用结构化工具重新提交完整嵌套对象："
-    "shipment（pieces、total_gross_weight）、header（全部固定英文字段）、"
+    "header（全部固定英文字段）、"
     "items（非空数组，每项为完整商品对象）。未知值填 null。"
-    "outcome 为 input_problems 时，data 必须为 null（不能是 {}），且至少一条 problem。"
+    "outcome 为 input_problems 时，data 仍须含完整 header 与 items（可为空数组），且至少一条 problem。"
     "不要编造业务值；复用已从 PDF 与主数据查询得到的字段。禁止重复提交相同的空 data 壳。"
     "只补 problems 而 data 仍为 {} 不算修正。"
     "正常路径只调用结构化工具提交完整结果，不要在助手文本重复业务 JSON，以免两个输出通道分叉。"
@@ -380,7 +385,11 @@ class StructuredOutputRecovery(AgentMiddleware):
         }
 
 
-def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddleware]:
+def runtime_middlewares(
+    *,
+    memory_backend: Any | None = None,
+    structured_schema: type[BaseModel] | None = PhilipsWgqRecognitionResult,
+) -> list[AgentMiddleware]:
     """Return fresh middleware instances for each agent graph.
 
     When ``memory_backend`` is set (main agent), attach built-in MemoryMiddleware
@@ -393,7 +402,7 @@ def runtime_middlewares(*, memory_backend: Any | None = None) -> list[AgentMiddl
     - Compatibility wraps model calls (thinking off for ToolStrategy).
     """
     middleware: list[AgentMiddleware] = [
-        StructuredOutputRecovery(),
+        *([StructuredOutputRecovery(structured_schema)] if structured_schema else []),
         ToolTelemetry(),
         NoProgressMiddleware(),
         StructuredOutputCompatibility(),
@@ -580,7 +589,7 @@ def _empty_shell_fallback_result(
 def is_empty_recognition_data_shell(payload: Any) -> bool:
     """True when payload claims success/partial but data is {} or missing nested keys.
 
-    Does not invent values. ``input_problems`` with ``data: null`` is not a shell.
+    Does not invent values. ``input_problems`` is not an empty-data shell.
     """
     if not isinstance(payload, dict):
         return False
@@ -595,14 +604,11 @@ def is_empty_recognition_data_shell(payload: Any) -> bool:
     if data == {}:
         return True
     # Partial shells: missing any required nested section.
-    for key in ("shipment", "header", "items"):
+    for key in ("header", "items"):
         if key not in data:
             return True
-    shipment = data.get("shipment")
     header = data.get("header")
     items = data.get("items")
-    if isinstance(shipment, dict) and shipment == {}:
-        return True
     if isinstance(header, dict) and header == {}:
         return True
     if items == [] or items is None:
@@ -611,9 +617,9 @@ def is_empty_recognition_data_shell(payload: Any) -> bool:
 
 
 def _validation_indicates_empty_data(exc: ValidationError) -> bool:
-    """Heuristic: pydantic reported missing data.shipment/header/items on empty dict."""
+    """Heuristic: pydantic reported missing data.header/items on empty dict."""
     text = str(exc)
-    missing = ("data.shipment" in text, "data.header" in text, "data.items" in text)
+    missing = ("data.header" in text, "data.items" in text)
     if sum(1 for hit in missing if hit) >= 2:
         return True
     return "input_value={}" in text and "data" in text.lower()
@@ -777,7 +783,7 @@ def _build_recovery_retry_message(
         )
         lead = (
             f"结构化输出被拒绝：`{schema_name}` 使用了空的 `data` 壳。"
-            "请只调用结构化工具，并在 args 中提交完整 data.shipment / data.header / 非空 data.items"
+            "请只调用结构化工具，并在 args 中提交完整 data.header / 非空 data.items"
             "（未知 null）。正常路径不要在助手文本重复业务 JSON；"
             "仅无法形成有效工具调用时才输出一个完整 ```json``` 作为后备。"
             "不要编造业务值；复用 PDF 与主数据已识别字段。禁止再次提交 data: {}；"
