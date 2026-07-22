@@ -1,6 +1,6 @@
 # DsAgents 系统架构
 
-> 本轮刷新：2026-07-22。实现事实见 `backend/.planning/codebase/`；本文只定义系统边界与稳定决策。
+> 本轮刷新：2026-07-22。实现事实见 `backend/.planning/codebase/`；本文只定义系统边界与稳定决策。调用链与按任务阅读见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
 
 ## 系统定位
 
@@ -28,22 +28,38 @@ flowchart LR
 - `session_id` 只作 LangGraph `thread_id` 与进程内同 session 单飞锁；不承担业务状态、归档或查询接口。
 - 三层状态归属清晰、互不替代：
   - run ledger → 对外执行终态与可观测投影
-  - LangGraph checkpointer → 短期图上下文
+  - LangGraph checkpointer → 短期图上下文（`thread_id=session_id`）
   - LangGraph store → Agent memory（`/memories/`）
-- 代码边界固定为 `backend/api.py`、`runtime/`、`integrations/`、`skills/`；历史 setuptools 构建产物（如 `backend/build/`）不是源码。
+- 代码边界固定为 `backend/api.py`、`runtime/`、`integrations/`、`skills/`；历史 setuptools 构建产物（如 `backend/build/`、`dist/`、`*.egg-info`）不是源码。
 - 部署假设为**单进程** session 锁与 cancel control；多 worker 无跨进程互斥。
+- 无 HTTP Auth；默认假定受信内网 / 网关鉴权。
 
 ## 子系统职责
 
 | 层 | 路径 | 职责 |
 |----|------|------|
-| HTTP 适配 | `backend/api.py` | 请求校验、上传、创建 run、后台线程执行、轮询、cancel、usage 计价、OMS best-effort 写点 |
+| HTTP 适配 | `backend/api.py` | 请求校验、上传、创建 run、后台 daemon 线程执行、轮询、cancel、usage 计价、OMS best-effort 写点 |
 | 运行时 | `backend/runtime/` | Brain 装配、stream→事件投影、middleware、ToolCatalog、三库资源、run ledger、OMS JSONL |
 | 集成 | `backend/integrations/` | `/artifacts` 路径、MinerU HTTP、JSON artifact 读写 |
-| 业务 Skill | `backend/skills/` | 渠道合同、Philips/Tecan 下划线 Skill 包、主数据 / XLSX / finalizer |
+| 业务 Skill | `backend/skills/` | 共享渠道合同、Philips/Tecan 下划线 Skill 包、主数据 / XLSX / finalizer |
 | 本地门禁 | `backend/tests/` | 可执行 assert 脚本（`python -m tests.*`，**非 pytest**） |
 
 依赖单向：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具为 callable + `ToolCatalog`；资源与 ledger 为具体类。
+
+### 模块入口（一页）
+
+| 区域 | 入口 | 当前职责 |
+|------|------|----------|
+| 执行 | `runtime/execution.py` | `HarnessRuntime.execute_run`、stream→七类 events、结果投影、协作 cancel |
+| Agent | `runtime/agent.py` | `Brain`/`BrainFactory`、`DeepAgentsBrainFactory`、WAG ToolStrategy、denylist |
+| Middleware | `runtime/middleware.py` | Philips recovery、telemetry、loop 检测、thinking 兼容、memory |
+| 工具目录 | `runtime/tools.py` | 静态 **5** 工具 `ToolCatalog` |
+| 资源 / 三库 | `runtime/resources.py` | `AgentResources`、`CompositeBackend`、路径锚定 `backend/` |
+| ledger | `runtime/runs.py` | runs 投影 + append-only events |
+| OMS 旁路 | `runtime/oms_log.py` | `run_created` JSONL best-effort |
+| 合同 | `skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
+| Philips（WAG） | `skills/philips_wgq_inbound_recognition/` | Skill 资源 + schema + Tracking/Oracle lookup |
+| Tecan（DK） | `skills/tecan_import/` | Skill 资源 + XLSX inspection + finalizer（无 Excel） |
 
 ## 渠道供应链业务设计
 
@@ -53,6 +69,7 @@ flowchart LR
 - 外壳固定：`{outcome, data: {header, items}, problems}`。不输出 `shipment`、Excel、候选抽取噪声、审计细节或 OMS 保存结果。
 - 数量、金额、重量为无千分位、非科学计数法字符串；日期为 `YYYY-MM-DD`；编号保留原始字符与前导零。
 - `success`、`partial_success`、`input_problems` 都是有效业务 outcome。核心票次/商品事实无法确认时使用 `input_problems`，仍返回完整 header、已证实字段与可复核 problems；该 run 仍为 **`succeeded`**。
+- OMS **只消费** `run.result`，不依赖 `reply`、Excel、候选工具结果或审计文本。
 
 ### 材料与证据
 
@@ -61,6 +78,22 @@ flowchart LR
 - 单据事实优先；主数据只按唯一明确的非语义标识补齐，不能覆盖本票数量、金额、重量或编号。冲突/舍入歧义转 `input_problems`。
 - 发票上传顺序与原始行顺序必须保留；相同 12NC 默认不合并；同票多个发票/运单稳定地以英文逗号连接。
 - 业务同票归集在**单一 run** 内完成；不新增跨 run 消息/任务状态表。
+
+### 渠道路径（同票单一 run）
+
+```text
+WAG workflow
+  → /skills/philips_wgq_inbound_recognition/SKILL.md
+  → parse_documents / inspect_supply_chain_workbooks
+  → 唯一 Tracking 时 lookup_philips_wgq_master_data
+  → denylist 排除 Tecan finalizer
+  → PhilipsWgqRecognitionResult → run.result
+
+DK workflow
+  → /skills/tecan_import/SKILL.md + references/
+  → parse_documents / inspect_supply_chain_workbooks
+  → finalize_tecan_overseas_recognition → run.result
+```
 
 ## Agent、状态与 middleware 决策
 
@@ -77,7 +110,7 @@ middleware 只保留横切运行时能力：
 | Memory | `MemoryMiddleware`（主 Agent 有 memory 时） | 加载 `/memories/AGENTS.md` |
 | Tecan 最终 JSON | 专用 finalizer 工具 | 业务合同校验，不污染普通请求或全局 graph state |
 
-主 Agent 有 memory 时约 **5** 个 middleware；DK/普通 run 使用 `structured_schema=None`，不按 Philips schema 恢复。
+主 Agent 有 memory 时约 **5** 个 middleware（Recovery 仅 WAG）；DK/普通 run 使用 `structured_schema=None`，不按 Philips schema 恢复。生产 `subagents=[]`，并关闭默认 general-purpose subagent。
 
 ## 运行时装配
 
@@ -87,15 +120,16 @@ middleware 只保留横切运行时能力：
 - `DK` 只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`，缺 finalizer 终态即失败。
 - WAG 用 **denylist** 排除 Tecan finalizer，DK 用 **denylist** 排除 Philips lookup；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
 - Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
+- Agent 虚拟 FS：`/artifacts/`、`/skills/`（写拒绝）、`/memories/`、`/large_tool_results/` + 默认 `StateBackend`。
 
 ## 存储、可观测性与运维
 
-- 三 SQLite 物理分离：`dsagents_runs.db`（ledger）、`dsagents_checkpoints.db`、`dsagents_store.db`；无自动 schema migration。
+- 三 SQLite 物理分离：`dsagents_runs.db`（ledger）、`dsagents_checkpoints.db`、`dsagents_store.db`；无自动 schema migration；连接不共享。
 - 事件固定 **7** 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。大 payload 可外置到 `data/internal/run-events/`。
-- OMS JSONL 索引只在 HTTP `create_run` 成功后 best-effort 追加（`backend/log/oms_log.log`），不是 event、无查询接口、不阻塞 run、不含 `run.result`。
+- OMS JSONL 索引只在 HTTP `create_run` 成功后 best-effort 追加（`backend/log/oms_log.log`），不是 event、无查询接口、不阻塞 run、不含 `run.result`。程序内 `execute_run` **不**写 OMS。
 - ledger 与 OMS 时间均使用 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
 - 出站：MiniMax（Anthropic 兼容 LLM）、MinerU HTTP、可选 Oracle（Philips 主数据）。Oracle thick mode 依赖 `ORACLE_CLIENT_LIB_DIR`；缺失时优雅降级为 problems/null，不丢弃已证实单据事实。
-- 无 HTTP Auth / Webhook；默认假定受信内网部署。
+- Cancel 为协作式 `RunControl` drain，**不能**强杀已发出的外部 HTTP/Oracle；启动 lifespan 将残留 `queued`/`running`/`cancelling` 标为 `failed`（不自动续跑）。
 
 ## 理解路径
 
@@ -105,7 +139,7 @@ middleware 只保留横切运行时能力：
 | 实现细节 | [backend/.planning/codebase/](backend/.planning/codebase/)（Analysis Date: 2026-07-22） |
 | 全局硬约束 | [AGENTS.md](AGENTS.md) → [docs/conventions.md](docs/conventions.md) |
 | 渠道业务合同 | [docs/channel-supply-chain-json-prd.md](docs/channel-supply-chain-json-prd.md) |
-| 按任务入口 | [docs/reading-order.md](docs/reading-order.md) 或 SYSTEM_MAP §7 |
+| 按任务入口 | [docs/reading-order.md](docs/reading-order.md) 或 SYSTEM_MAP §6–§7 |
 
 ## 质量门禁
 

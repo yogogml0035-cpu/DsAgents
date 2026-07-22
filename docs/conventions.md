@@ -47,3 +47,19 @@
 - 长期文档用简体中文，保留标识符、路径、命令和配置键；不记录密钥、`.env` 值或私有连接串。
 - 测试是 `cd backend; python -m tests.<name>` 的 assert 脚本，不是 pytest。真实模型、MinerU、Oracle、外部 HTTP 与本地回归分开。
 - 修改 recovery 跑 `test_harness`；改 workflow 工具表跑 `test_workflow_setup`；改渠道最终合同跑 Philips/Tecan 测试；最后全量七脚本和根目录 `git diff --check`。
+
+本地默认门禁（七脚本）：
+
+```powershell
+cd backend
+uv sync
+python -m tests.test_tools
+python -m tests.test_run_ledger
+python -m tests.test_harness
+python -m tests.test_api
+python -m tests.test_workflow_setup
+python -m tests.test_philips_wgq_inbound_recognition
+python -m tests.test_tecan_import
+```
+
+完整命令、真实集成开关与启动方式见 [commands.md](commands.md)。

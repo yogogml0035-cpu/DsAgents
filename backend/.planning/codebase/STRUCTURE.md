@@ -87,6 +87,20 @@ backend/
     └── oms_log.log
 ```
 
+## 目录用途
+
+| 目录 / 文件 | 用途 |
+|-------------|------|
+| `api.py` | 唯一 HTTP 入口：上传、创建/查询/取消 run；进程内 session 单飞；usage 聚合计价 |
+| `runtime/` | run-first 执行核心：Brain 装配、harness、middleware、ledger、资源、工具目录 |
+| `integrations/` | 外部 I/O：artifact 虚拟路径、MinerU HTTP 解析与解压 |
+| `skills/` | 渠道业务 Skill（资源 + 代码同包）与共享 JSON 合同 |
+| `tests/` | 本地 assert 门禁与可选真实集成脚本 |
+| `.planning/codebase/` | backend 实现事实文档（本文件所在处） |
+| `data/` | 运行时三 SQLite、artifacts、超大事件落盘（非 VCS 权威源码） |
+| `log/` | OMS JSONL 等运行日志 |
+| `pyproject.toml` + `uv.lock` | 发行名 `dsagents`、依赖锁定、Skill package-data |
+
 ## 关键文件位置
 
 | 路径 | 职责 |
@@ -120,7 +134,19 @@ backend/
 | `skills/philips_wgq_inbound_recognition/` | `/skills/` / `from skills.philips_wgq_inbound_recognition import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
 | `skills/tecan_import/` | `/skills/` / `from skills.tecan_import import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
 
-`pyproject.toml` `[tool.setuptools.package-data]` 必须按包列出 `SKILL.md` 与 `references/*.md`，否则 wheel 中 Agent 读不到资源。
+`pyproject.toml` `[tool.setuptools.package-data]` 必须按包列出 `SKILL.md` 与 `references/*.md`，否则 wheel 中 Agent 读不到资源：
+
+```toml
+[tool.setuptools.package-data]
+"skills.philips_wgq_inbound_recognition" = [
+    "SKILL.md",
+    "references/*.md",
+]
+"skills.tecan_import" = [
+    "SKILL.md",
+    "references/*.md",
+]
+```
 
 新增 Skill 步骤：
 
@@ -134,6 +160,7 @@ backend/
 
 | 类别 | 约定 | 示例 |
 |------|------|------|
+| 包 / 模块 | snake_case | `runtime`、`philips_wgq_inbound_recognition` |
 | workflow 标识 | 大写渠道代码 | `WAG`、`DK` |
 | 工具函数 | snake_case callable `__name__` | `parse_documents`、`finalize_tecan_overseas_recognition` |
 | 虚拟路径 | POSIX 风格前缀 | `/artifacts/...`、`/skills/...`、`/memories/...` |
@@ -176,11 +203,17 @@ skills.* tools
 
 `typing.Protocol` **只**用于 `Brain` / `BrainFactory`。工具不用 Protocol；ledger / resources 用具体类。
 
+setuptools 布局（`pyproject.toml`）：
+
+- `py-modules = ["api"]` — 顶层 `api.py`
+- `packages.find` include：`runtime*`、`integrations*`、`skills*`
+- 发行名 `dsagents`；Python `>=3.11,<4.0`
+
 ## 哪些目录不是源码
 
 | 路径 | 说明 |
 |------|------|
-| `backend/build/` | setuptools 历史构建产物（已从仓库删除并由 `.gitignore` 忽略）；**不要**当源码读入或提交 |
+| `backend/build/` | setuptools 历史构建产物（已由 `.gitignore` 忽略）；**不要**当源码读入或提交 |
 | `backend/dist/` | 打包 wheel 输出 |
 | `backend/dsagents.egg-info/` | egg 元数据 |
 | `backend/__pycache__/`、`**/__pycache__/` | 字节码缓存 |

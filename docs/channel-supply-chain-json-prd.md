@@ -39,3 +39,5 @@
 | `input_problems` | 票次身份或核心事实不能确认；仍返回 JSON、完整 header、已证实字段和复核线索，无法安全形成商品行时 `items: []` |
 
 OMS 只读取 `run.result`。后续渠道 Skill 应复用同一终态语义和字段证据规则，不新增 Excel 或候选输出通道。
+
+实现入口：`backend/skills/channel_contract.py`（共享 `OrderItem` / `RecognitionProblem` / outcome 校验）；Philips / Tecan 各自 header 与终态 schema 在对应下划线 Skill 包内。

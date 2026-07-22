@@ -1,6 +1,6 @@
 # DsAgents 接口与边界
 
-> 本轮刷新：2026-07-22。具体 backend 实现事实见 `backend/.planning/codebase/INTEGRATIONS.md` 与 `ARCHITECTURE.md`。
+> 本轮刷新：2026-07-22。具体 backend 实现事实见 `backend/.planning/codebase/INTEGRATIONS.md` 与 `ARCHITECTURE.md`；调用链见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
 
 ## HTTP 合同
 
@@ -9,15 +9,16 @@
 | `POST /upload` | multipart `files` | `{files:[{file_path,name,mime_type,size}]}` | 只存上传文件，返回 `/artifacts/uploads/...` |
 | `POST /runs` | `{workflow?,session_id?,messages[]}` | `{run_id,session_id,status:"queued"}` | 后台 daemon 线程执行；无 SSE |
 | `GET /runs/{run_id}` | 可选 `after_event_id` | `{run,workflow,result,events,latest_content_event,usage}` | 轮询唯一查询面 |
-| `POST /runs/{run_id}/cancel` | 无 body | cancel 状态 | 协作式 `RunControl` drain，不强杀外部 HTTP/Oracle |
+| `POST /runs/{run_id}/cancel` | 无 body | cancel 状态（见下） | 协作式 `RunControl` drain，不强杀外部 HTTP/Oracle |
 
 ### 请求约束
 
 - `messages[]` 项为 `{role, content:[{type:"text",text}|{type:"artifact",path}]}`，请求模型 `extra="forbid"`。旧 `{message:"..."}` 体不支持。
 - `workflow` 只允许 `WAG`、`DK` 或省略。
-- WAG / DK workflow **不能**携带客户端 `session_id`（服务端总是分配新 session）；通用请求保留普通 session 语义。
+- WAG / DK workflow **不能**携带客户端 `session_id`（服务端总是分配新 session）；违者 **422**。通用请求保留普通 session 语义。
 - 同 `session_id` 并发第二跑 → HTTP **409** + `active_run_id`（进程内锁）。
-- 未知 `run_id` → **404**；已终态再 cancel → **409**。
+- 未知 `run_id` → **404**。
+- cancel：活跃 run → **202** `{"status":"cancelling"}`；已 `cancelling`/`cancelled` → **200** 回显；已终态（`succeeded`/`failed`）再 cancel → **409**。
 - **无** HTTP Auth、**无** Webhook、**无** session CRUD、**无** 下载端点。
 
 ### 调用模式
@@ -43,7 +44,7 @@ queued → cancelled
 running → cancelling → cancelled
 ```
 
-启动 lifespan：`fail_incomplete_runs("执行已中断，请重试")` 将残留 `queued` / `running` / `cancelling` 标为 `failed`。
+启动 lifespan：`fail_incomplete_runs("执行已中断，请重试")` 将残留 `queued` / `running` / `cancelling` 标为 `failed`（不自动续跑）。
 
 ### 固定 7 类事件
 
@@ -141,7 +142,7 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 - 仅 WAG 的 `structured_schema` 非空；DK / 普通 run 为 `None`。
 - `after_model` + `jump_to`；`can_jump_to` 必须含 `"model"` 与 **`"end"`**。
 - 耗尽必须显式 `jump_to: "end"`，禁止只返回 `None`。
-- 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton 纠错。
+- 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton 纠错；空壳耗尽 → all-null + `partial_success`（技术兜底）。
 
 ## 存储、artifact、provider 与 OMS
 
@@ -151,14 +152,14 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 |----|----------|------|
 | Run ledger | `backend/data/dsagents_runs.db` | runs 快照 + append-only events |
 | Checkpoints | `backend/data/dsagents_checkpoints.db` | LangGraph `SqliteSaver`（`thread_id=session_id`） |
-| Store | `backend/data/dsagents_store.db` | `/memories/`（`SqliteStore`） |
+| Store | `backend/data/dsagents_store.db` | `/memories/`（`SqliteStore`，namespace `("dsagents",)`） |
 
 三库物理分离、连接不共享；无自动 migration。时间戳统一 **UTC+8** `YYYY-MM-DD HH:MM:SS`。`session_id` 单飞锁与 cancel control 均仅**进程内**。
 
 ### Artifacts
 
 - 根：`backend/data/artifacts/`（`uploads/`、`downloads/`）。
-- 跨层唯一虚拟路径：`/artifacts/...`（禁止 `..`；默认仅接受该前缀）。
+- 跨层唯一虚拟路径：`/artifacts/...`（禁止 `..`；默认仅接受该前缀；MinerU 解析侧允许 local 为例外）。
 - 上传、JSON artifact、解压/解析输出均经 `integrations.artifacts`。
 - Agent 视图：`FilesystemBackend` 挂 `/artifacts/` 与 `/large_tool_results/`；`/skills/**` 写拒绝。
 
@@ -171,7 +172,8 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 | Oracle（可选） | Philips lookup；`ORACLE_DSN` / `USERNAME` / `PASSWORD`；可选 `ORACLE_CLIENT_LIB_DIR` | problems + null，不拖垮已证实结果 |
 | OMS JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log` | best-effort，失败不阻塞已创建 run |
 
-- OMS 在 HTTP `create_run` **成功之后**写 `event=run_created` 行（含 `run_id`、`session_id`、`workflow`、artifact 文件列表）；**不是** `run_events`、**无**查询 API、**不含** prompt/thinking/`run.result`。
+- OMS 在 HTTP `create_run` **成功之后**写 `event=run_created` 行（含 `run_id`、`session_id`、`workflow`、`created_at`、从 messages 抽取的 artifact `files[{name,path}]`）；**不是** `run_events`、**无**查询 API、**不含** prompt/thinking/`run.result`。
+- API 层可对 `MiniMax-M3` 聚合 usage 并做 CNY 趋势估价（非账单）；未知模型金额为 null。
 - 无第二生产 LLM 接线；无 Auth / Webhooks。
 
 ## 程序内入口
@@ -183,6 +185,6 @@ with AgentResources(...) as resources:
         ...
 ```
 
-- HTTP：`api:app` / `create_app()` + `uvicorn`。
+- HTTP：`api:app` / `create_app()` + `uvicorn`（示例：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`）。
 - 程序内调用**不**写 OMS 旁路索引。
 - 业务 JSON 的唯一读取路径仍是 ledger 中的 `run.result`。

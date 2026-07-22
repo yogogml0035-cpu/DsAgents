@@ -8,4 +8,4 @@ Philips 专属实现请同时阅读：
 - `backend/skills/philips_wgq_inbound_recognition/schema.py`
 - `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py`
 
-仍然适用的 Philips 边界：HTTP workflow 为 `WAG`，最终 JSON 只经 `run.result` 交付；不生成 Excel，不输出 `shipment`，同票 PDF/XLSX 由 Skill 动态归集。货代版式提示位于 `backend/skills/philips_wgq_inbound_recognition/references/freight-forwarders.md`。
+仍然适用的 Philips 边界：HTTP workflow 为 `WAG`，最终 JSON 只经 `run.result` 交付；`items[]` 与 Tecan 共用 `channel_contract` 24 字段；不生成 Excel，不输出 `shipment`，同票 PDF/XLSX 由 Skill 动态归集。货代版式提示位于 `backend/skills/philips_wgq_inbound_recognition/references/freight-forwarders.md`。

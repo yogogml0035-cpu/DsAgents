@@ -2,7 +2,7 @@
 
 > Analysis Date: 2026-07-22
 > 范围：`backend/` 权威源码（`api.py`、`runtime/`、`integrations/`、`skills/`、`tests/`、`pyproject.toml`、`uv.lock`）。
-> **不**把 setuptools 构建产物（历史 `backend/build/`、`dist/`、`*.egg-info`）当源码。
+> **不**把 setuptools 构建产物（历史 `backend/build/`、`dist/`、`*.egg-info`）当源码；忽略 `data/`、`log/`、`__pycache__/`、`.venv/`。
 
 ## Languages
 
@@ -13,27 +13,37 @@
 | SQL | Philips Oracle 查询字符串（`skills/philips_wgq_inbound_recognition/scripts/tools.py` 内 `_ORACLE_SQL`） |
 | JSON / JSONL | run ledger 投影、artifacts、OMS 索引行 |
 
-无 TypeScript/前端；发行包为纯 Python wheel。
+无 TypeScript/前端；发行包为纯 Python wheel（`dsagents`）。
 
 ## Runtime
 
 | 项目 | 事实 |
 |------|------|
 | 解释器 | CPython 3.11+ |
-| 进程模型 | 单进程 uvicorn + FastAPI；run 在 **daemon 线程**中执行（`api._run_background`） |
-| 并发锁 | 进程内 `session_id` 单飞（`app.state.session_locks` / `active_runs`）；**无**跨 worker 互斥 |
+| ASGI 服务器 | **uvicorn** 加载 `api:app` |
+| 进程模型 | 单进程 uvicorn + FastAPI；每个 run 在 **daemon 线程**中执行（`api._run_background` → `harness.execute_run`） |
+| 会话单飞 | 进程内 `session_id` 锁：`app.state.session_locks`（`threading.Lock`）+ `active_runs`；冲突返回 HTTP 409；**无**跨 worker 互斥 |
+| 取消 | `langgraph.runtime.RunControl` 协作 drain；`GraphDrained` → run `cancelled`；无法强杀外部 HTTP/Oracle |
 | 入口模块 | `api:app`（`create_app()` 模块级实例） |
 | 程序内入口 | `AgentResources` + `runtime.execution.create_harness(...).execute_run(...)` |
 | 环境加载 | `python-dotenv`：`runtime/agent.py` 与 `integrations/mineru.py` 均 `load_dotenv(backend/.env)` |
-| 数据锚定 | `ResourceConfig` 以 `backend/` 为根，与 CWD 无关 |
+| 数据锚定 | `ResourceConfig` 以 `backend/` 为根（`Path(__file__).parents[1]`），与 CWD 无关 |
+| 启动清理 | lifespan 内 `runs.fail_incomplete_runs("执行已中断，请重试")` 将 `queued`/`running`/`cancelling` 标为 `failed` |
 
-启动示例（测试与运维文档一致）：
+启动示例：
 
 ```powershell
 cd backend
 uv sync
 uv run uvicorn api:app --host 0.0.0.0 --port 8500
 ```
+
+### 执行路径（运行时）
+
+1. `POST /runs` 写 ledger（`queued`）→ 可选 OMS JSONL → 启动 daemon 线程。
+2. 线程内 `HarnessRuntime.execute_run`：`emit_run_status(running)` → `BrainFactory.create` → `brain.stream(..., control=RunControl)`。
+3. stream 模式：`stream_mode=["messages", "custom", "updates"]`，`version="v2"`，`subgraphs=True`；`thread_id=session_id`。
+4. 事件写入 `SqliteRunLedger`；终态 `succeeded` / `failed` / `cancelled`；`finally` 释放 session 锁。
 
 ## Package Manager (uv)
 
@@ -63,7 +73,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `oracledb` | `>=3,<4` | **3.4.2** | Philips 可选主数据补齐 |
 | `python-dotenv` | `>=1.2.2` | **1.2.2** | 本地 `.env` |
 | `requests` | `>=2.34.2` | **2.34.2** | MinerU HTTP |
-| `httpx2` | `>=2.5.0` | **2.5.0** | 声明依赖；**源码未直接 import**（可能为传递/预留） |
+| `httpx2` | `>=2.5.0` | **2.5.0** | 声明依赖；**源码未直接 import**（预留/传递） |
 
 ### 关键传递依赖（锁定）
 
@@ -77,10 +87,12 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `sqlite-vec` | 0.1.9 | checkpoint-sqlite 依赖 |
 | `langgraph-checkpoint` | 4.1.1 | 检查点抽象 |
 | `langgraph-prebuilt` | 1.1.0 | prebuilt 图组件 |
-| `langsmith` | 0.9.5 | LangChain 可观测（依赖链） |
+| `langsmith` | 0.9.5 | LangChain 可观测（依赖链，非本仓库显式接线） |
 | `tenacity` | 9.1.4 | 重试工具 |
 | `orjson` / `ormsgpack` | 3.11.9 / 1.12.2 | 序列化 |
 | `xxhash` | 3.8.0 | LangGraph 哈希 |
+
+DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**第二 LLM provider。
 
 ## Frameworks
 
@@ -91,26 +103,30 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | 方法 | 路径 | 作用 |
 |------|------|------|
 | `POST` | `/upload` | multipart → `data/artifacts/uploads/`，返回 `/artifacts/uploads/...` |
-| `POST` | `/runs` | 创建 run + 后台线程执行；可选 `workflow` |
-| `GET` | `/runs/{run_id}` | 投影快照 + events + usage |
-| `POST` | `/runs/{run_id}/cancel` | 协作 cancel（`RunControl` drain） |
+| `POST` | `/runs` | 创建 run + daemon 线程执行；可选 `workflow` |
+| `GET` | `/runs/{run_id}` | 投影快照 + events + usage（可选 `after_event_id`） |
+| `POST` | `/runs/{run_id}/cancel` | 协作 cancel（`RunControl.request_drain`） |
 
 请求体用 Pydantic v2（`extra="forbid"`）。HTTP workflow 字面量：`WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。
 **无** session 管理 API、**无** SSE、**无** 下载端点、**无** HTTP Auth 中间件。
 
-### Agent：DeepAgents + LangGraph
+### Agent：DeepAgents + LangGraph + LangChain
 
 | 组件 | 路径 / 符号 | 说明 |
 |------|-------------|------|
 | Brain 工厂 | `runtime.agent.DeepAgentsBrainFactory` | `create_deep_agent(**kwargs)` |
 | Protocol | `Brain` / `BrainFactory` | 项目中 **仅** 这两处使用 `typing.Protocol` |
-| 执行 | `runtime.execution.HarnessRuntime` | `stream_mode=["messages","custom","updates"]`，`version="v2"` |
+| 执行 | `runtime.execution.HarnessRuntime` | stream → 7 类事件投影 |
 | 取消 | `langgraph.runtime.RunControl` / `GraphDrained` | 协作 drain，非强杀 |
-| 模型 | `langchain.chat_models.init_chat_model` | `anthropic:{MINIMAX_MODEL}` + `base_url`/`api_key` |
-| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` | 仅 Philips workflow |
+| 模型 | `langchain.chat_models.init_chat_model` | `anthropic:{MINIMAX_MODEL}` + `base_url`/`api_key` + `thinking={"type":"adaptive"}` |
+| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` | 仅 WAG workflow |
 | Harness profile | `register_harness_profile("anthropic", ...)` | `GeneralPurposeSubagentProfile(enabled=False)` |
 | Skills 挂载 | `skills=[SKILLS_SOURCE]` → `"/skills/"` | 资源目录只读 deny write |
 | Middleware | `runtime.middleware` | ToolTelemetry、NoProgress、Memory、Philips recovery 等 |
+| Checkpointer | `langgraph.checkpoint.sqlite.SqliteSaver` | 图状态按 `thread_id` |
+| Store | `langgraph.store.sqlite.SqliteStore` | `/memories/` 跨 run |
+
+生产 **不**配置业务 SubAgent：`subagents=[]`。
 
 ### 虚拟文件系统（DeepAgents backends）
 
@@ -124,19 +140,20 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `/large_tool_results/` | 同上磁盘 backend | 大工具结果落盘 |
 | `/skills/` | `FilesystemBackend` | `backend/skills/`（源码树） |
 
-启动时若缺失则写入 `/memories/AGENTS.md` 基线手册（`RUNTIME_AGENTS_BASELINE`）。
+启动时若缺失则写入 `/memories/AGENTS.md` 基线手册（`RUNTIME_AGENTS_BASELINE`）。`FilesystemPermission` deny write `/skills/**`。
 
 ## Key Dependencies（按能力）
 
 ### LLM / Agent 栈
 
-- **MiniMax** 经 Anthropic 兼容接口：`MINIMAX_MODEL`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL`；`thinking={"type":"adaptive"}`。
-- `api.py` 内嵌 MiniMax-M3 用量估价常量（`PRICING_AS_OF = "2026-07-12"`），仅趋势估算。
-- 生产 **不**配置业务 SubAgent；`subagents=[]`。
+- **MiniMax** 经 Anthropic 兼容接口：环境变量 `MINIMAX_MODEL`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL`。
+- 可观测模型名常量：`runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"`。
+- `api.py` 内嵌 MiniMax-M3 用量估价（`PRICING_AS_OF = "2026-07-12"`，标准/长上下文分档）；仅趋势估算，非账单。
+- 测试可向 `DeepAgentsBrainFactory(model=...)` 注入假模型。
 
 ### 工具静态目录（5 个）
 
-`runtime.tools.default_tool_catalog()`：
+`runtime.tools.default_tool_catalog()` — **静态** import 注册，不自动扫描：
 
 1. `parse_documents` — MinerU（`integrations/mineru.py`）
 2. `extract_archives` — 本地 ZIP 解压到 artifacts
@@ -144,17 +161,22 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 4. `inspect_supply_chain_workbooks` — openpyxl 只读 → JSON artifact
 5. `finalize_tecan_overseas_recognition` — Tecan 终态 schema 校验
 
-WAG **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU / XLSX / Philips 主数据工具；DK **denylist** 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。
+Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）：
+
+| workflow | 排除 |
+|----------|------|
+| `WAG` | `finalize_tecan_overseas_recognition` |
+| `DK` | `lookup_philips_wgq_master_data` |
 
 ### 文档解析
 
 - MinerU：HTTP `POST {MINERU_BASE_URL}/tasks`，轮询 `status_url`（间隔 `MINERU_POLL_INTERVAL_SECONDS = 30`），下载 JSON 或 ZIP 到 `/artifacts/downloads/`。
-- 客户端库：`requests`（非 httpx 直接调用）。
+- 客户端库：`requests`（非 httpx 直接调用 MinerU）。
 
 ### 表格
 
 - `openpyxl.load_workbook(..., read_only=True, data_only=True)`：Philips Tracking、Tecan workbook 检查。
-- **不**生成业务 Excel / 模板（Tecan 已移除模板生成器）。
+- **不**生成业务 Excel / 模板（Tecan 不携带模板生成器）。
 
 ### 数据库驱动
 
@@ -169,12 +191,12 @@ WAG **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 Min
 
 ### Skills 单目录
 
-| Skill 包（包含资源与代码） |
+| Skill 包（资源 + 代码同包） |
 |----------------------------|
 | `skills/philips_wgq_inbound_recognition/` |
 | `skills/tecan_import/` |
 
-共享合同：`skills/channel_contract.py`（items 24 字段等）。
+共享合同：`skills/channel_contract.py`（`items[]` 完整 24 字段等）。
 
 ## Configuration
 
@@ -211,9 +233,11 @@ WAG **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 Min
 
 **集成/真实测试（仅 `tests/`，不进生产路径）**
 
-- `DSAGENTS_API_BASE_URL` / `DSAGENTS_BASE_URL`
-- `DSAGENTS_RUN_REAL_*` 开关（如 `DSAGENTS_RUN_REAL_IMAGE_TEST=1`）
-- 样本路径与超时：`DSAGENTS_IMAGE_PATH`、`DSAGENTS_PDF_DIR`、`DSAGENTS_PHILIPS_WGQ_*` 等
+| 变量族 | 用途 |
+|--------|------|
+| `DSAGENTS_API_BASE_URL` / `DSAGENTS_BASE_URL` | 真实 HTTP 回归 base URL |
+| `DSAGENTS_RUN_REAL_*` | 开关（如 `DSAGENTS_RUN_REAL_IMAGE_TEST=1`） |
+| `DSAGENTS_IMAGE_PATH`、`DSAGENTS_PDF_DIR`、`DSAGENTS_PHILIPS_WGQ_*` 等 | 样本路径与超时/轮询间隔 |
 
 ### 路径与本地配置文件
 
@@ -253,13 +277,13 @@ python -m tests.test_tecan_import
 | Python | `>=3.11,<4.0` |
 | 磁盘 | 可写 `backend/data/`、`backend/log/` |
 | 网络 | 出站访问 MiniMax（或兼容端点）与 MinerU；Oracle 按部署网络 |
-| Oracle thick | 需本机 Instant Client 目录 + `ORACLE_CLIENT_LIB_DIR`；缺失则 thin/跳过逻辑见工具降级 |
-| 多 worker | 不支持跨进程 session 锁与 cancel 协调；单 worker 部署假设 |
+| **Oracle thick（可选）** | 需本机 Instant Client 目录 + 环境变量 `ORACLE_CLIENT_LIB_DIR`；缺失时不 init thick，配置不全则软降级为 `problems` |
+| 多 worker | 不支持跨进程 session 锁与 cancel 协调；**单 worker** 部署假设 |
 | 包管理 | 生产同步必须 `uv sync` + `uv.lock` |
 
 ## 架构边界摘要（栈视角）
 
 - **run-first**：`runs` 投影 + append-only `run_events`；`session_id` 仅作 LangGraph `thread_id` 与进程内单飞。
-- **渠道终态**：Philips → `ToolStrategy` → `run.result`；Tecan → finalizer 工具消息 → `run.result`。
+- **渠道终态**：Philips（WAG）→ `ToolStrategy` → `run.result`；Tecan（DK）→ finalizer 工具消息 → `run.result`。
 - **OMS**：`runtime.oms_log` 旁路 JSONL，best-effort，不阻塞 HTTP 200 queued。
 - **权威源码树**：`api.py` + `runtime/` + `integrations/` + `skills/`；忽略 `build/` 历史产物。

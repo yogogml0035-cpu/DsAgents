@@ -31,13 +31,13 @@ python -m tests.test_tecan_import
 # 文档：仓库根目录 git diff --check
 ```
 
-- 包管理器用 **`uv`**（`cd backend && uv sync`）；不要用 `pip install -e .` 绕过 `uv.lock`。
+- 包管理器用 **`uv`**；不要用 `pip install -e .` 绕过 `uv.lock`。
 - 测试为可执行 assert 脚本（`python -m tests.<name>`，**非 pytest**）；真实模型 / MinerU / Oracle / 外部 HTTP 与本地回归分开。
 - 完整命令、真实集成开关与启动方式见 [docs/commands.md](docs/commands.md)。
 
 ## 结构（形状）
 
-产品源码仅在 `backend/`：`api.py`（HTTP）、`runtime/`（Brain / 执行 / ledger / middleware / 工具目录）、`integrations/`（artifacts / MinerU）、`skills/`（Philips / Tecan 与共享渠道合同）。**不要**把 setuptools 构建产物（历史 `backend/build/`）当源码或读进 VCS。权威目录树与命名见 codebase `STRUCTURE.md`。
+产品源码仅在 `backend/`：HTTP 适配、`runtime/`（Brain / 执行 / ledger / middleware / 工具目录）、`integrations/`（artifacts / MinerU）、`skills/`（共享渠道合同 + Philips / Tecan 下划线包）。**不要**把 setuptools 构建产物当源码。权威目录树见 codebase `STRUCTURE.md`。
 
 ## 全局硬约束
 

@@ -19,6 +19,27 @@
 
 ---
 
+## HTTP 表面（入站）
+
+| 方法 | 路径 | 入站 | 出站副作用 |
+|------|------|------|------------|
+| `POST` | `/upload` | multipart `files` | 写 `artifacts/uploads/`，返回虚拟路径 |
+| `POST` | `/runs` | JSON：`messages`、可选 `workflow`（`WAG`\|`DK`）、可选 `session_id` | ledger + daemon 线程 + 可选 OMS 行 + 下游 LLM/MinerU/Oracle |
+| `GET` | `/runs/{run_id}` | query `after_event_id?` | 只读：`run`、`workflow`、`result`、`events`、`latest_content_event`、`usage` |
+| `POST` | `/runs/{run_id}/cancel` | 无 body | ledger `cancelling`/`cancelled` + `RunControl` drain |
+
+**约束与响应要点**
+
+- 模块级 `app = create_app()`，供 `uvicorn api:app` 使用。
+- `workflow` 与客户端 `session_id` **互斥**（workflow 强制服务端新建 session）。
+- `POST /runs` 成功：`{"run_id","session_id","status":"queued"}`。
+- 同 `session_id` 并发：HTTP **409**（`该会话正在运行` + `active_run_id`）。
+- 未知 run：HTTP **404**。
+- 终态再 cancel：HTTP **409**；已 cancelling/cancelled：200 回显状态；活跃 cancel：HTTP **202** `{"status":"cancelling"}`。
+- **无** SSE / WebSocket；客户端模式为 **上传 → 创建 run → 轮询 GET**。
+
+---
+
 ## External APIs
 
 ### 1. LLM Provider — MiniMax（Anthropic 兼容）
@@ -30,7 +51,8 @@
 | 依赖链 | `langchain-anthropic` → `anthropic` SDK；经 `httpx` 出站 |
 | 注入点 | 可向 `DeepAgentsBrainFactory(model=...)` 注入假模型（测试） |
 | 运行时用途 | 主 Agent 推理、工具调用、WAG `ToolStrategy` 结构化提交、DK finalizer 终态 |
-| 用量 | stream 中 `model_usage` 事件；`api.py` 对 `MiniMax-M3` 做 CNY 估价汇总（趋势，非账单） |
+| 用量标签 | `runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"` 写入每条 `model_usage` |
+| API 估价 | `api._usage_summary` 对可计价模型（`MiniMax-M3`）按档估算 CNY；未知模型则金额为 null |
 
 **环境变量**
 
@@ -52,14 +74,14 @@
 | 项 | 事实 |
 |----|------|
 | 文件 | `backend/integrations/mineru.py` |
-| 工具名 | `parse_documents`、`extract_archives`（后者为本地 ZIP，不调 MinerU） |
+| 工具名 | `parse_documents`、`extract_archives`（后者为**本地** ZIP，不调 MinerU） |
 | HTTP 客户端 | `requests` |
 | 提交 | `POST {MINERU_BASE_URL}/tasks`，multipart `files` + form：`backend`、`effort`、`return_md`、`return_content_list`、`return_images`、`return_original_file`、`response_format_zip` |
 | 响应字段 | 期望 JSON：`task_id`、`status_url`、`result_url`（相对路径会相对 `MINERU_BASE_URL` 拼接） |
 | 轮询 | `GET status_url`；状态 `pending`/`processing` 继续；`completed` 结束；`failed` 抛错 |
 | 轮询间隔 | `MINERU_POLL_INTERVAL_SECONDS = 30.0` |
 | 结果 | 默认 JSON → `/artifacts/downloads/*.json` 的 `result_path`；ZIP 模式 → `archive_path` |
-| 流式状态 | `langgraph.config.get_stream_writer` 发 custom 事件（submitted/pending/processing/completed/failed） |
+| 流式状态 | `langgraph.config.get_stream_writer` 发 custom 事件（submitted/pending/processing/completed/failed）→ 投影为 `tool_progress` |
 
 **环境变量**
 
@@ -92,10 +114,20 @@
 | 驱动 | stdlib `sqlite3` |
 | 大事件 | 超过 `max_inline_bytes`（默认 262_144）可落到 `data/internal/run-events/` |
 | 状态机 | `queued` → `running` → `succeeded` \| `failed` \| `cancelled`；取消途中 `cancelling` |
-| 内容 | `runs` 快照（含 `result_json`、`workflow`、`reply`、`error`）+ append-only events |
-| 时间 | UTC+8 本地字符串 |
+| 内容 | `runs` 快照（含 `result_json`、`workflow`、`reply`、`error`）+ append-only `run_events` |
+| 时间 | UTC+8 本地字符串 `YYYY-MM-DD HH:MM:SS` |
 
-事件类型由 harness/ledger 投影，固定 **7** 类（与可观测合同一致）：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`（实现见 `runtime/execution.py` + `runtime/runs.py`）。
+事件类型固定 **7** 类（实现见 `runtime/execution.py` + `runtime/runs.py`）：
+
+| type | 来源概要 |
+|------|----------|
+| `status` | 状态投影（含终态 reply/error/result） |
+| `tool_execution` | 工具调用/遥测（middleware 或 updates） |
+| `tool_progress` | `parse_documents` / `extract_archives` custom 流 |
+| `thinking` | 模型 thinking delta |
+| `text_delta` | 主 Agent 文本 delta（子 Agent 文本过滤） |
+| `assistant_message` | 终态助手消息 |
+| `model_usage` | 每次模型调用 token / cache 元数据 |
 
 ### B. LangGraph checkpoints SQLite
 
@@ -162,7 +194,7 @@
 
 ---
 
-## OMS JSONL
+## OMS log（best-effort）
 
 | 项 | 事实 |
 |----|------|
@@ -188,7 +220,7 @@
 - LLM / MinerU / Oracle 凭证仅出现在**服务端环境变量**与 `.env`，不经客户端 API 传递。
 - 测试可注入假 `BrainFactory`，不涉及真实鉴权。
 
-若后续加 Auth，应落在网关或显式 FastAPI 依赖，并同步 `INTERFACES.md`；当前规划以无 Auth 为事实。
+若后续加 Auth，应落在网关或显式 FastAPI 依赖，并同步根级 `INTERFACES.md`；当前规划以无 Auth 为事实。
 
 ---
 
@@ -199,6 +231,31 @@
 - 无 run 完成回调 URL、无签名推送、无重试队列。
 - 客户端集成模式：**上传 → 创建 run → 轮询** `GET /runs/{run_id}`（可选 `after_event_id`）。
 - 取消为客户端主动 `POST .../cancel`，非外部 webhook。
+
+---
+
+## Observability
+
+| 层 | 事实 |
+|----|------|
+| 权威投影 | `SqliteRunLedger`：`runs` 快照 + append-only `run_events`（7 类事件） |
+| 提取器 | `runtime/observability.py`：纯函数，从 stream chunk 抽取 usage / thinking / text / tool_calls（无 I/O） |
+| 工具遥测 | `ToolTelemetry` middleware 经 `get_stream_writer` 发 started/completed/error + `duration_ms` |
+| 进度 | MinerU / extract_archives custom payload → `tool_progress` |
+| 查询 | `GET /runs/{run_id}` 返回 events、`latest_content_event`（排除 status/model_usage）、`usage` 汇总 |
+| 用量汇总 | `aggregate_model_usage` + API 层 cache hit rate / 分档 CNY 估价（仅 `MiniMax-M3` 可计价） |
+| 主 Agent 名 | `MAIN_AGENT_NAME = "dsagents-main"`；子 Agent 文本默认不投影，但 usage 仍记录 |
+| OMS | 旁路 JSONL 索引，**独立于** run_events |
+| LangSmith | 仅作为依赖链存在；本仓库**未**显式配置/接线 LangSmith tracing |
+| 日志 | 无结构化应用日志框架要求；失败进入 run `error` / event payload |
+
+**降级与边界**
+
+- 工具失败：多数进入 tool 事件 / 业务 `problems`；MinerU 硬失败可致工具异常。
+- 模型失败 / `NoProgressLoop`：run `failed`。
+- Oracle/MinerU 配置不全：Oracle 软降级；MinerU 缺 env 在调用时 `RuntimeError: Missing required environment variable: ...`。
+- Cancel：协作 drain，**不能**强杀外部 HTTP 或 Oracle 调用。
+- 多 worker：session 锁与 `run_controls` 仅进程内，跨进程 cancel/互斥**未**集成。
 
 ---
 
@@ -215,7 +272,7 @@
 | 投影 | ToolStrategy `structured_response` → `run.result` |
 | 主数据 | Tracking XLSX + 可选 Oracle |
 | 工具 denylist | 去掉 `finalize_tecan_overseas_recognition` |
-| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（Philips 专用） |
+| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（WAG 专用；`can_jump_to` 须含 `"end"`） |
 
 ### Tecan 境外
 
@@ -231,29 +288,6 @@
 
 ---
 
-## HTTP 表面（集成消费方视角）
-
-| 端点 | 入站 | 出站副作用 |
-|------|------|------------|
-| `POST /upload` | multipart files | 写 artifacts/uploads |
-| `POST /runs` | JSON messages + 可选 workflow | ledger + 线程执行 + 可选 OMS 行 + LLM/MinerU/Oracle |
-| `GET /runs/{run_id}` | query `after_event_id?` | 只读投影 |
-| `POST /runs/{run_id}/cancel` | 无 body | ledger status + `RunControl` drain |
-
-模块级 `app = create_app()` 供 `uvicorn api:app` 使用。
-
----
-
-## 可观测与降级（跨集成）
-
-- 工具失败：多数进入 tool 事件 / `problems`；MinerU 硬失败可致工具异常。
-- 模型失败：run `failed`。
-- Oracle/MinerU 配置不全：Oracle 软降级；MinerU 缺 env 在调用时 `RuntimeError: Missing required environment variable: ...`。
-- Cancel：协作 drain，**不能**强杀外部 HTTP 或 Oracle 调用。
-- 多 worker：session 锁与 `run_controls` 仅进程内，跨进程 cancel/互斥**未**集成。
-
----
-
 ## 相关源码路径速查
 
 ```
@@ -264,6 +298,7 @@ backend/runtime/resources.py
 backend/runtime/runs.py
 backend/runtime/tools.py
 backend/runtime/oms_log.py
+backend/runtime/observability.py
 backend/runtime/middleware.py
 backend/integrations/mineru.py
 backend/integrations/artifacts.py

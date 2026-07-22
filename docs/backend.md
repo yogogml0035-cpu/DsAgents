@@ -13,10 +13,11 @@
 ## 当前能力
 
 - PDF/XLSX 同票材料由 Agent 动态识别角色、归集、抽取和裁决；PDF 使用 MinerU，XLSX 只读为 JSON artifact。
-- Philips 使用 `workflow=WAG` 和 Pydantic structured response。
-- Tecan 使用 `workflow=DK` 和 `finalize_tecan_overseas_recognition` 最终工具；没有 extractor SubAgent 或 Excel 生成器。
-- 两渠道都将唯一、干净的业务 JSON 写入 `run.result`。header 各自独立，`items[]` 共享完整 24 字段，不输出 `shipment`。
+- Philips 使用 `workflow=WAG` 和 Pydantic structured response；`StructuredOutputRecovery` 的 `can_jump_to` 须含 `"end"`，耗尽显式 `jump_to: "end"`。
+- Tecan 使用 `workflow=DK` 和 `finalize_tecan_overseas_recognition` 最终工具；没有 extractor SubAgent、Excel 模板或生成器。
+- 两渠道都将唯一、干净的业务 JSON 写入 `run.result`。header 各自独立，`items[]` 共享 `channel_contract.OrderItem` 完整 24 字段，不输出 `shipment`。
 - run 的业务 outcome 为 `success` / `partial_success` / `input_problems`；业务问题是 `succeeded` run，执行异常才是 `failed`。
+- WAG / DK 用 **denylist** 排除对方业务工具，保留共享 MinerU 与 XLSX 检查器；禁止业务-only allowlist。
 
 ## 运行时主要部件
 
@@ -28,8 +29,10 @@
 | `runtime/middleware.py` | Philips recovery、tool telemetry、loop guard、compatibility |
 | `runtime/tools.py` | 5 工具静态目录 |
 | `integrations/` | MinerU HTTP、artifact 路径与 JSON 落盘（无业务 schema） |
-| `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引 |
-| `skills/` | 下划线命名的渠道 Skill 包（资源/实现同目录）、共享 `channel_contract`；Philips Oracle 主数据在 Skill 工具内 |
+| `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引（best-effort，不阻塞 run） |
+| `skills/` | 下划线命名的渠道 Skill 包（`SKILL.md` / references / schema / scripts 同目录）、共享 `channel_contract`；Philips Oracle 主数据在 Skill 工具内 |
+
+权威源码仅 `api.py` + `runtime/` + `integrations/` + `skills/` + `tests/` + `pyproject.toml`。**不要**把 `backend/build/`、`dist/`、`*.egg-info` 当源码。新增 Skill 须同步 `pyproject.toml` package-data 与静态工具注册。
 
 ## 约束与命令
 
@@ -47,4 +50,4 @@ python -m tests.test_philips_wgq_inbound_recognition
 python -m tests.test_tecan_import
 ```
 
-不要用 `pip install -e .`。详细事实、风险和测试说明见 `backend/.planning/codebase/`；系统接口见根级 `INTERFACES.md`。
+不要用 `pip install -e .`。改 denylist 跑 `test_workflow_setup`；改 Recovery 跑 `test_harness`。详细事实、风险和测试说明见 `backend/.planning/codebase/`；系统接口见根级 `INTERFACES.md`。

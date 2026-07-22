@@ -15,6 +15,7 @@ DsAgents 是**单子项目** Agent 运行时底座：产品代码在 `backend/`�
 | **可注入 Brain** | `Brain` / `BrainFactory` 为唯一 `typing.Protocol`；默认 `DeepAgentsBrainFactory` |
 | **静态工具表** | 五工具经 `ToolCatalog` 静态注册；workflow 用 **denylist** 收窄 |
 | **渠道终态 JSON** | Philips ToolStrategy / Tecan finalizer → `run.result`；业务问题走 `input_problems`，run 仍 `succeeded` |
+| **DeepAgents / LangGraph** | `create_deep_agent` 装配图；`checkpointer` + `store` + `CompositeBackend`；stream 投影到 ledger |
 
 不存在的边界（刻意不做）：
 
@@ -73,7 +74,7 @@ api.py                          HTTP 适配层
 - `workflow` 与客户端 `session_id` 互斥（workflow run 必须服务端生成新 session）
 - `messages[].content` 为 `text` | `artifact` 判别联合；`extra="forbid"`
 
-### run 生命周期
+### upload → run create → background execute → poll → cancel
 
 ```text
 POST /upload
@@ -94,6 +95,12 @@ POST /runs
 
 GET /runs/{run_id}
   → run 快照、workflow、result、events、latest_content_event、usage
+
+POST /runs/{run_id}/cancel
+  → emit status=cancelling
+  → harness.request_cancel(run_id) → RunControl.request_drain
+  → 若尚无 control（queued / 未进入 execute_run）→ 直接 cancelled
+  → 活跃 drain 后 GraphDrained → cancelled
 ```
 
 状态机：
@@ -120,12 +127,12 @@ running → cancelling → cancelled
 
 - **WAG**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
 - **DK**：必须接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`；缺失则 `failed`
-- **通用 Tecan 请求**：若调用 finalizer 同样投影结果；未调用时可作为普通阅读 run 成功且 `result=null`
+- **通用 Tecan 请求**（`workflow=None` 但调用 finalizer）：同样投影结果
 - **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
 
 `artifact` 内容块在进入 Brain 前归一为带路径提示的 `text`（`ARTIFACT_REFERENCE_HINT`）。
 
-## 七类事件
+## 七类事件与错误模型
 
 固定事件类型（不可随意扩展为业务状态通道）：
 
@@ -142,6 +149,24 @@ running → cancelling → cancelled
 大 payload 超过 `max_inline_bytes`（默认 256KiB）时落盘到 `data/internal/run-events/`，DB 仅存引用。
 
 `latest_content_event` 排除 `status` 与 `model_usage`，取最新内容类事件。
+
+### 业务问题 vs 执行失败
+
+| 条件 | run status | `run.result` | 备注 |
+|------|------------|--------------|------|
+| 合法 Philips/Tecan 终态 JSON（含 `input_problems`） | `succeeded` | 完整业务 JSON | 业务问题 ≠ 执行失败 |
+| Philips 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
+| DK 未调用 Tecan finalizer | `failed` | `null` | workflow 终态缺失 |
+| 未调用 Tecan finalizer 的通用 run | `succeeded` | `null` | 普通阅读合法 |
+| `NoProgressLoop` | `failed` | `null` | 同工具死循环 |
+| 其它模型/工具/运行时异常 | `failed` | `null` | `_ensure_failed_run` 兜底 |
+| 用户 cancel + GraphDrained | `cancelled` | 不伪造 | 协作 drain |
+| 同 session 并发 | HTTP 409 | — | 进程内锁 |
+| 未知 run_id | HTTP 404 | — | |
+| 已终态再 cancel | HTTP 409 | — | |
+| OMS 索引写失败 | 忽略 | — | 不阻塞已创建 run |
+| Oracle 配置/客户端缺失 | 工具返回 problem | — | 优雅降级，不崩溃 run |
+| MinerU 超时/失败 | 工具抛错 → 可能 failed | — | 视 Agent 是否恢复 |
 
 ## 渠道供应链 JSON 合同
 
@@ -205,7 +230,7 @@ running → cancelling → cancelled
 
 主 Agent 有 memory 时约 **5** 个 middleware；无 schema 时约 4 个（无 Recovery）。生产不配置业务 SubAgent。
 
-### StructuredOutputRecovery（Philips 专用）
+### StructuredOutputRecovery（Philips / WAG 专用）
 
 - hook：`after_model`，`can_jump_to` 必须含 **`"model"` 与 `"end"`**
 - 从助手 fenced/raw JSON 恢复 `structured_response`；校验失败则 `jump_to: "model"` 纠错（默认最多 2 次）
@@ -229,23 +254,45 @@ running → cancelling → cancelled
 
 首次启动若 `/memories/AGENTS.md` 缺失则写入 baseline 手册（ZIP/`parse_documents` 使用约定）。
 
+### State：runs 投影 + append-only events；session_id
+
+| 概念 | 角色 |
+|------|------|
+| `runs` 表 | 投影快照：`status`、`reply`、`error`、`result_json`、`workflow`、时间戳 |
+| `run_events` 表 | append-only 事件流；`event_id` 自增，支持 `after_event_id` 增量拉取 |
+| `session_id` | 仅作 LangGraph `thread_id`（checkpoint 线程）+ 进程内单飞锁；**不是**独立 session 资源 |
+| `run_controls` | 进程内 `dict[run_id, RunControl]`，供协作 cancel |
+
+时间戳：ledger 与 OMS 统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
+
+持久化：
+
+- `data/dsagents_runs.db` — runs + run_events
+- `data/dsagents_checkpoints.db` — LangGraph checkpointer
+- `data/dsagents_store.db` — StoreBackend / memory
+- `data/artifacts/` — uploads / downloads
+- `log/oms_log.log` — best-effort JSONL 旁路索引（非第八类 event，无查询 API）
+
+无自动 schema migration；三库均 `create table if not exists`。
+
 ## workflow 与工具表
 
-### 业务 workflow
+### 业务 workflow：WAG vs DK
 
-`WAG`（常量 `WAG_WORKFLOW`）：
+`WAG`（常量 `WAG_WORKFLOW = "WAG"`，飞利浦外高桥）：
 
 1. API 收窄 `workflow` 字面量
 2. Brain 加载 `/skills/philips_wgq_inbound_recognition/SKILL.md` 提示
-3. `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery
+3. `ToolStrategy(PhilipsWgqRecognitionResult)` + `StructuredOutputRecovery`
 4. 工具 denylist 去掉 Tecan finalizer
 5. harness 强制 `structured_response` → `run.result`
 
-`DK`（常量 `DK_WORKFLOW`）：
+`DK`（常量 `DK_WORKFLOW = "DK"`，帝肯境外供应链）：
 
 1. Brain 加载 `/skills/tecan_import/SKILL.md`
-2. 工具 denylist 去掉 Philips 主数据 lookup，保留共享 MinerU / XLSX 与 Tecan finalizer
-3. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
+2. `structured_schema=None`（无 ToolStrategy / Recovery）
+3. 工具 denylist 去掉 Philips 主数据 lookup，保留共享 MinerU / XLSX 与 Tecan finalizer
+4. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
 
 ### ToolCatalog 五工具（`runtime/tools.py`）
 
@@ -265,7 +312,13 @@ finalize_tecan_overseas_recognition
 
 保留共享 MinerU、共享 XLSX 检查器与 Philips 主数据工具。**禁止**业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引会失效）。
 
-**DK denylist**（`_DK_EXCLUDED_TOOLS`）排除 `lookup_philips_wgq_master_data`，保留共享 MinerU / XLSX 与 Tecan finalizer。
+**DK denylist**（`_DK_EXCLUDED_TOOLS`）：
+
+```text
+lookup_philips_wgq_master_data
+```
+
+保留共享 MinerU / XLSX 与 Tecan finalizer。
 
 新增 Skill 工具：在 `default_tool_catalog()` 静态 import + 注册一行；不自动扫描。
 
@@ -282,6 +335,7 @@ finalize_tecan_overseas_recognition
 | `SqliteRunLedger` | 具体类 | `runtime/runs.py` | runs / run_events 持久化 |
 | `RunSnapshot` / `RunEvent` | dataclass | `runtime/runs.py` | 投影与事件值对象 |
 | `ToolCatalog` | dataclass | `runtime/tools.py` | 有序 callable 元组 |
+| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WAG 结构化输出恢复 |
 | `ContractModel` | Pydantic | `skills/channel_contract.py` | `extra="forbid"` 基类 |
 | `PhilipsWgqRecognitionResult` | schema | Philips | ToolStrategy + run.result |
 | `TecanOverseasRecognitionResult` | schema | Tecan | finalizer 校验 + run.result |
@@ -305,35 +359,7 @@ with AgentResources(ResourceConfig()) as resources:
         ...
 ```
 
-## Error Handling
-
-| 条件 | run status | `run.result` | 备注 |
-|------|------------|--------------|------|
-| 合法 Philips/Tecan 终态 JSON（含 `input_problems`） | `succeeded` | 完整业务 JSON | 业务问题 ≠ 执行失败 |
-| Philips 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
-| DK 未调用 Tecan finalizer | `failed` | `null` | workflow 终态缺失 |
-| 未调用 Tecan finalizer 的通用 run | `succeeded` | `null` | 普通阅读合法 |
-| `NoProgressLoop` | `failed` | `null` | 同工具死循环 |
-| 其它模型/工具/运行时异常 | `failed` | `null` | `_ensure_failed_run` 兜底 |
-| 用户 cancel + GraphDrained | `cancelled` | 不伪造 | 协作 drain |
-| 同 session 并发 | HTTP 409 | — | 进程内锁 |
-| 未知 run_id | HTTP 404 | — | |
-| 已终态再 cancel | HTTP 409 | — | |
-| OMS 索引写失败 | 忽略 | — | 不阻塞已创建 run |
-| Oracle 配置/客户端缺失 | 工具返回 problem | — | 优雅降级，不崩溃 run |
-| MinerU 超时/失败 | 工具抛错 → 可能 failed | — | 视 Agent 是否恢复 |
-
-时间戳：ledger 与 OMS 统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
-
-持久化：
-
-- `data/dsagents_runs.db` — runs + run_events
-- `data/dsagents_checkpoints.db` — LangGraph checkpointer
-- `data/dsagents_store.db` — StoreBackend / memory
-- `data/artifacts/` — uploads / downloads
-- `log/oms_log.log` — best-effort JSONL 旁路索引（非第八类 event，无查询 API）
-
-无自动 schema migration；三库均 `create table if not exists`。
+HTTP lifespan 等价装配：`AgentResources` → `create_harness` → 进程内 `session_locks` / `active_runs`。
 
 ## 验证入口
 
