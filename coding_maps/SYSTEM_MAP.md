@@ -12,7 +12,7 @@ DsAgents 是**单子项目、run-first** 的 Agent 运行时底座：接收本�
 | 产品代码 | 仅 `backend/`（`api.py` + `runtime/` + `integrations/` + `skills/`） |
 | 前端子项目 | **无**；无 TypeScript/Web UI 子仓 |
 | 交互模式 | HTTP 轮询四端点；**无 SSE / session CRUD / 下载路由** |
-| 固定 workflow | 仅 `philips_wgq_inbound_recognition`；Tecan 靠明确 Skill 请求 + finalizer |
+| 业务 workflow | `WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链） |
 | 包管理 | `uv` + `backend/uv.lock`（勿用 `pip install -e .` 绕过 lock） |
 
 ```mermaid
@@ -41,7 +41,7 @@ flowchart LR
 | HTTP 适配 | `backend/api.py` | 四端点、请求校验、session 进程内单飞、后台线程执行、轮询投影、cancel、usage 计价、OMS best-effort 写点 | [INTEGRATIONS](../backend/.planning/codebase/INTEGRATIONS.md)、[STRUCTURE](../backend/.planning/codebase/STRUCTURE.md) |
 | 运行时核心 | `backend/runtime/` | Brain 装配、stream→事件、middleware、ToolCatalog、三库资源、run ledger、OMS JSONL | [ARCHITECTURE](../backend/.planning/codebase/ARCHITECTURE.md) |
 | 外部集成 | `backend/integrations/` | `/artifacts` 路径、MinerU HTTP、JSON artifact 读写 | [INTEGRATIONS](../backend/.planning/codebase/INTEGRATIONS.md) |
-| 业务 Skill | `backend/skills/` | 渠道合同、Philips/Tecan 成对目录（资源 + 包）、主数据/XLSX/finalizer | [STRUCTURE](../backend/.planning/codebase/STRUCTURE.md)、[CONVENTIONS](../backend/.planning/codebase/CONVENTIONS.md) |
+| 业务 Skill | `backend/skills/` | 渠道合同、Philips/Tecan 下划线 Skill 包（资源 + 代码）、主数据/XLSX/finalizer | [STRUCTURE](../backend/.planning/codebase/STRUCTURE.md)、[CONVENTIONS](../backend/.planning/codebase/CONVENTIONS.md) |
 | 本地门禁 | `backend/tests/` | 可执行 assert 脚本（`python -m tests.*`，**非 pytest**） | [TESTING](../backend/.planning/codebase/TESTING.md) |
 | 实现事实文档 | `backend/.planning/codebase/` | 架构/结构/栈/集成/约定/测试/风险（Analysis Date: 2026-07-22） | 本目录七文件 |
 | 系统文档 | 仓库根 `ARCHITECTURE.md`、`INTERFACES.md`、`AGENTS.md`、`docs/*` | 边界决策、接口合同、导航与业务 PRD | 根级与 `docs/` |
@@ -56,8 +56,8 @@ flowchart LR
 | Middleware | `backend/runtime/middleware.py` | Philips recovery、telemetry、loop 检测、thinking 兼容、memory |
 | 工具目录 | `backend/runtime/tools.py` | 静态 **5** 工具 `ToolCatalog` |
 | 业务合同 | `backend/skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
-| Philips | `skills/philips-*` + `philipswgqinboundrecognition/` | 固定 workflow、Skill、schema、Tracking/Oracle lookup |
-| Tecan | `skills/tecan-*` + `tecanimport/` | Skill/references、XLSX inspection、最终 JSON finalizer |
+| Philips（WAG） | `skills/philips_wgq_inbound_recognition/` | workflow、Skill、schema、Tracking/Oracle lookup |
+| Tecan（DK） | `skills/tecan_import/` | workflow、Skill/references、XLSX inspection、最终 JSON finalizer |
 | 持久化 | `runtime/runs.py` / `resources.py` | run ledger、checkpointer、store 三 SQLite |
 
 依赖方向（单向）：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。
@@ -118,8 +118,9 @@ running → cancelling → cancelled
 
 | 路径 | 触发 | 投影 | 缺结果时 |
 |------|------|------|----------|
-| Philips | `workflow=philips_wgq_inbound_recognition` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` → `run.result` | run `failed` |
-| Tecan | 通用 run + 明确 Skill 请求 | `finalize_tecan_overseas_recognition` ToolMessage → `TecanOverseasRecognitionResult` → `run.result` | 可 `succeeded` 且 `result=null`（普通阅读合法） |
+| WAG（Philips） | `workflow=WAG` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` → `run.result` | run `failed` |
+| DK（Tecan） | `workflow=DK` | `finalize_tecan_overseas_recognition` ToolMessage → `TecanOverseasRecognitionResult` → `run.result` | run `failed` |
+| 通用 Tecan 请求 | 无 workflow + 明确 Skill 请求 | 同一 finalizer 路径 | 可 `succeeded` 且 `result=null`（普通阅读合法） |
 | 普通阅读 | 无 workflow、无 finalizer | `result` 可为 `null` | 仍 `succeeded` |
 
 `run.result` 是 OMS 消费的**唯一**业务通道；`reply` 仅为自然语言摘要。`input_problems` 是合法业务 outcome，run 仍为 `succeeded`。
@@ -127,21 +128,22 @@ running → cancelling → cancelled
 ### 3.4 渠道路径（同票单一 run）
 
 ```text
-Philips workflow
-  → /skills/philips-wgq-inbound-recognition/SKILL.md
+WAG workflow
+  → /skills/philips_wgq_inbound_recognition/SKILL.md
+  → references/freight-forwarders.md（DHL / DSV / FedEx / UPS / 康捷空）
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 Tracking 时 lookup_philips_wgq_master_data
   → denylist 排除 Tecan finalizer
   → PhilipsWgqRecognitionResult → run.result
 
-Tecan explicit Skill request
-  → /skills/tecan-import/SKILL.md + references/
+DK workflow
+  → /skills/tecan_import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
   → 同票归集与字段裁决
   → finalize_tecan_overseas_recognition → run.result
 ```
 
-两渠道 `header` 独立，`items[]` 共用完整 **24** 字段；不输出 `shipment`、Excel、候选噪声。无跨 run 业务状态表、无 Tecan HTTP workflow、无生产业务 SubAgent。
+两渠道 `header` 独立，`items[]` 共用完整 **24** 字段；不输出 `shipment`、Excel、候选噪声。无跨 run 业务状态表、无生产业务 SubAgent。
 
 ### 3.5 Agent 装配
 
@@ -155,15 +157,16 @@ AgentResources
 DeepAgentsBrainFactory
   ├─ general-purpose subagent disabled；subagents=[]
   ├─ static ToolCatalog（5）
-  ├─ Philips: ToolStrategy + PHILIPS_WORKFLOW_PROMPT + denylist
-  └─ generic/Tecan: Skill-driven，structured_schema=None
+  ├─ WAG: ToolStrategy + WAG_WORKFLOW_PROMPT + denylist
+  ├─ DK: DK_WORKFLOW_PROMPT + finalizer + denylist
+  └─ generic: Skill-driven，structured_schema=None
 ```
 
 ### 3.6 Middleware 顺序
 
 | 顺序 | middleware | 适用范围 |
 |------|------------|----------|
-| 0 | `StructuredOutputRecovery` | 仅 Philips（`structured_schema` 非空）；`after_model` + `jump_to` |
+| 0 | `StructuredOutputRecovery` | 仅 WAG（`structured_schema` 非空）；`after_model` + `jump_to` |
 | 1 | `ToolTelemetry` | 所有 Agent |
 | 2 | `NoProgressMiddleware` | 所有 Agent（同参连续 3 次 → `NoProgressLoop` → failed） |
 | 3 | `StructuredOutputCompatibility` | 所有；仅 ToolStrategy 时关 thinking |
@@ -175,7 +178,7 @@ DeepAgentsBrainFactory
 - 耗尽必须显式 `jump_to: "end"`，禁止只返回 `None`
 - 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton；空壳耗尽 → all-null + `partial_success`
 - 其它失败耗尽 → 无 `structured_response` → harness `failed`
-- Tecan / 普通 run 不走此路径
+- DK / 普通 run 不走此路径
 
 ### 3.7 工具地图
 
@@ -187,7 +190,7 @@ DeepAgentsBrainFactory
 | `inspect_supply_chain_workbooks` | Tecan 包（共享） | 只读 XLSX → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan | Pydantic 校验并返回终态 JSON 字符串 |
 
-Philips workflow **denylist** 仅排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU / XLSX / Philips lookup。**禁止**业务-only allowlist。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
+WAG workflow **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU / XLSX / Philips lookup；DK workflow 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。**禁止**业务-only allowlist。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
 
 ---
 
@@ -205,7 +208,7 @@ Philips workflow **denylist** 仅排除 `finalize_tecan_overseas_recognition`，
 约束摘要：
 
 - `messages[]`：`{role, content:[{type:"text",text}|{type:"artifact",path}]}`，`extra="forbid"`；旧 `{message:"..."}` 不支持
-- `workflow` 仅允许 `philips_wgq_inbound_recognition` 或省略；与客户端 `session_id` **互斥**（workflow 强制服务端新 session）
+- `workflow` 仅允许 `WAG`、`DK` 或省略；与客户端 `session_id` **互斥**（workflow 强制服务端新 session）
 - 无 Auth 中间件、无 Webhook、无 OMS 远程推送；程序内入口不写 OMS 索引
 
 ### 渠道最终 JSON 形状
@@ -288,8 +291,8 @@ with AgentResources(...) as resources:
 |------|------|
 | Protocol 仅 Brain | `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具 = callable + `ToolCatalog`；资源/ledger = 具体类 |
 | 工具静态注册 | `default_tool_catalog()` 五行；禁止目录扫描；新增须改 catalog + package-data |
-| workflow 收窄 = denylist | 排除**其他业务**工具（当前 Tecan finalizer）；禁止业务-only allowlist |
-| Skill 成对目录 | kebab-case 资源（`SKILL.md`/references，挂 `/skills/`）+ 可 import Python 包；更新 `pyproject.toml` package-data |
+| workflow 收窄 = denylist | WAG 排除 Tecan finalizer，DK 排除 Philips lookup；禁止业务-only allowlist |
+| Skill 单目录 | 下划线命名的可 import Python 包内含 `SKILL.md`/references、schema、scripts；更新 `pyproject.toml` package-data |
 | 终态只写 `run.result` | 不从 `reply`/thinking/工具候选/Excel 推断 OMS 数据 |
 | 同票单一 run | 不新增消息/任务状态表或业务 middleware |
 | 横切 vs 业务校验 | Philips recovery 用 middleware；Tecan 用 finalizer 工具，不污染普通 run 的 schema |
@@ -310,8 +313,8 @@ with AgentResources(...) as resources:
 1. [docs/channel-supply-chain-json-prd.md](../docs/channel-supply-chain-json-prd.md)（业务合同）
 2. 本文 §3.4 / §3.7 与 [INTERFACES.md](../INTERFACES.md) 渠道 JSON 节
 3. `backend/skills/channel_contract.py`
-4. Philips：`skills/philips-wgq-inbound-recognition/SKILL.md`、`philipswgqinboundrecognition/schema.py`、`scripts/tools.py`
-5. Tecan：`skills/tecan-import/SKILL.md` + `references/`、`tecanimport/schema.py`、`scripts/tools.py`
+4. Philips：`skills/philips_wgq_inbound_recognition/SKILL.md`、`schema.py`、`scripts/tools.py`
+5. Tecan：`skills/tecan_import/SKILL.md` + `references/`、`schema.py`、`scripts/tools.py`
 6. 事实补充：[ARCHITECTURE](../backend/.planning/codebase/ARCHITECTURE.md) 渠道合同节、[CONVENTIONS](../backend/.planning/codebase/CONVENTIONS.md)
 
 ### 7.2 backend API / HTTP
@@ -359,9 +362,9 @@ with AgentResources(...) as resources:
 
 ### 7.8 新增 Skill 检查顺序
 
-1. kebab 资源目录 + Python 包
+1. 单一下划线 Skill 包（`SKILL.md` / references / schema / scripts）
 2. `runtime/tools.py` 静态注册
-3. Philips denylist 是否需排除**其他业务**新工具
+3. WAG / DK denylist 是否需排除**其他业务**新工具
 4. `pyproject.toml` package-data
 5. tests + codebase 事实 + 本地图/INTERFACES（若 HTTP 边界变）
 
@@ -384,7 +387,7 @@ with AgentResources(...) as resources:
 ### 8.2 其它已知风险（摘要）
 
 - Cancel 不能强杀已发出的 MinerU/Oracle 调用；可能长时间 `cancelling`
-- Tecan 未调 finalizer 时 `succeeded` + `result=null` → 客户端必须检查 `result`
+- DK 未调 finalizer 时 `failed`；通用 Tecan 请求未调 finalizer 时仍可能 `succeeded` + `result=null`，客户端必须检查 `result`
 - 空壳 all-null 是 **runtime 技术兜底**，不是业务 partial 模板
 - 上传无配额、HTTP 无鉴权 → 依赖内网/网关
 - daemon 线程 + 启动 `fail_incomplete_runs`：崩溃 run 不自动续跑

@@ -4,8 +4,8 @@
 
 Philips 专属实现请同时阅读：
 
-- `backend/skills/philips-wgq-inbound-recognition/SKILL.md`
-- `backend/skills/philipswgqinboundrecognition/schema.py`
-- `backend/skills/philipswgqinboundrecognition/scripts/tools.py`
+- `backend/skills/philips_wgq_inbound_recognition/SKILL.md`
+- `backend/skills/philips_wgq_inbound_recognition/schema.py`
+- `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py`
 
-仍然适用的 Philips 边界：唯一 HTTP workflow 为 `philips_wgq_inbound_recognition`，最终 JSON 只经 `run.result` 交付；不生成 Excel，不输出 `shipment`，同票 PDF/XLSX 由 Skill 动态归集。
+仍然适用的 Philips 边界：HTTP workflow 为 `WAG`，最终 JSON 只经 `run.result` 交付；不生成 Excel，不输出 `shipment`，同票 PDF/XLSX 由 Skill 动态归集。货代版式提示位于 `backend/skills/philips_wgq_inbound_recognition/references/freight-forwarders.md`。

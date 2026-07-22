@@ -13,7 +13,7 @@ from skills.channel_contract import (
 )
 
 
-WORKFLOW = "philips_wgq_inbound_recognition"
+WAG_WORKFLOW = "WAG"
 
 
 class OrderHeader(ContractModel):
@@ -98,7 +98,7 @@ def _all_null(value: Any) -> bool:
 
 
 __all__ = [
-    "WORKFLOW",
+    "WAG_WORKFLOW",
     "OrderHeader",
     "OrderItem",
     "RecognitionData",

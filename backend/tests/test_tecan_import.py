@@ -11,8 +11,8 @@ from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
 from integrations.artifacts import read_json_artifact
-from skills.tecanimport.schema import TecanOverseasRecognitionResult
-from skills.tecanimport.scripts.tools import (
+from skills.tecan_import.schema import TecanOverseasRecognitionResult
+from skills.tecan_import.scripts.tools import (
     finalize_tecan_overseas_recognition,
     inspect_supply_chain_workbooks,
 )

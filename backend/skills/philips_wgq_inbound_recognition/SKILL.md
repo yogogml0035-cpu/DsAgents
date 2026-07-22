@@ -1,6 +1,6 @@
 ---
-name: philips-wgq-inbound-recognition
-description: 仅用于 API workflow=philips_wgq_inbound_recognition 的飞利浦外高桥同票 PDF/XLSX 订单 JSON 抽取；不生成 Excel，也不用于普通文件阅读。
+name: philips_wgq_inbound_recognition
+description: 仅用于 API workflow=WAG 的飞利浦外高桥同票 PDF/XLSX 订单 JSON 抽取；不生成 Excel，也不用于普通文件阅读。
 ---
 
 # 飞利浦外高桥供应链抽取
@@ -14,6 +14,8 @@ description: 仅用于 API workflow=philips_wgq_inbound_recognition 的飞利浦
 3. 以运单号、发票号、PO/SO/DN/OM 与买卖/收发货关系确认唯一票次。无法唯一归票或混入多票时提交 `input_problems`；保留已证实字段，无法安全形成商品行时 `items: []`。
 4. 同 HAWB/运单且收发货方一致的多商业发票是同一票：`header.invoice_number`、`original_waybill_number`、`po`、`dn` 用英文逗号按材料顺序连接，items 按发票上传顺序与原始行顺序展开。相同 12NC 默认不合并，只删除同一业务行的重复副本。
 5. ZIP/DOCX/图片不解析，列入 `problems`；其它材料足以确认时继续。
+
+先按 [references/freight-forwarders.md](references/freight-forwarders.md) 识别 DHL、DSV、FedEx、UPS 与康捷空的版式；它只帮助定位字段，不能替代单据标签和交叉证据。
 
 ## 字段和证据
 

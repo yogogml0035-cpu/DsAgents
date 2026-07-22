@@ -29,7 +29,7 @@
 | 文件 | `backend/runtime/agent.py`（`BACKEND_ENV_PATH = backend/.env`） |
 | 依赖链 | `langchain-anthropic` → `anthropic` SDK；经 `httpx` 出站 |
 | 注入点 | 可向 `DeepAgentsBrainFactory(model=...)` 注入假模型（测试） |
-| 运行时用途 | 主 Agent 推理、工具调用、Philips `ToolStrategy` 结构化提交、Tecan 自然语言 + finalizer |
+| 运行时用途 | 主 Agent 推理、工具调用、WAG `ToolStrategy` 结构化提交、DK finalizer 终态 |
 | 用量 | stream 中 `model_usage` 事件；`api.py` 对 `MiniMax-M3` 做 CNY 估价汇总（趋势，非账单） |
 
 **环境变量**
@@ -45,7 +45,7 @@
 **Harness 相关**
 
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))`
-- `thread_id = session_id`；Philips workflow 禁止客户端复用 `session_id`（服务端新建）
+- `thread_id = session_id`；WAG / DK workflow 禁止客户端复用 `session_id`（服务端新建）
 
 ### 2. MinerU — 文档解析服务
 
@@ -122,7 +122,7 @@
 | 项 | 事实 |
 |----|------|
 | 工具 | `lookup_philips_wgq_master_data` |
-| 文件 | `backend/skills/philipswgqinboundrecognition/scripts/tools.py` |
+| 文件 | `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py` |
 | 驱动 | `import oracledb`（延迟导入） |
 | 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)` |
 | Thick | `ORACLE_CLIENT_LIB_DIR` 存在时 `init_oracle_client(lib_dir=...)` 一次 |
@@ -208,9 +208,10 @@
 
 | 项 | 事实 |
 |----|------|
-| HTTP 触发 | `POST /runs` body `workflow: "philips_wgq_inbound_recognition"` |
-| Skill 资源 | `/skills/philips-wgq-inbound-recognition/SKILL.md` |
-| 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philipswgqinboundrecognition`） |
+| HTTP 触发 | `POST /runs` body `workflow: "WAG"` |
+| Skill 资源 | `/skills/philips_wgq_inbound_recognition/SKILL.md` |
+| 货代版式 | `references/freight-forwarders.md`（DHL、DSV、FedEx、UPS、康捷空） |
+| 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philips_wgq_inbound_recognition`） |
 | 投影 | ToolStrategy `structured_response` → `run.result` |
 | 主数据 | Tracking XLSX + 可选 Oracle |
 | 工具 denylist | 去掉 `finalize_tecan_overseas_recognition` |
@@ -220,9 +221,10 @@
 
 | 项 | 事实 |
 |----|------|
-| HTTP 触发 | **无**专用 workflow 字面量；用户消息明确请求 + Skill |
-| Skill 资源 | `/skills/tecan-import/SKILL.md` + `references/` |
+| HTTP 触发 | `POST /runs` body `workflow: "DK"`；通用 run 的明确 Skill 请求仍可使用 finalizer |
+| Skill 资源 | `/skills/tecan_import/SKILL.md` + `references/` |
 | 终态 | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → harness 捕获 ToolMessage → `run.result` |
+| 工具 denylist | 去掉 `lookup_philips_wgq_master_data`，保留共享工具与 finalizer |
 | XLSX | `inspect_supply_chain_workbooks` 只读转 JSON；**不**写 Excel 模板 |
 
 两渠道 `items[]` 共用完整 24 字段合同；未知 `null`；无 `shipment`/Excel 噪声进最终 JSON。`input_problems` 仍为 run `succeeded`（业务 outcome，非传输失败）。
@@ -266,8 +268,8 @@ backend/runtime/middleware.py
 backend/integrations/mineru.py
 backend/integrations/artifacts.py
 backend/skills/channel_contract.py
-backend/skills/philipswgqinboundrecognition/scripts/tools.py
-backend/skills/tecanimport/scripts/tools.py
+backend/skills/philips_wgq_inbound_recognition/scripts/tools.py
+backend/skills/tecan_import/scripts/tools.py
 backend/pyproject.toml
 backend/uv.lock
 ```

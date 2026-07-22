@@ -13,32 +13,44 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
 
 from runtime.agent import (
+    DK_WORKFLOW_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
-    PHILIPS_WORKFLOW_PROMPT,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
     StructuredOutputCompatibility,
     StructuredOutputRecovery,
+    WAG_WORKFLOW_PROMPT,
 )
 from runtime.execution import _update_events
 from runtime.middleware import RUNTIME_MEMORY_SYSTEM_PROMPT, runtime_middlewares
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import default_tool_catalog
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
+from skills.tecan_import import DK_WORKFLOW
 
 
 def run() -> None:
     skills_root = Path(__file__).resolve().parents[1] / "skills"
-    philips = (skills_root / "philips-wgq-inbound-recognition" / "SKILL.md").read_text(encoding="utf-8")
-    tecan = (skills_root / "tecan-import" / "SKILL.md").read_text(encoding="utf-8")
+    philips = (skills_root / "philips_wgq_inbound_recognition" / "SKILL.md").read_text(encoding="utf-8")
+    tecan = (skills_root / "tecan_import" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
     assert len(tecan.splitlines()) <= 100
     assert "相同 12NC 默认不合并" in philips
     assert "original_waybill_number" in philips
     assert "input_problems" in tecan
     assert "不生成 Excel" in tecan
+    assert "name: philips_wgq_inbound_recognition" in philips
+    assert "name: tecan_import" in tecan
+    freight_forwarders = (
+        skills_root / "philips_wgq_inbound_recognition" / "references" / "freight-forwarders.md"
+    ).read_text(encoding="utf-8")
+    assert all(name in freight_forwarders for name in ("DHL", "DSV", "FedEx", "UPS", "康捷空"))
     assert "普通 PDF 抽取请求不够" in DEFAULT_SYSTEM_PROMPT
-    assert "philips-wgq-inbound-recognition/SKILL.md" in PHILIPS_WORKFLOW_PROMPT
+    assert WAG_WORKFLOW == "WAG"
+    assert DK_WORKFLOW == "DK"
+    assert "philips_wgq_inbound_recognition/SKILL.md" in WAG_WORKFLOW_PROMPT
+    assert "tecan_import/SKILL.md" in DK_WORKFLOW_PROMPT
 
     default_middleware = runtime_middlewares()
     assert isinstance(default_middleware[0], StructuredOutputRecovery)
@@ -66,7 +78,7 @@ def run() -> None:
             resources=resources,
             middleware=[],
             tools=catalog_tools,
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         ) is sentinel
     kwargs = create.call_args.kwargs
     assert kwargs["skills"] == [SKILLS_SOURCE]
@@ -82,7 +94,7 @@ def run() -> None:
         "inspect_supply_chain_workbooks",
     }
     assert isinstance(kwargs["response_format"], ToolStrategy)
-    assert PHILIPS_WORKFLOW_PROMPT in kwargs["system_prompt"]
+    assert WAG_WORKFLOW_PROMPT in kwargs["system_prompt"]
     assert "shipment" not in kwargs["system_prompt"]
     assert "data: {}" in kwargs["system_prompt"]
     compatibility = next(item for item in kwargs["middleware"] if isinstance(item, StructuredOutputCompatibility))
@@ -104,6 +116,23 @@ def run() -> None:
             resources=resources,
             middleware=runtime_middlewares(structured_schema=None),
             tools=catalog_tools,
+            workflow=DK_WORKFLOW,
+        )
+    dk_kwargs = create.call_args.kwargs
+    assert DK_WORKFLOW_PROMPT in dk_kwargs["system_prompt"]
+    assert "response_format" not in dk_kwargs
+    assert {tool.__name__ for tool in dk_kwargs["tools"]} == {
+        "parse_documents",
+        "extract_archives",
+        "inspect_supply_chain_workbooks",
+        "finalize_tecan_overseas_recognition",
+    }
+
+    with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
+        DeepAgentsBrainFactory(model="anthropic:test").create(
+            resources=resources,
+            middleware=runtime_middlewares(structured_schema=None),
+            tools=catalog_tools,
             workflow=None,
         )
     assert "response_format" not in create.call_args.kwargs
@@ -112,8 +141,10 @@ def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         with AgentResources(ResourceConfig(data_dir=Path(tmp) / "data")) as mounted:
             paths = {entry["path"].rstrip("/") for entry in mounted.backend.ls("/skills/").entries}
-            assert "/skills/philips-wgq-inbound-recognition" in paths
-            assert "/skills/tecan-import" in paths
+            assert "/skills/philips_wgq_inbound_recognition" in paths
+            assert "/skills/tecan_import" in paths
+            assert "/skills/philips-wgq-inbound-recognition" not in paths
+            assert "/skills/tecan-import" not in paths
 
     final = AIMessage(
         content=[{"type": "thinking", "thinking": "plan"}, {"type": "text", "text": "done"}],

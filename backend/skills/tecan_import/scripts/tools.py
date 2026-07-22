@@ -11,7 +11,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from integrations.artifacts import resolve_artifact_path, write_json_artifact
-from skills.tecanimport.schema import TecanOverseasRecognitionResult
+from skills.tecan_import.schema import TecanOverseasRecognitionResult
 
 
 FINALIZE_TECAN_RESULT_TOOL = "finalize_tecan_overseas_recognition"

@@ -42,10 +42,8 @@ api.py                          HTTP 适配层
               │     └── mineru.py
               └── skills/       业务 Skill + 渠道合同
                     ├── channel_contract.py
-                    ├── philips-wgq-inbound-recognition/   资源
-                    ├── philipswgqinboundrecognition/      包
-                    ├── tecan-import/                      资源
-                    └── tecanimport/                       包
+                    ├── philips_wgq_inbound_recognition/   Skill 资源 + 包
+                    └── tecan_import/                      Skill 资源 + 包
 ```
 
 | 层 | 位置 | 职责 |
@@ -71,7 +69,7 @@ api.py                          HTTP 适配层
 
 `RunRequest` 约束：
 
-- `workflow: Literal["philips_wgq_inbound_recognition"] | None` — 唯一固定 workflow
+- `workflow: Literal["WAG", "DK"] | None` — `WAG` 为飞利浦外高桥，`DK` 为帝肯境外供应链
 - `workflow` 与客户端 `session_id` 互斥（workflow run 必须服务端生成新 session）
 - `messages[].content` 为 `text` | `artifact` 判别联合；`extra="forbid"`
 
@@ -120,8 +118,9 @@ running → cancelling → cancelled
 
 终态业务结果：
 
-- **Philips workflow**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
-- **Tecan**（通用 run + Skill）：仅接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`
+- **WAG**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
+- **DK**：必须接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`；缺失则 `failed`
+- **通用 Tecan 请求**：若调用 finalizer 同样投影结果；未调用时可作为普通阅读 run 成功且 `result=null`
 - **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
 
 `artifact` 内容块在进入 Brain 前归一为带路径提示的 `text`（`ARTIFACT_REFERENCE_HINT`）。
@@ -189,7 +188,8 @@ running → cancelling → cancelled
   - 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`
   - `create_deep_agent`：`subagents=[]`，`skills=["/skills/"]`，`/skills/**` 写拒绝
   - harness profile `anthropic`：关闭 general-purpose subagent
-  - Philips workflow 时追加 `PHILIPS_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist
+  - `WAG` 时追加 `WAG_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist
+  - `DK` 时追加 `DK_WORKFLOW_PROMPT`、保留 `structured_schema=None`，并以 finalizer 终态校验
 
 ### middleware 栈（`runtime_middlewares`）
 
@@ -231,17 +231,21 @@ running → cancelling → cancelled
 
 ## workflow 与工具表
 
-### 唯一固定 workflow
+### 业务 workflow
 
-`philips_wgq_inbound_recognition`（常量 `WORKFLOW`）：
+`WAG`（常量 `WAG_WORKFLOW`）：
 
 1. API 收窄 `workflow` 字面量
-2. Brain 加载 `/skills/philips-wgq-inbound-recognition/SKILL.md` 提示
+2. Brain 加载 `/skills/philips_wgq_inbound_recognition/SKILL.md` 提示
 3. `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery
 4. 工具 denylist 去掉 Tecan finalizer
 5. harness 强制 `structured_response` → `run.result`
 
-Tecan 无独立 workflow：用户明确请求时走通用 run + `tecan-import` Skill + `finalize_tecan_overseas_recognition`。
+`DK`（常量 `DK_WORKFLOW`）：
+
+1. Brain 加载 `/skills/tecan_import/SKILL.md`
+2. 工具 denylist 去掉 Philips 主数据 lookup，保留共享 MinerU / XLSX 与 Tecan finalizer
+3. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
 
 ### ToolCatalog 五工具（`runtime/tools.py`）
 
@@ -253,13 +257,15 @@ Tecan 无独立 workflow：用户明确请求时走通用 run + `tecan-import` S
 | `inspect_supply_chain_workbooks` | Tecan scripts（共享） | XLSX → 可读 JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan scripts | 校验并返回 Tecan 终态 JSON 字符串 |
 
-**Philips denylist**（`_PHILIPS_EXCLUDED_TOOLS`）：
+**WAG denylist**（`_WAG_EXCLUDED_TOOLS`）：
 
 ```text
 finalize_tecan_overseas_recognition
 ```
 
 保留共享 MinerU、共享 XLSX 检查器与 Philips 主数据工具。**禁止**业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引会失效）。
+
+**DK denylist**（`_DK_EXCLUDED_TOOLS`）排除 `lookup_philips_wgq_master_data`，保留共享 MinerU / XLSX 与 Tecan finalizer。
 
 新增 Skill 工具：在 `default_tool_catalog()` 静态 import + 注册一行；不自动扫描。
 
@@ -305,6 +311,7 @@ with AgentResources(ResourceConfig()) as resources:
 |------|------------|--------------|------|
 | 合法 Philips/Tecan 终态 JSON（含 `input_problems`） | `succeeded` | 完整业务 JSON | 业务问题 ≠ 执行失败 |
 | Philips 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
+| DK 未调用 Tecan finalizer | `failed` | `null` | workflow 终态缺失 |
 | 未调用 Tecan finalizer 的通用 run | `succeeded` | `null` | 普通阅读合法 |
 | `NoProgressLoop` | `failed` | `null` | 同工具死循环 |
 | 其它模型/工具/运行时异常 | `failed` | `null` | `_ensure_failed_run` 兜底 |

@@ -43,12 +43,12 @@ python -m tests.test_tecan_import
 
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照；`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁。
 - HTTP 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`（无 SSE / session API）。程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`。
-- 唯一固定 workflow：`philips_wgq_inbound_recognition`。Philips 与明确请求的 Tecan Skill 均将最终业务 JSON 写入 `run.result`（`input_problems` 时 run 仍 `succeeded`）。工具静态 **5** 个；生产不配置业务 SubAgent。
-- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具（当前为 Tecan finalizer），保留共享 MinerU、共享 XLSX 检查器与本业务主数据工具；禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
-- **Skill 成对目录**：kebab-case 资源目录（`SKILL.md` / 按需 references）+ 可 import 的 Python 包；新增须两套目录并更新 `package-data`。Tecan 不携带 Excel 模板或生成器。
+- HTTP workflow 仅 `WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。两者均将最终业务 JSON 写入 `run.result`（`input_problems` 时 run 仍 `succeeded`）；`WAG` 需 structured response，`DK` 需 Tecan finalizer。工具静态 **5** 个；生产不配置业务 SubAgent。
+- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具：WAG 排除 Tecan finalizer，DK 排除 Philips lookup；保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
+- **Skill 单目录**：每个业务 Skill 用一个下划线命名、可 import 的 Python 包；包内同时包含 `SKILL.md` / 按需 references、schema 与 scripts。新增须更新 `package-data`。Tecan 不携带 Excel 模板或生成器。
 - `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具用 callable + `ToolCatalog`；资源与 ledger 用具体类。
 - 事件固定 **7** 类；业务问题统一 `input_problems`；不要重新引入 session API、SSE 或旧顶层辅助模块。
-- **`StructuredOutputRecovery`**（Philips 专用）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。普通/Tecan run 使用 `structured_schema=None`；Tecan 以 finalizer 工具校验终态。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
+- **`StructuredOutputRecovery`**（WAG 专用）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。DK/普通 run 使用 `structured_schema=None`；DK 以 finalizer 工具校验终态。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
 - **渠道终态合同**：Philips / Tecan header 各自独立，`items[]` 共用完整 24 字段；未知值为 `null`，不输出 `shipment`、Excel、候选噪声或审计细节。同票归集在单一 run 完成，不新增消息/任务状态表或业务 middleware。
 - OMS 旁路索引 best-effort、不阻塞已创建 run（非 `run_events`、无查询 API）；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS）。
 - 改 backend 代码后先同步子项目 codebase 事实文档，再按影响更新根级系统文档与系统地图；文档变更至少 `git diff --check`。

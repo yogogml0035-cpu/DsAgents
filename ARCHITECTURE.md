@@ -40,7 +40,7 @@ flowchart LR
 | HTTP 适配 | `backend/api.py` | 请求校验、上传、创建 run、后台线程执行、轮询、cancel、usage 计价、OMS best-effort 写点 |
 | 运行时 | `backend/runtime/` | Brain 装配、stream→事件投影、middleware、ToolCatalog、三库资源、run ledger、OMS JSONL |
 | 集成 | `backend/integrations/` | `/artifacts` 路径、MinerU HTTP、JSON artifact 读写 |
-| 业务 Skill | `backend/skills/` | 渠道合同、Philips/Tecan 成对目录、主数据 / XLSX / finalizer |
+| 业务 Skill | `backend/skills/` | 渠道合同、Philips/Tecan 下划线 Skill 包、主数据 / XLSX / finalizer |
 | 本地门禁 | `backend/tests/` | 可执行 assert 脚本（`python -m tests.*`，**非 pytest**） |
 
 依赖单向：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具为 callable + `ToolCatalog`；资源与 ledger 为具体类。
@@ -64,7 +64,7 @@ flowchart LR
 
 ## Agent、状态与 middleware 决策
 
-本期**没有**增加业务消息状态、任务状态机、Tecan HTTP workflow 或生产业务 SubAgent。
+本期**没有**增加业务消息状态、任务状态机或生产业务 SubAgent。
 
 原因：同票材料只需在一次 Agent run 内归集；外部终态已由 ledger 保存，线程上下文已由 checkpointer 保存。再引入子任务候选、跨 run 工作单或额外 state schema 会让同一票事实在多个位置竞争，不能提高 OMS 合同的确定性。
 
@@ -77,16 +77,16 @@ middleware 只保留横切运行时能力：
 | Memory | `MemoryMiddleware`（主 Agent 有 memory 时） | 加载 `/memories/AGENTS.md` |
 | Tecan 最终 JSON | 专用 finalizer 工具 | 业务合同校验，不污染普通请求或全局 graph state |
 
-主 Agent 有 memory 时约 **5** 个 middleware；普通/Tecan run 使用 `structured_schema=None`，不按 Philips schema 恢复。
+主 Agent 有 memory 时约 **5** 个 middleware；DK/普通 run 使用 `structured_schema=None`，不按 Philips schema 恢复。
 
 ## 运行时装配
 
 - `DeepAgentsBrainFactory` 关闭默认 general-purpose subagent，并传递 `subagents=[]`。
 - 固定工具 **5** 个：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`inspect_supply_chain_workbooks`、`finalize_tecan_overseas_recognition`（静态注册，无自动扫描）。
-- 唯一 HTTP workflow：`philips_wgq_inbound_recognition`，使用 `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
-- Tecan 无独立 workflow：用户明确请求时走通用 run + `tecan-import` Skill；执行层只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`。
-- Philips workflow 用 **denylist** 排除 Tecan finalizer，保留共享 MinerU / XLSX 检查与 Philips 主数据工具；**禁止**业务-only allowlist。
-- Skill **成对目录**：kebab-case 资源（`SKILL.md` / references，挂载 `/skills/`）+ 可 import Python 包；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
+- HTTP workflow：`WAG` 使用 `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery，`DK` 使用 Tecan finalizer；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
+- `DK` 只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`，缺 finalizer 终态即失败。
+- WAG 用 **denylist** 排除 Tecan finalizer，DK 用 **denylist** 排除 Philips lookup；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
 
 ## 存储、可观测性与运维
 

@@ -43,7 +43,8 @@ from runtime.observability import (
 )
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import ToolCatalog
-from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition.schema import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import.schema import DK_WORKFLOW
 from tests.test_support import (
     FakeBrainFactory,
     _recognition_result,
@@ -108,7 +109,7 @@ def _check_model_env_loading(tmp: str) -> None:
                 resources=SimpleNamespace(backend=object(), checkpointer=object(), store=object()),
                 middleware=[],
                 tools=[],
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         kwargs = create.call_args.kwargs
         assert kwargs["model"] is factory.model
@@ -953,19 +954,19 @@ def _check_harness(tmp: str) -> None:
             "run-workflow",
             "thread-workflow",
             messages_json(workflow_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         workflow_events = list(
             harness.execute_run(
                 workflow_messages,
                 "thread-workflow",
                 "run-workflow",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         workflow_snapshot = resources.runs.get_run("run-workflow")
         assert workflow_snapshot.status == "succeeded"
-        assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
+        assert workflow_snapshot.workflow == WAG_WORKFLOW
         assert workflow_snapshot.result["data"]["header"]["original_waybill_number"] == "9198153694"
         assert workflow_events[-1].payload["result"] == workflow_snapshot.result
 
@@ -974,14 +975,14 @@ def _check_harness(tmp: str) -> None:
             "run-input-problems",
             "thread-input-problems",
             messages_json(input_problem_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         list(
             harness.execute_run(
                 input_problem_messages,
                 "thread-input-problems",
                 "run-input-problems",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         assert resources.runs.get_run("run-input-problems").status == "succeeded"
@@ -992,14 +993,14 @@ def _check_harness(tmp: str) -> None:
             "run-missing-structured",
             "thread-missing-structured",
             messages_json(missing_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         list(
             harness.execute_run(
                 missing_messages,
                 "thread-missing-structured",
                 "run-missing-structured",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         missing_snapshot = resources.runs.get_run("run-missing-structured")

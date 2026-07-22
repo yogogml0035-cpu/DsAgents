@@ -8,7 +8,7 @@
 - `api.py`：四 HTTP 端点、请求/响应 Pydantic 模型、session 进程内单飞、usage 计价展示、OMS best-effort 旁路写点。
 - `runtime/`：Brain 装配、Harness 执行、middleware、run ledger、资源挂载、工具目录、可观测归一化、OMS 日志。
 - `integrations/`：artifact 路径与 MinerU HTTP 客户端等外部 I/O。
-- `skills/`：业务 schema、工具实现、kebab-case 资源目录（`SKILL.md` / references）。
+- `skills/`：业务 Skill 的下划线命名包；每个包同时含 `SKILL.md` / references、schema 与工具实现。
 - 历史 setuptools 产物（如 `backend/build/`、`dist/`、`dsagents.egg-info/`）**不是**源码权威，不读进 VCS 决策。
 - 能力可注入（`BrainFactory`、`ToolCatalog`、`harness_factory`），但运行时保持薄：没有真实调用方前不增加任务队列、策略框架或宽泛配置体系。
 
@@ -16,14 +16,14 @@
 
 | 类别 | 约定 | 示例 |
 |------|------|------|
-| 模块 / 包 | `snake_case` | `runtime/execution.py`、`philipswgqinboundrecognition` |
-| Skill 资源目录 | kebab-case，与 import 包成对 | `philips-wgq-inbound-recognition/` ↔ `philipswgqinboundrecognition/` |
+| 模块 / 包 | `snake_case` | `runtime/execution.py`、`philips_wgq_inbound_recognition` |
+| Skill 目录 | 下划线命名的 import 包，资源和代码同目录 | `philips_wgq_inbound_recognition/` |
 | 类 | `PascalCase` | `HarnessRuntime`、`SqliteRunLedger`、`ToolCatalog` |
 | 函数 / 方法 | `snake_case` | `execute_run`、`default_tool_catalog`、`runtime_middlewares` |
-| 常量 | `UPPER_SNAKE` | `WORKFLOW`、`NO_PROGRESS_WINDOW`、`_PHILIPS_EXCLUDED_TOOLS` |
+| 常量 | `UPPER_SNAKE` | `WAG_WORKFLOW`、`DK_WORKFLOW`、`NO_PROGRESS_WINDOW` |
 | 私有助手 | 单下划线前缀 | `_normalize_messages`、`_update_events` |
 | 虚拟 FS 路径 | 前导 `/` 的挂载前缀 | `/skills/`、`/artifacts/`、`/memories/` |
-| workflow 字面量 | 固定 snake 字符串 | `philips_wgq_inbound_recognition` |
+| workflow 字面量 | 固定大写渠道代码 | `WAG`、`DK` |
 | 工具函数名 | 与注册 callable `__name__` 一致 | `parse_documents`、`finalize_tecan_overseas_recognition` |
 
 - 新文件优先 `from __future__ import annotations`。
@@ -90,7 +90,7 @@ def default_tool_catalog() -> ToolCatalog:
 ## 5. HTTP 与注入点
 
 - 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`（轮询，**无 SSE**）。
-- `RunRequest.workflow` 当前仅允许 `philips_wgq_inbound_recognition` 或省略；workflow run **禁止**客户端复用 `session_id`（422）。
+- `RunRequest.workflow` 当前仅允许 `WAG`、`DK` 或省略；workflow run **禁止**客户端复用 `session_id`（422）。
 - 程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`；`create_app(harness_factory=...)` 便于测试注入 FakeBrain。
 - OMS 旁路：`create_run` 成功后 best-effort 写 JSONL；失败吞掉，不阻塞已创建 run；**非** `run_events`、无查询 API。
 
@@ -121,16 +121,17 @@ def default_tool_catalog() -> ToolCatalog:
 
 ### Philips vs Tecan 终态路径
 
-- **Philips**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing`）。
-- **Tecan**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；无 `response_format` / 无 Philips recovery。
+- **WAG**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing for WAG`）。
+- **DK**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；缺失则 run `failed`；无 `response_format` / 无 Philips recovery。
 - 普通 run：`structured_schema=None`，不强制按 Philips schema 恢复。
 
 ## 7. 工具收窄：denylist
 
-- Philips workflow 在 `DeepAgentsBrainFactory.create` 用 **denylist** 排除**其他业务**工具：
+- WAG / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他业务**工具：
 
 ```python
-_PHILIPS_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
+_WAG_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
+_DK_EXCLUDED_TOOLS = frozenset({"lookup_philips_wgq_master_data"})
 # 保留 parse_documents / extract_archives / lookup_... / inspect_supply_chain_workbooks
 ```
 
@@ -138,19 +139,18 @@ _PHILIPS_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
 - 生产 `subagents=[]`；`GeneralPurposeSubagentProfile(enabled=False)`。
 - `/skills/**` 写权限 deny；Skill 资源只读挂载。
 
-## 8. Skill 成对目录
+## 8. Skill 单目录
 
-每个业务 Skill 必须两套目录，并更新 `pyproject.toml` `[tool.setuptools.package-data]`：
+每个业务 Skill 只保留一个下划线命名、可 import 的包，并在 `pyproject.toml` `[tool.setuptools.package-data]` 按包打包资源：
 
-| 角色 | 路径模式 | 内容 |
-|------|----------|------|
-| 资源 | `skills/<kebab-name>/` | `SKILL.md`（建议 ≤100 行）、按需 `references/*.md`；挂载到 `/skills/` |
-| 代码 | `skills/<importpkg>/` | `schema.py`、`scripts/tools.py`、包 `__init__.py` |
+| 路径模式 | 内容 |
+|----------|------|
+| `skills/<snake_case_name>/` | `SKILL.md`（建议 ≤100 行）、按需 `references/*.md`、`schema.py`、`scripts/tools.py`、`__init__.py`；挂载到 `/skills/` |
 
-当前对：
+当前 Skill：
 
-- `philips-wgq-inbound-recognition` ↔ `philipswgqinboundrecognition`
-- `tecan-import` ↔ `tecanimport`
+- `philips_wgq_inbound_recognition`
+- `tecan_import`
 
 - 不做 Skill 目录自动发现；`skills: [SKILLS_SOURCE]` 固定 `/skills/`。
 - Tecan **不**携带 Excel 模板或生成器；XLSX inspection 写中间 JSON artifact 供 Agent 读取，不是 OMS 合同。
@@ -168,8 +168,8 @@ _PHILIPS_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
   4. `StructuredOutputCompatibility`（ToolStrategy 请求关闭 thinking）
   5. 可选 `MemoryMiddleware`（主 Agent 挂 `/memories/AGENTS.md`；受限 system prompt，禁止写业务数据/密钥）
 
-- Harness 对 Philips workflow 传 `structured_schema=PhilipsWgqRecognitionResult`；普通/Tecan 传 `None`。
-- `DeepAgentsBrainFactory` 在 Philips 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
+- Harness 对 WAG 传 `structured_schema=PhilipsWgqRecognitionResult`；DK / 普通 run 传 `None`。
+- `DeepAgentsBrainFactory` 在 WAG 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
 
 ### StructuredOutputRecovery（硬约束）
 
@@ -208,6 +208,7 @@ Harness / ledger 对外事件类型仅：
 |------|------|
 | 业务 `input_problems` | 合法 `run.result`，status `succeeded` |
 | 缺 Philips `structured_response` | `ValueError` → status `failed` |
+| DK 缺 Tecan finalizer 终态 | `ValueError` → status `failed` |
 | `NoProgressLoop`（同 tool+args 连续 `NO_PROGRESS_WINDOW=3`） | status `failed`，error 文本携带原因 |
 | 其它 Exception | status `failed`，`error` 文本 + raw repr |
 | `GraphDrained`（cancel） | status `cancelled` |
@@ -235,10 +236,10 @@ Harness / ledger 对外事件类型仅：
 ## 14. 快速自检清单（编码时）
 
 - [ ] 未新增 Protocol（除非 Brain 形状变更）
-- [ ] 新工具已静态注册，且 Philips denylist 仍只排除其他业务工具
+- [ ] 新工具已静态注册，且 WAG / DK denylist 仍只排除其他业务工具
 - [ ] 业务终态只进 `run.result`；`input_problems` 仍 `succeeded`
 - [ ] 事件类型落在 7 类之内
-- [ ] Skill 双目录 + package-data
+- [ ] Skill 单目录 + package-data
 - [ ] `StructuredOutputRecovery` 的 `can_jump_to` 含 `end`，耗尽显式 `jump_to: "end"`
 - [ ] 无 SSE / session API / 生产业务 SubAgent
 - [ ] 对应 `python -m tests.*` 已跑通

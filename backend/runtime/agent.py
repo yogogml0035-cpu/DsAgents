@@ -27,7 +27,8 @@ from runtime.middleware import (
     philips_structured_output_error_message,
 )
 from runtime.observability import MAIN_AGENT_NAME
-from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import import DK_WORKFLOW
 
 
 BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -43,9 +44,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "大体积输出写入 `/artifacts/`。"
 )
 
-PHILIPS_WORKFLOW_PROMPT = (
-    "API 已选择 workflow=philips_wgq_inbound_recognition。"
-    "本 run 必须加载并遵循 `/skills/philips-wgq-inbound-recognition/SKILL.md`。"
+WAG_WORKFLOW_PROMPT = (
+    "API 已选择 workflow=WAG（飞利浦外高桥进境识别）。"
+    "本 run 必须加载并遵循 `/skills/philips_wgq_inbound_recognition/SKILL.md`，"
+    "并按其引用读取货代版式说明。"
     "最终结果必须通过 PhilipsWgqRecognitionResult 结构化工具提交。"
     "禁止提交 data: {}，也不得省略 header/items。"
     "outcome 为 success 或 partial_success 时，data 必须包含完整嵌套对象："
@@ -56,18 +58,25 @@ PHILIPS_WORKFLOW_PROMPT = (
     "正常路径只调用 PhilipsWgqRecognitionResult 提交业务结果；不要在助手文本重复完整业务 JSON，"
     "避免文本与 tool 参数分叉。仅在无法形成有效工具调用时，才输出恰好一个符合 schema 的完整 ```json```"
     "作为后备；该 JSON 不能替代 tool 参数。禁止只改 problems 却留下 data:{}。"
-    "同一 HAWB/运单下多张商业发票、多个 PO/DN（如 UPS 普货）视为一票 consolidated："
-    "header 中 invoice_number/original_waybill_number/po/dn 可按材料顺序用英文逗号拼接，items 按发票顺序展开多行。"
     "自然语言摘要不能替代业务结果。"
 )
 
-# Philips drops only Tecan business tools; shared MinerU tools stay available so
-# /memories/AGENTS.md ZIP guidance (extract_archives) matches the tool table.
-_PHILIPS_EXCLUDED_TOOLS = frozenset(
+DK_WORKFLOW_PROMPT = (
+    "API 已选择 workflow=DK（帝肯境外供应链识别）。"
+    "本 run 必须加载并遵循 `/skills/tecan_import/SKILL.md`。"
+    "最终必须调用 finalize_tecan_overseas_recognition；其返回值是唯一业务结果。"
+    "自然语言摘要不能替代业务结果。"
+)
+
+# Workflow denylist only removes the other channel's business tool; shared
+# MinerU tools stay available so /memories/AGENTS.md ZIP guidance remains valid.
+_WAG_EXCLUDED_TOOLS = frozenset(
     {
         "finalize_tecan_overseas_recognition",
     }
 )
+
+_DK_EXCLUDED_TOOLS = frozenset({"lookup_philips_wgq_master_data"})
 
 SKILLS_SOURCE = "/skills/"
 
@@ -81,11 +90,12 @@ __all__ = [
     "NO_PROGRESS_WINDOW",
     "NoProgressLoop",
     "NoProgressMiddleware",
-    "PHILIPS_WORKFLOW_PROMPT",
+    "DK_WORKFLOW_PROMPT",
     "SKILLS_SOURCE",
     "StructuredOutputCompatibility",
     "StructuredOutputRecovery",
     "ToolTelemetry",
+    "WAG_WORKFLOW_PROMPT",
 ]
 
 
@@ -141,7 +151,7 @@ class DeepAgentsBrainFactory:
         workflow: str | None = None,
     ) -> Brain:
         configured_middleware = list(middleware)
-        if workflow == WORKFLOW:
+        if workflow == WAG_WORKFLOW:
             if not any(
                 isinstance(item, StructuredOutputCompatibility)
                 for item in configured_middleware
@@ -173,20 +183,27 @@ class DeepAgentsBrainFactory:
             ],
             "name": MAIN_AGENT_NAME,
         }
-        if workflow == WORKFLOW:
-            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{PHILIPS_WORKFLOW_PROMPT}"
-            kwargs["response_format"] = _PHILIPS_RESPONSE_FORMAT
+        if workflow == WAG_WORKFLOW:
+            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{WAG_WORKFLOW_PROMPT}"
+            kwargs["response_format"] = _WAG_RESPONSE_FORMAT
             # Keep shared MinerU tools (parse_documents / extract_archives) so the
             # runtime handbook ZIP path stays valid; only strip Tecan business tools.
             kwargs["tools"] = [
                 tool
                 for tool in tools
-                if getattr(tool, "__name__", "") not in _PHILIPS_EXCLUDED_TOOLS
+                if getattr(tool, "__name__", "") not in _WAG_EXCLUDED_TOOLS
+            ]
+        elif workflow == DK_WORKFLOW:
+            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{DK_WORKFLOW_PROMPT}"
+            kwargs["tools"] = [
+                tool
+                for tool in tools
+                if getattr(tool, "__name__", "") not in _DK_EXCLUDED_TOOLS
             ]
         return create_deep_agent(**kwargs)
 
 
-_PHILIPS_RESPONSE_FORMAT = ToolStrategy(
+_WAG_RESPONSE_FORMAT = ToolStrategy(
     PhilipsWgqRecognitionResult,
     tool_message_content="已记录飞利浦外高桥识别结果。",
     handle_errors=philips_structured_output_error_message,

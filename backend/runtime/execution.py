@@ -11,9 +11,9 @@ from runtime.middleware import NoProgressLoop, runtime_middlewares
 from runtime.resources import AgentResources
 from runtime.runs import RunEvent
 from runtime.tools import ToolCatalog
-from skills.philipswgqinboundrecognition import WORKFLOW, PhilipsWgqRecognitionResult
-from skills.tecanimport.schema import TecanOverseasRecognitionResult
-from skills.tecanimport.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import.schema import DK_WORKFLOW, TecanOverseasRecognitionResult
+from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
 ARTIFACT_REFERENCE_HINT = (
@@ -56,7 +56,7 @@ class HarnessRuntime:
                 resources=self.resources,
                 middleware=runtime_middlewares(
                     memory_backend=self.resources.backend,
-                    structured_schema=PhilipsWgqRecognitionResult if workflow == WORKFLOW else None,
+                    structured_schema=PhilipsWgqRecognitionResult if workflow == WAG_WORKFLOW else None,
                 ),
                 tools=self.tools.as_list(),
                 workflow=workflow,
@@ -126,12 +126,16 @@ class HarnessRuntime:
                         yield self.resources.runs.emit_run_event(
                             run_id, event_type, payload, raw=chunk
                         )
-            if workflow == WORKFLOW:
+            if workflow == WAG_WORKFLOW:
                 if structured_response is None:
-                    raise ValueError("structured_response missing for philips_wgq_inbound_recognition")
+                    raise ValueError("structured_response missing for WAG")
                 result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
                     mode="json",
                 )
+            elif workflow == DK_WORKFLOW:
+                if tecan_response is None:
+                    raise ValueError("Tecan finalizer result missing for DK")
+                result = tecan_response.model_dump(mode="json")
             elif tecan_response is not None:
                 result = tecan_response.model_dump(mode="json")
         except GraphDrained:

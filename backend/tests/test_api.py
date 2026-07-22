@@ -13,6 +13,8 @@ from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
 from runtime.resources import AgentResources, ResourceConfig
 from runtime.runs import SqliteRunLedger
 from runtime.tools import ToolCatalog
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
+from skills.tecan_import import DK_WORKFLOW
 from tests.test_support import (
     FakeBrainFactory,
     StreamControl,
@@ -466,23 +468,26 @@ def _check_workflow_api(tmp: str) -> None:
         harness_factory=fake_harness,
     )
     request = {
-        "workflow": "philips_wgq_inbound_recognition",
+        "workflow": WAG_WORKFLOW,
         "messages": [user_message(text_block("workflow success"))],
     }
     with TestClient(app) as client:
         assert client.post("/runs", json={**request, "session_id": "reused"}).status_code == 422
         assert client.post("/runs", json={**request, "workflow": "unknown"}).status_code == 422
+        assert client.post(
+            "/runs", json={**request, "workflow": "philips_wgq_inbound_recognition"}
+        ).status_code == 422
 
         first = client.post("/runs", json=request)
         second = client.post("/runs", json=request)
         assert first.status_code == second.status_code == 200
         assert first.json()["session_id"] != second.json()["session_id"]
         first_run = wait_for_run(client, first.json()["run_id"], "succeeded")
-        assert first_run["workflow"] == "philips_wgq_inbound_recognition"
+        assert first_run["workflow"] == WAG_WORKFLOW
         assert first_run["result"]["outcome"] == "success"
 
         detail = client.get(f"/runs/{first.json()['run_id']}").json()
-        assert detail["workflow"] == "philips_wgq_inbound_recognition"
+        assert detail["workflow"] == WAG_WORKFLOW
         assert detail["result"] == first_run["result"]
         assert detail["events"][-1]["type"] == "status"
         assert detail["events"][-1]["payload"]["result"] == detail["result"]
@@ -495,6 +500,25 @@ def _check_workflow_api(tmp: str) -> None:
         problem_run = wait_for_run(client, problem["run_id"], "succeeded")
         assert problem_run["result"]["outcome"] == "input_problems"
         assert problem_run["result"]["data"]["items"] == []
+
+        dk_request = {
+            "workflow": DK_WORKFLOW,
+            "messages": [user_message(text_block("tecan final"))],
+        }
+        assert client.post("/runs", json={**dk_request, "session_id": "reused"}).status_code == 422
+        dk = client.post("/runs", json=dk_request)
+        assert dk.status_code == 200
+        dk_run = wait_for_run(client, dk.json()["run_id"], "succeeded")
+        assert dk_run["workflow"] == DK_WORKFLOW
+        assert dk_run["result"]["data"]["header"]["po"] == "PO123"
+
+        missing_dk = client.post(
+            "/runs",
+            json={"workflow": DK_WORKFLOW, "messages": [user_message(text_block("workflow success"))]},
+        )
+        assert missing_dk.status_code == 200
+        failed_dk = wait_for_run(client, missing_dk.json()["run_id"], "failed")
+        assert "Tecan finalizer result missing" in failed_dk["error"]
 
 
 def _check_startup_recovery(tmp: str) -> None:

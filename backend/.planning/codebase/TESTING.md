@@ -49,8 +49,8 @@ python -m tests.test_tecan_import
 | `tests.test_tools` | 五工具静态目录；MinerU `parse_documents` / `extract_archives` 表单、轮询、zip/json 落盘、进度事件、缺 env 错误 | `patch` HTTP / sleep / 时间戳；临时 artifacts |
 | `tests.test_run_ledger` | `SqliteRunLedger` 状态机、append-only 事件、查询游标、大 payload 外置、UTC+8 时间戳、usage 聚合；`AgentResources` 三库与 FS 路由；`/memories/AGENTS.md` baseline | `tempfile` + `ResourceConfig(data_dir=...)` |
 | `tests.test_harness` | stream 归一化（7 类事件）、cancel/`GraphDrained`、`NoProgress`、ToolTelemetry、MemoryMiddleware、**StructuredOutputRecovery**（重试封顶、`jump_to: "end"`、空壳 skeleton / 非空壳耗尽无 structured_response）、Philips/Tecan 结果投影 | `FakeBrainFactory`、`create_agent` 小图、`patch` env；临时 resources |
-| `tests.test_api` | 四 HTTP 端点、upload、workflow/session 422、session 单飞 409、轮询 `result`/events/usage 计价、cancel 404/409/202、启动 `fail_incomplete_runs`、OMS `run_created` JSONL best-effort | `TestClient` + 注入 `FakeBrainFactory` 的 `harness_factory`；`patch` OMS 路径 |
-| `tests.test_workflow_setup` | Skill.md 行数与关键句；**denylist** 后工具名集合；`subagents=[]`；Philips `ToolStrategy` / 无 workflow 无 `response_format`；middleware 装配（Recovery 首位 / `structured_schema=None` 无 Recovery / Memory 源路径）；`/skills/` 挂载 | `patch create_deep_agent`；临时 `AgentResources` |
+| `tests.test_api` | 四 HTTP 端点、`WAG` / `DK` workflow-session 422、session 单飞 409、轮询 `result`/events/usage 计价、cancel 404/409/202、启动 `fail_incomplete_runs`、OMS `run_created` JSONL best-effort | `TestClient` + 注入 `FakeBrainFactory` 的 `harness_factory`；`patch` OMS 路径 |
+| `tests.test_workflow_setup` | Skill.md / 货代版式参考关键句；WAG / DK **denylist** 后工具名集合；`subagents=[]`；WAG `ToolStrategy`、DK finalizer 路径、无 workflow 无 `response_format`；middleware 装配（Recovery 首位 / `structured_schema=None` 无 Recovery / Memory 源路径）；`/skills/` 挂载 | `patch create_deep_agent`；临时 `AgentResources` |
 | `tests.test_philips_wgq_inbound_recognition` | Philips schema 合同（24 字段 items、日期、outcome）；`normalize_product_id`；Tracking XLSX；Oracle 路径 mock 与降级 | `openpyxl` 夹具；`patch` artifacts 根与 Oracle 连接 |
 | `tests.test_tecan_import` | `inspect_supply_chain_workbooks` 只读与 JSON artifact；`finalize_tecan_overseas_recognition` 终态；24 字段、空白→`null`、数值格式、outcome/`input_problems` | 临时 uploads；`patch artifacts_root` |
 
@@ -59,7 +59,7 @@ python -m tests.test_tecan_import
 | 改动面 | 至少运行 |
 |--------|----------|
 | `runtime/middleware.py` / recovery / `jump_to` | `test_harness` |
-| 工具注册 / Philips denylist / Skill 装配 | `test_workflow_setup` + `test_tools` |
+| 工具注册 / WAG-DK denylist / Skill 装配 | `test_workflow_setup` + `test_tools` |
 | ledger / 事件 / 时区 | `test_run_ledger` |
 | HTTP / cancel / OMS 写点 | `test_api` |
 | Philips schema / Tracking / Oracle 工具 | `test_philips_wgq_inbound_recognition` |
@@ -104,7 +104,7 @@ python -m tests.test_tecan_import
 - `input_problems`：完整 `data.header` + 已证实 items（可 `[]`）+ 至少一条 `{source, location, issue, action}`；run 仍可 `succeeded`。
 - Philips：ToolStrategy / `structured_response` 路径（harness + schema 脚本）。
 - Tecan：`finalize_tecan_overseas_recognition` 投影（harness 事件链 + tecan 脚本）。
-- `test_workflow_setup` 锁定 denylist：Philips 工具集**含**共享 MinerU + XLSX + lookup，**不含** `finalize_tecan_overseas_recognition`。
+- `test_workflow_setup` 锁定 denylist：WAG 工具集**含**共享 MinerU + XLSX + lookup，**不含** Tecan finalizer；DK 工具集保留共享 MinerU + XLSX + finalizer，**不含** Philips lookup。
 
 ## 7. StructuredOutputRecovery 测试要点（`test_harness`）
 

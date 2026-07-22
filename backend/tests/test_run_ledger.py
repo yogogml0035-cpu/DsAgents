@@ -12,6 +12,7 @@ from runtime.resources import (
     ResourceConfig,
 )
 from runtime.runs import SqliteRunLedger
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
 from tests.test_support import messages_json, text_block, user_message
 
 
@@ -73,7 +74,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
             "workflow-run",
             "workflow-session",
             messages_json(hello_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         resources.runs.emit_run_status("workflow-run", "running")
         result = {"outcome": "input_problems", "data": None, "problems": [{"issue": "mixed"}]}
@@ -84,7 +85,7 @@ def _check_resources_and_ledger(tmp: str) -> None:
             result=result,
         )
         workflow_snapshot = resources.runs.get_run("workflow-run")
-        assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
+        assert workflow_snapshot.workflow == WAG_WORKFLOW
         assert workflow_snapshot.result == result
         assert terminal.payload["result"] == result
 

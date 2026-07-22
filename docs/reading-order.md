@@ -30,4 +30,4 @@
 3. `backend/.planning/codebase/CONVENTIONS.md` 与 `CONCERNS.md`
 4. `backend/tests/test_harness.py`、`backend/tests/test_workflow_setup.py`
 
-当前架构不使用 Tecan SubAgent、业务状态机或 Tecan HTTP workflow。若某项需求确实需要跨 run 暂停/恢复，先在架构文档定义唯一状态归属与查询合同，再编码。
+当前架构不使用 Tecan SubAgent 或业务状态机；Tecan HTTP workflow 为 `DK`。若某项需求确实需要跨 run 暂停/恢复，先在架构文档定义唯一状态归属与查询合同，再编码。

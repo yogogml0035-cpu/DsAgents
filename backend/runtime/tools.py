@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from integrations.mineru import extract_archives, parse_documents
-from skills.philipswgqinboundrecognition.scripts.tools import lookup_philips_wgq_master_data
-from skills.tecanimport.scripts.tools import (
+from skills.philips_wgq_inbound_recognition.scripts.tools import lookup_philips_wgq_master_data
+from skills.tecan_import.scripts.tools import (
     finalize_tecan_overseas_recognition,
     inspect_supply_chain_workbooks,
 )

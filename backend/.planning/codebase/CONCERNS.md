@@ -25,8 +25,8 @@
 
 ### workflow 工具收窄依赖手写 denylist
 
-- **位置**：`runtime/agent.py` `_PHILIPS_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
-- **事实**：Philips workflow 仅排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、主数据与 XLSX 检查器。
+- **位置**：`runtime/agent.py` `_WAG_EXCLUDED_TOOLS` / `_DK_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
+- **事实**：WAG 排除 Tecan finalizer，保留共享 MinerU、Philips 主数据与 XLSX 检查器；DK 排除 Philips lookup，保留共享工具与 Tecan finalizer。
 - **债**：新增跨业务工具时必须同步 denylist；若误改成业务-only allowlist，会破坏 `/memories/AGENTS.md` 中 ZIP/`extract_archives` 指引。
 - **验证**：`python -m tests.test_workflow_setup`。
 
@@ -39,8 +39,14 @@
 ### 静态五工具注册、无自动发现
 
 - **位置**：`runtime/tools.py`。
-- **事实**：Skill 工具靠静态 import + 元组注册；`package-data` 需手工同步 kebab-case 资源目录。
+- **事实**：Skill 工具靠静态 import + 元组注册；`package-data` 需手工同步各下划线 Skill 包内的资源。
 - **债**：新增 Skill 漏改 catalog 或 `pyproject.toml` package-data 时，运行时无工具或 wheel 缺 `SKILL.md`。
+
+### 下划线 Skill 名触发 DeepAgents 兼容性日志
+
+- **位置**：`skills/philips_wgq_inbound_recognition/SKILL.md`、`skills/tecan_import/SKILL.md`；DeepAgents `SkillsMiddleware`。
+- **事实**：当前 DeepAgents Agent Skills 校验只正式接受连字符名；下划线目录和 frontmatter `name` 仍会被加载，但首次读取时记录兼容性 warning。
+- **债**：每个新 Agent session 会产生两条 warning。若必须消除日志，只能等待上游接受下划线，或恢复上游规范的连字符资源目录；当前按产品命名要求保留下划线。
 
 ---
 
@@ -48,7 +54,7 @@
 
 ### Oracle thick mode / `ORACLE_CLIENT_LIB_DIR` 降级
 
-- **位置**：`skills/philipswgqinboundrecognition/scripts/tools.py` 的 `_oracle_data`、`_init_oracle_client`。
+- **位置**：`skills/philips_wgq_inbound_recognition/scripts/tools.py` 的 `_oracle_data`、`_init_oracle_client`。
 - **行为**：
   - 缺 `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` → 返回空映射 + `problems`（配置缺失），不抛到 HTTP。
   - 若设置 `ORACLE_CLIENT_LIB_DIR`，进程内一次 `oracledb.init_oracle_client(lib_dir=...)`；未设置则依赖 thin 默认路径。
@@ -72,14 +78,14 @@
   1. `@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`。
   2. 重试耗尽（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）时必须 `jump_to: "end"`，禁止只返回 `None`（注释明确：ToolStrategy 无 tools 时 model↔model 无限循环）。
   3. 空 `data` 壳：同回合 `ToolMessage.tool_call_id` 绑定恢复；耗尽 → all-null skeleton + `partial_success` + runtime problem（**不编造业务值**）。
-  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对 Philips 抛 `structured_response missing` → run `failed`。
+  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对 WAG 抛 `structured_response missing for WAG` → run `failed`。
 - **风险**：把 empty-shell fallback 当成业务「正常 partial」模板；或把 recovery 泛化到 Tecan（Tecan 应走 finalizer，`structured_schema=None`）。
 - **验证**：`python -m tests.test_harness`。
 
-### Tecan finalizer 非强制 → `result=null` 的成功 run
+### 通用 Tecan 请求可不调用 finalizer
 
 - **位置**：`runtime/execution.py` `_tecan_finalized_response`；工具名 `finalize_tecan_overseas_recognition`。
-- **事实**：仅信任该 ToolMessage；未调用时通用 run 仍可 `succeeded` 且 `result=None`。
+- **事实**：DK workflow 缺 finalizer 会 `failed`；仅通用 run 未调用时仍可 `succeeded` 且 `result=None`。
 - **风险**：客户端若只认 HTTP 200/succeeded 而不检查 `result`，会把「闲聊式成功」当业务完成。
 
 ### OMS 索引 best-effort、可静默丢失

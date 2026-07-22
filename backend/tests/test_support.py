@@ -9,8 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from skills.philipswgqinboundrecognition import WORKFLOW
-from skills.tecanimport.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
+from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
 class StreamControl:
@@ -128,7 +128,7 @@ class FakeBrain:
                     }
                 },
             }
-        if self.workflow == WORKFLOW and "missing structured" not in text:
+        if self.workflow == WAG_WORKFLOW and "missing structured" not in text:
             yield {
                 "type": "updates",
                 "ns": (),

@@ -9,8 +9,8 @@
 | 语言 | 用途 |
 |------|------|
 | **Python** `>=3.11,<4.0` | 全部产品与测试代码；当前环境常见 3.12 |
-| Markdown | Skill 资源：`skills/*/SKILL.md`、`skills/tecan-import/references/*.md` |
-| SQL | Philips Oracle 查询字符串（`skills/philipswgqinboundrecognition/scripts/tools.py` 内 `_ORACLE_SQL`） |
+| Markdown | Skill 资源：`skills/*/SKILL.md`、两个渠道的 `references/*.md` |
+| SQL | Philips Oracle 查询字符串（`skills/philips_wgq_inbound_recognition/scripts/tools.py` 内 `_ORACLE_SQL`） |
 | JSON / JSONL | run ledger 投影、artifacts、OMS 索引行 |
 
 无 TypeScript/前端；发行包为纯 Python wheel。
@@ -43,7 +43,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | 清单 | `backend/pyproject.toml`（`name = "dsagents"`，`version = "0.1.0"`） |
 | 构建 | setuptools `>=68`（`build-backend = "setuptools.build_meta"`） |
 | 安装布局 | `py-modules = ["api"]`；packages：`runtime*`、`integrations*`、`skills*` |
-| package-data | Skill 资源：`philips-wgq-inbound-recognition/SKILL.md`、`tecan-import/SKILL.md`、`tecan-import/references/*.md` |
+| package-data | Skill 资源：Philips / Tecan 的 `SKILL.md` 与 `references/*.md` |
 | 同步 | `cd backend && uv sync`；**不要**用 `pip install -e .` 绕过 lock |
 
 ### 直接依赖（`pyproject.toml` → `uv.lock` 锁定版本）
@@ -95,7 +95,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `GET` | `/runs/{run_id}` | 投影快照 + events + usage |
 | `POST` | `/runs/{run_id}/cancel` | 协作 cancel（`RunControl` drain） |
 
-请求体用 Pydantic v2（`extra="forbid"`）。唯一 HTTP workflow 字面量：`philips_wgq_inbound_recognition`。
+请求体用 Pydantic v2（`extra="forbid"`）。HTTP workflow 字面量：`WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。
 **无** session 管理 API、**无** SSE、**无** 下载端点、**无** HTTP Auth 中间件。
 
 ### Agent：DeepAgents + LangGraph
@@ -144,7 +144,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 4. `inspect_supply_chain_workbooks` — openpyxl 只读 → JSON artifact
 5. `finalize_tecan_overseas_recognition` — Tecan 终态 schema 校验
 
-Philips workflow **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU / XLSX / 本业务主数据工具。
+WAG **denylist** 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU / XLSX / Philips 主数据工具；DK **denylist** 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。
 
 ### 文档解析
 
@@ -167,12 +167,12 @@ Philips workflow **denylist** 排除 `finalize_tecan_overseas_recognition`，保
 
 三库连接**不共享**。时间戳统一 **UTC+8** 文本 `YYYY-MM-DD HH:MM:SS`。
 
-### Skills 成对目录
+### Skills 单目录
 
-| 资源（kebab + SKILL.md） | Python 包 |
-|--------------------------|-----------|
-| `skills/philips-wgq-inbound-recognition/` | `skills/philipswgqinboundrecognition/` |
-| `skills/tecan-import/` | `skills/tecanimport/` |
+| Skill 包（包含资源与代码） |
+|----------------------------|
+| `skills/philips_wgq_inbound_recognition/` |
+| `skills/tecan_import/` |
 
 共享合同：`skills/channel_contract.py`（items 24 字段等）。
 
@@ -197,7 +197,7 @@ Philips workflow **denylist** 排除 `finalize_tecan_overseas_recognition`，保
 | `MINERU_TIMEOUT_SECONDS` | 必需 | 请求与轮询超时（秒，int） |
 | `MINERU_EFFORT` | 可选 | 空字符串则传 `""` |
 
-**Oracle（`skills/philipswgqinboundrecognition/scripts/tools.py`）**
+**Oracle（`skills/philips_wgq_inbound_recognition/scripts/tools.py`）**
 
 | 变量 | 必需性 | 用途 |
 |------|--------|------|

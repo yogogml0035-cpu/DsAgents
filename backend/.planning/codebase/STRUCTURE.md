@@ -27,24 +27,24 @@ backend/
 │   ├── artifacts.py                # /artifacts 解析、上传命名、JSON artifact 读写
 │   └── mineru.py                   # parse_documents、extract_archives（MinerU HTTP）
 │
-├── skills/                         # 业务 Skill：资源目录 + Python 包成对
+├── skills/                         # 业务 Skill：下划线命名包内同时放资源与代码
 │   ├── __init__.py
 │   ├── channel_contract.py         # 共享 OrderItem(24)、RecognitionProblem、outcome 校验
-│   ├── philips-wgq-inbound-recognition/   # kebab-case 资源（挂载 /skills/）
-│   │   └── SKILL.md
-│   ├── philipswgqinboundrecognition/      # 可 import 包
-│   │   ├── __init__.py             # 导出 WORKFLOW、PhilipsWgqRecognitionResult
+│   ├── philips_wgq_inbound_recognition/   # 可 import 包，也是 /skills/ 资源目录
+│   │   ├── __init__.py             # 导出 WAG_WORKFLOW、PhilipsWgqRecognitionResult
+│   │   ├── SKILL.md
+│   │   ├── references/
+│   │   │   └── freight-forwarders.md      # DHL / DSV / FedEx / UPS / 康捷空版式提示
 │   │   ├── schema.py               # OrderHeader、RecognitionData、result
 │   │   └── scripts/
 │   │       ├── __init__.py
 │   │       └── tools.py            # lookup_philips_wgq_master_data（Tracking + Oracle）
-│   ├── tecan-import/               # kebab-case 资源
-│   │   ├── SKILL.md
-│   │   └── references/
-│   │       ├── fields.md
-│   │       └── rules.md
-│   └── tecanimport/                # 可 import 包
+│   └── tecan_import/               # 可 import 包，也是 /skills/ 资源目录
 │       ├── __init__.py
+│       ├── SKILL.md
+│       ├── references/
+│       │   ├── fields.md
+│       │   └── rules.md
 │       ├── schema.py               # TecanHeader、TecanOverseasRecognitionResult
 │       └── scripts/
 │           ├── __init__.py
@@ -92,7 +92,7 @@ backend/
 | 路径 | 职责 |
 |------|------|
 | `api.py` | `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`；session 单飞；usage 聚合计价 |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；Philips `ToolStrategy`；`_PHILIPS_EXCLUDED_TOOLS` denylist |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；WAG `ToolStrategy`；WAG/DK denylist |
 | `runtime/execution.py` | `HarnessRuntime`：归一化消息、stream → 七类事件、Philips structured_response、Tecan finalizer 捕获、协作 cancel |
 | `runtime/middleware.py` | `StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、`runtime_middlewares` |
 | `runtime/tools.py` | 五工具静态注册唯一入口 |
@@ -103,46 +103,38 @@ backend/
 | `integrations/artifacts.py` | 虚拟路径、`clean_filename` / `make_timestamped_name`、`write_json_artifact` |
 | `integrations/mineru.py` | MinerU 提交/轮询/下载；ZIP 解压 |
 | `skills/channel_contract.py` | 渠道共用 24 字段 item 与 outcome 语义 |
-| `skills/philipswgqinboundrecognition/schema.py` | `WORKFLOW`、`PhilipsWgqRecognitionResult` |
-| `skills/philipswgqinboundrecognition/scripts/tools.py` | Tracking + Oracle 主数据 |
-| `skills/tecanimport/schema.py` | `TecanOverseasRecognitionResult` |
-| `skills/tecanimport/scripts/tools.py` | XLSX 检查 + finalizer（无 Excel 生成） |
-| `pyproject.toml` | `dsagents` 发行、`package-data` 打包 kebab-case `SKILL.md` / references |
+| `skills/philips_wgq_inbound_recognition/schema.py` | `WAG_WORKFLOW`、`PhilipsWgqRecognitionResult` |
+| `skills/philips_wgq_inbound_recognition/scripts/tools.py` | Tracking + Oracle 主数据 |
+| `skills/tecan_import/schema.py` | `DK_WORKFLOW`、`TecanOverseasRecognitionResult` |
+| `skills/tecan_import/scripts/tools.py` | XLSX 检查 + finalizer（无 Excel 生成） |
+| `pyproject.toml` | `dsagents` 发行、`package-data` 打包各 Skill 包内 `SKILL.md` / references |
 
 ## 命名约定
 
-### Skill 成对目录（硬约束）
+### Skill 单目录（硬约束）
 
-每个业务 Skill 必须同时维护：
+每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；Agent 资源和运行时代码放在同一目录：
 
-| 角色 | 命名 | 挂载 / 导入 | 内容 |
-|------|------|-------------|------|
-| **资源目录** | **kebab-case**（可含连字符） | DeepAgents 挂载到 `/skills/` | `SKILL.md`、按需 `references/` |
-| **Python 包** | 合法 import 名（去连字符） | `from skills.<pkg> import ...` | `schema.py`、`scripts/tools.py` |
+| 目录 | 挂载 / 导入 | 内容 |
+|------|-------------|------|
+| `skills/philips_wgq_inbound_recognition/` | `/skills/` / `from skills.philips_wgq_inbound_recognition import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
+| `skills/tecan_import/` | `/skills/` / `from skills.tecan_import import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
 
-当前成对关系：
-
-| 资源目录 | Python 包 | 用途 |
-|----------|-----------|------|
-| `skills/philips-wgq-inbound-recognition/` | `skills/philipswgqinboundrecognition/` | workflow 指引、Philips header/schema、Tracking/Oracle |
-| `skills/tecan-import/` | `skills/tecanimport/` | Skill + references、Tecan header/schema、XLSX 输入与 finalizer |
-
-`pyproject.toml` `[tool.setuptools.package-data]` 必须列出 kebab-case 资源文件，否则 wheel 中 Agent 读不到 `SKILL.md`。
+`pyproject.toml` `[tool.setuptools.package-data]` 必须按包列出 `SKILL.md` 与 `references/*.md`，否则 wheel 中 Agent 读不到资源。
 
 新增 Skill 步骤：
 
-1. 新建 kebab-case 资源目录 + `SKILL.md`（及 references）
-2. 新建对应 Python 包 + schema / tools
-3. 在 `runtime/tools.py` **静态**注册新工具
-4. 更新 `package-data`、tests、codebase 文档
+1. 新建下划线命名 Python 包，并在包内放置 `SKILL.md`（及 references）、schema / tools
+2. 在 `runtime/tools.py` **静态**注册新工具
+3. 更新 `package-data`、tests、codebase 文档
 
-禁止：只加资源不加包、自动扫描注册、把业务-only 工具做成 workflow allowlist。
+禁止：把同一业务拆成资源目录和代码包、自动扫描注册、把业务-only 工具做成 workflow allowlist。
 
 ### 其它命名
 
 | 类别 | 约定 | 示例 |
 |------|------|------|
-| workflow 标识 | snake_case 字符串 | `philips_wgq_inbound_recognition` |
+| workflow 标识 | 大写渠道代码 | `WAG`、`DK` |
 | 工具函数 | snake_case callable `__name__` | `parse_documents`、`finalize_tecan_overseas_recognition` |
 | 虚拟路径 | POSIX 风格前缀 | `/artifacts/...`、`/skills/...`、`/memories/...` |
 | 主 Agent 名 | 常量 | `dsagents-main`（`MAIN_AGENT_NAME`） |
@@ -167,11 +159,11 @@ runtime.execution
   → runtime.tools
   → runtime.observability
   → runtime.runs
-  → skills.philipswgqinboundrecognition / skills.tecanimport
+  → skills.philips_wgq_inbound_recognition / skills.tecan_import
 
 runtime.agent
   → runtime.middleware
-  → skills.philipswgqinboundrecognition
+  → skills.philips_wgq_inbound_recognition
 
 runtime.tools
   → integrations.mineru
@@ -204,7 +196,7 @@ skills.* tools
 
 | 需求 | 放置位置 |
 |------|----------|
-| 新渠道抽取 Skill | kebab 资源目录 + Python 包 + `tools.py` 静态注册 |
+| 新渠道抽取 Skill | 单一下划线包（`SKILL.md` / references / schema / `tools.py`）+ 静态注册 |
 | 共享终态 JSON 语义 | `skills/channel_contract.py` |
 | 渠道专属 header / 证据规则 | 该渠道 `schema.py` / `SKILL.md` / `references/` |
 | 跨模型/工具横切行为 | 评估后放 `runtime/middleware.py` |
@@ -220,8 +212,8 @@ skills.* tools
 |------|------|
 | HTTP 应用 | `api.create_app()` / `api.app` |
 | 程序内执行 | `runtime.execution.create_harness(resources)` |
-| Philips 合同 | `skills.philipswgqinboundrecognition.schema.PhilipsWgqRecognitionResult` |
-| Tecan 合同 | `skills.tecanimport.schema.TecanOverseasRecognitionResult` |
+| Philips 合同 | `skills.philips_wgq_inbound_recognition.schema.PhilipsWgqRecognitionResult` |
+| Tecan 合同 | `skills.tecan_import.schema.TecanOverseasRecognitionResult` |
 | 共享 24 字段 | `skills.channel_contract.OrderItem` |
 | 五工具注册 | `runtime.tools.default_tool_catalog` |
 | 本地测试 | `cd backend && python -m tests.test_<name>` |

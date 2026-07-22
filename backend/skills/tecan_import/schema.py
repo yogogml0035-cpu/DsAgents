@@ -12,6 +12,8 @@ from skills.channel_contract import (
     validate_channel_outcome,
 )
 
+DK_WORKFLOW = "DK"
+
 
 class TecanHeader(ContractModel):
     """Tecan 境外业务票次抬头字段。"""
@@ -63,4 +65,4 @@ class TecanOverseasRecognitionResult(ContractModel):
         return validate_channel_outcome(self)
 
 
-__all__ = ["TecanHeader", "TecanRecognitionData", "TecanOverseasRecognitionResult"]
+__all__ = ["DK_WORKFLOW", "TecanHeader", "TecanRecognitionData", "TecanOverseasRecognitionResult"]

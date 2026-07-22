@@ -28,8 +28,8 @@ from typing_extensions import NotRequired
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
 from runtime.resources import RUNTIME_AGENTS_PATH
-from skills.philipswgqinboundrecognition import PhilipsWgqRecognitionResult
-from skills.philipswgqinboundrecognition.schema import (
+from skills.philips_wgq_inbound_recognition import PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition.schema import (
     OrderHeader,
     OrderItem,
     RecognitionData,

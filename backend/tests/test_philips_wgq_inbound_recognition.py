@@ -9,8 +9,8 @@ from unittest.mock import patch
 from openpyxl import Workbook
 from pydantic import ValidationError
 
-from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult
-from skills.philipswgqinboundrecognition.scripts.tools import (
+from skills.philips_wgq_inbound_recognition.schema import PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition.scripts.tools import (
     lookup_philips_wgq_master_data,
     normalize_product_id,
 )
