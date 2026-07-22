@@ -14,7 +14,7 @@
 
 - PDF/XLSX 同票材料由 Agent 动态识别角色、归集、抽取和裁决；PDF 使用 MinerU，XLSX 只读为 JSON artifact。
 - Philips 使用固定 `workflow=philips_wgq_inbound_recognition` 和 Pydantic structured response。
-- Tecan 用明确 Skill 请求和 `finalize_tecan_overseas_recognition` 最终工具；没有 Tecan HTTP workflow、A/B/C SubAgent 或 Excel 生成器。
+- Tecan 用明确 Skill 请求和 `finalize_tecan_overseas_recognition` 最终工具；没有 Tecan HTTP workflow、extractor SubAgent 或 Excel 生成器。
 - 两渠道都将唯一、干净的业务 JSON 写入 `run.result`。header 各自独立，`items[]` 共享完整 24 字段，不输出 `shipment`。
 - run 的业务 outcome 为 `success` / `partial_success` / `input_problems`；业务问题是 `succeeded` run，执行异常才是 `failed`。
 
@@ -27,8 +27,9 @@
 | `runtime/execution.py` | 执行、stream 归一化、结果捕获、cancel |
 | `runtime/middleware.py` | Philips recovery、tool telemetry、loop guard、compatibility |
 | `runtime/tools.py` | 5 工具静态目录 |
-| `integrations/` | MinerU、artifact、Oracle、OMS JSONL |
-| `skills/` | 渠道 Skill 资源/实现双目录和共享合同 |
+| `integrations/` | MinerU HTTP、artifact 路径与 JSON 落盘（无业务 schema） |
+| `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引 |
+| `skills/` | 渠道 Skill 资源/实现双目录、共享 `channel_contract`；Philips Oracle 主数据在 Skill 工具内 |
 
 ## 约束与命令
 

@@ -8,7 +8,7 @@
 - HTTP：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`，客户端轮询，无 SSE/session API；HTTP create_run 成功后写 best-effort OMS JSONL。
 - 事件：固定 7 类；GET 返回快照、顶层 `workflow` / `result`、增量 events、最新内容事件与 usage。OMS JSONL 不是 run event。
 - 业务：Philips 固定 workflow，Tecan 由明确 Skill 请求驱动；两者把最终 JSON 写到 `run.result`。header 各自独立，`items[]` 共用完整 24 字段，不输出 `shipment` 或 Excel。
-- 工具：静态 5 个，覆盖 PDF/ZIP 通用处理、Philips 主数据、共享 XLSX inspection 和 Tecan finalizer。没有 Tecan A/B/C extractor、业务状态机或 Excel 生成器。
+- 工具：静态 5 个，覆盖 PDF/ZIP 通用处理、Philips 主数据、共享 XLSX inspection 和 Tecan finalizer。没有 Tecan extractor SubAgent、业务状态机或 Excel 生成器。
 - middleware：集中于 `runtime/middleware.py`。Philips 使用有界 `StructuredOutputRecovery`；普通/Tecan run 不强制 Philips schema，Tecan 使用 finalizer 工具验证终态。
 
 ## 技术栈指针
