@@ -15,6 +15,9 @@ __pycache__/
 
 Study/
 backend/.env
+# setuptools / packaging artifacts (not source)
+backend/build/
+backend/dist/
 backend/dsagents.egg-info/
 backend/tests/tests_file/
 .playwright-mcp/

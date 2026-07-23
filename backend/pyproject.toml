@@ -25,8 +25,8 @@ dependencies = [
 ]
 
 # backend/ 作为安装根；发行名保持 dsagents，但源码顶层入口拆成 api.py 与
-# runtime/、integrations/、skills/ 三个包。两个内置 Skill 的资源目录与
-# Python 运行时包分开；带连字符的 Skill 目录必须随 wheel 一起打包。
+# runtime/、integrations/、skills/ 三个包。每个内置 Skill 都是一个可导入
+# 的下划线命名包，包内同时携带 Agent 资源与 Python 运行时代码。
 [tool.setuptools]
 package-dir = {"" = "."}
 py-modules = ["api"]
@@ -36,9 +36,11 @@ where = ["."]
 include = ["runtime*", "integrations*", "skills*"]
 
 [tool.setuptools.package-data]
-"skills" = [
-    "philips-wgq-inbound-recognition/SKILL.md",
-    "tecan-import/SKILL.md",
-    "tecan-import/references/*.md",
-    "tecan-import/assets/*",
+"skills.philips_wgq_inbound_recognition" = [
+    "SKILL.md",
+    "references/*.md",
+]
+"skills.tecan_import" = [
+    "SKILL.md",
+    "references/*.md",
 ]

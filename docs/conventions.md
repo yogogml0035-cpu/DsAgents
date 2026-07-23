@@ -1,46 +1,65 @@
 # 核心原则与维护规则
 
-> 根级 AGENTS.md 的详情文档之一。这些原则对全仓库每次任务都适用，须严格遵守。
+> 根级 `AGENTS.md` 的详情文档。实现事实在 `backend/.planning/codebase/`；本文放全局、长期有效的工程约束。
 
-## 核心原则（全局人工约束）
+## 核心原则
 
-- **能力可插拔**：Brain（如 DeepAgents）、执行器、工具做成可插拔；项目自身拥有 run、事件、资源、工具路由与运行时状态，不被硬编码到某个 runner、容器、模型或工作流。
-- **Protocol 不泛化**：`typing.Protocol` 只用于运行时注入的能力边界（当前 `Brain` / `BrainFactory`）。工具用普通 callable + `ToolCatalog`，资源 / ledger 用具体类；除非出现真实替换点，不为单实现代码新增 Protocol/ABC。读默认实现时从 `create_harness(...)` 进入。
-- **run 是事件源**：`run_events` 表 append-only 存完整规范化事件与 raw chunk；`runs` 表是事件投影出的快照。外部消费规范化事件；最终 `assistant_message.payload` 可携带最后一个 `thinking` 文本和最终 `text`。短期上下文不再自建回放，统一交给 LangGraph `checkpointer` + `thread_id=session_id`。
-- **保持运行时薄**：提交 run、驱动 Brain、规范化 stream chunk、写回 run 事件。在真实 caller 需要前，不增加服务层、策略框架、工作流引擎、容器或宽泛的安全/配置系统。
-- **真实错误透传**：暴露模型/工具执行 trace 并把真实错误向上传，不吞异常、不包装失真。
-- **简单性约束**：优先删减范围而非增加旋钮。
-- **源码顶层布局稳定**：产品代码落在 `backend/` 的 `api.py` + `runtime/` + `integrations/` + `skills/`；业务逻辑归属对应 Skill 包，不要再引入已删除的顶层辅助模块或 `backend/dsagents/` 包壳。
-- **Skill 双目录成对**：每个内置业务同时维护 **kebab-case 资源目录**（`SKILL.md`、references、assets，挂载 `/skills/`）与 **可 import 的 Python 包目录**（合法包名，含 `scripts/tools.py` 等）。Philips：`philips-wgq-inbound-recognition/` + `philipswgqinboundrecognition/`；Tecan：`tecan-import/` + `tecanimport/`。新增 Skill 须同时建两套目录，并在 `pyproject.toml` 的 `[tool.setuptools.package-data]` 追加资源文件；不要把资源只塞进 Python 包或只建一边。
-- **middleware 与有界 structured recovery**：实现集中在 `runtime/middleware.py`；`runtime_middlewares()` 固定顺序（`StructuredOutputRecovery` 最前）；`after_model` + `jump_to: "model"` 的重试必须同时声明 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。空 `data: {}` 壳（`success`/`partial_success` 但缺嵌套字段或 `items` 空）先以 `ToolMessage.tool_call_id` 精确匹配同一 AIMessage 的 schema call，合法文本 JSON 直接恢复结果并结束；未恢复才走 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 形状纠错。正常提示只要求 tool args，文本 JSON 只作无法调用工具时的后备；**空壳重试耗尽**时写入 schema 合法的 all-null `data` + `partial_success` + runtime problem（不是 `data:{}`，也不是 `data:null`/`input_problems`），保证能返回 JSON，不编造业务字段值。其他解析失败仍无 `structured_response` 退出。改动后跑 `python -m tests.test_harness`。
-- **Philips 业务结果 vs 执行失败**：业务 JSON 走 `run.result`（`outcome` 为 `success` / `partial_success` / `input_problems`）。`input_problems` 时 `data=null` 且 **run 仍 `succeeded`**；仅 `structured_response` 缺失/非法或运行时异常才令 run **`failed`**。不要用 `reply` 解析业务 JSON。
-- **workflow 工具收窄用 denylist**：为固定 workflow 收窄工具表时，用 denylist 排除**其他业务**工具（如帝肯的 `save_tecan_extraction` / `generate_tecan_import`），必须保留共享 MinerU 工具 `parse_documents` / `extract_archives` 以及本业务工具；禁止业务-only allowlist（会与 `/memories/AGENTS.md`、Skill 手册中的 ZIP/解析指引脱节）。验证：`python -m tests.test_workflow_setup`。
+- **能力可插拔，但运行时保持薄**：Brain、执行器、工具可注入；项目自身只拥有 run、事件、资源、工具路由与必要运行时状态。没有真实调用方前，不增加服务层、策略框架、任务队列、通用 workflow 引擎或宽泛配置体系。
+- **Protocol 不泛化**：`typing.Protocol` 只用于 `Brain` / `BrainFactory`。工具用 callable + `ToolCatalog`，资源与 ledger 用具体类；单实现不新建 Protocol/ABC。
+- **run-first**：`run_events` append-only，`runs` 是投影；最终业务 JSON 走 `run.result`。`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁，不做 session API 或业务状态。
+- **单一状态归属**：同票渠道抽取在单一 run 内完成。run ledger 已保存外部终态，checkpointer 已保存图上下文；不要额外增加消息表、任务状态、候选库、跨 run 恢复或 Tecan SubAgent 编排，除非出现明确消费者和唯一持久化归属。
+- **源码布局稳定**：产品代码只在 `backend/api.py`、`runtime/`、`integrations/`、`skills/`；历史 `backend/build/` 产物不是源码，也不进入 VCS。
 
-> 完整阐述与“为什么”见根级 `ARCHITECTURE.md` §5（run-first 执行模型）与 §7（系统级风险），以及 `backend/.planning/codebase/ARCHITECTURE.md`（内部架构与核心运行时原则）。
+## 渠道供应链合同
 
-## 维护规则
+- Philips 与 Tecan header 各自独立，`items[]` 共用完整 24 字段。每个返回商品行全字段出现，未知是 `null`，不以空字符串代替。
+- 不输出 `shipment`、Excel、候选列表、置信度、审计细节或 OMS 自动保存结果。
+- 本票交易/运输事实优先于主数据；主数据只能按唯一、明确的非语义标识补齐，不得覆盖本票数量、金额、重量、编号或运单。
+- 发票按上传顺序和原始行顺序；同 12NC 默认不合并；多发票/多运单按材料顺序以英文逗号连接。
+- `success` 无未解决业务缺失；`partial_success` 仅用于核心事实已确认、补充字段缺失；`input_problems` 用于票次/核心事实无法确认，仍返回完整 header、已证实 items（可空）与 `problems`。
+- 渠道 Skill 只解析 PDF/XLSX；ZIP、DOCX、图片内容不解析，需在材料足够时列入 `problems` 后继续。
 
-- **事实层在子项目**：`backend/.planning/codebase/` 是事实来源；根级只放导航和稳定全局原则。
-- **改代码后同步事实层**：修改 `backend/` 实现后，先更新对应事实文档，再视影响回看 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`。
-- **文档用简体中文**：保留代码标识符、文件路径、命令、配置键、API 名称、IP/端口原文。
-- **不外泄密钥**：文档不写入任何密钥 / token / 连接串。
-- **证据不足标注**：用“需确认 / 初步判断”表达，不写成硬规则。
-- **新增部署依赖须同步风险**：新增运行时/部署依赖（如外部客户端库、系统级组件）时，必须把对应的部署前提、缺失时的降级行为、验证步骤同步到 `backend/.planning/codebase/CONCERNS.md`（Oracle thick client 见该文件 **Operational Risks** / **External Dependency Risks**），并在根级 `ARCHITECTURE.md` §7 风险清单同步一条系统级条目。
+## 工具与 Skill
 
-## 仍成立的开发约定（来自分支落地）
+- 每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；包内含 `SKILL.md` / 按需 references（挂载 `/skills/`）、schema 和 scripts；新增时同步 `pyproject.toml` package-data。
+- 工具在对应 import 包的 `scripts/tools.py` 定义，在 `runtime/tools.py` 静态注册；当前恰 5 个，不做扫描/动态 loader。
+- WGQ workflow 缩窄工具表必须用 denylist 排除 Tecan finalizer，同时保留共享 `parse_documents`、`extract_archives`、`inspect_supply_chain_workbooks` 和 Philips lookup；DK workflow 用 denylist 排除 Philips lookup，保留共享工具和 Tecan finalizer；禁止业务-only allowlist。
+- DK 终态通过 `finalize_tecan_overseas_recognition` 校验并投影到 `run.result`，不生成 Excel。XLSX inspection 只读并写中间 JSON artifact。
 
-以下约定已在当前代码中稳定成立，修改相关面时优先遵守：
+## middleware 约定
 
-- **工具静态注册**：新业务工具写入对应 **可 import Skill 包** 的 `scripts/tools.py`，并在 `runtime/tools.py` 的 `default_tool_catalog()` 显式注册；不要做目录扫描或动态 loader。当前静态 5 工具：2 个 MinerU 通用（`parse_documents` / `extract_archives`）+ Philips 主数据 1 + Tecan 业务 2。Agent 可读流程写在同业务的 kebab 资源目录 `SKILL.md`，不要指望动态扫描资源树注册工具。
-- **事件 schema 固定 7 类**：`status` / `tool_execution` / `tool_progress` / `thinking` / `text_delta` / `assistant_message` / `model_usage`。不要重新引入已删除的 `tool_call` / `tool_status` / `tool_result`。
-- **artifact 路径显式传递**：HTTP 与 Skill 边界使用 `/artifacts/...`；生成文件唯一命名、不覆盖输入。业务问题统一 `input_problems`（Philips 在 `result.outcome`；Tecan 在工具返回 `code`），跨 run 不隐式恢复中间态；业务问题 ≠ run `failed`。
-- **共享操作手册 seed**：`/memories/AGENTS.md` 缺失时由资源层写入含 ZIP→`extract_archives` 等基线指引；**已有文件不覆盖**。改手册文案时同步检查 Skill 与 workflow 工具表是否仍一致。
-- **进程内边界**：同 `session_id` 单飞锁、`run_controls` cancel 字典均为进程内；多 worker 不提供跨进程互斥或强杀。
-- **SQLite 三库分离**：`dsagents_runs.db` / `dsagents_checkpoints.db` / `dsagents_store.db` 互不共享连接；新 schema 无迁移，部署切换需整目录一致清空或替换。
-- **Philips 空壳 vs 业务问题**：`data: {}` 是非法形状（recovery 纠错 / 耗尽 skeleton），不是 `input_problems`；`input_problems` 要求 `data=null` 且至少一条 problem。空壳耗尽的 all-null skeleton 使用 `partial_success` + runtime problem，**禁止**用编造业务值“凑成功”。
-- **空壳恢复只认同回合 tool_call_id**：空 `data: {}` 壳不得扫描历史 AI 文本；必须以当前 `ToolMessage.tool_call_id` 精确匹配**同一** AIMessage 上的 schema tool call，合法文本 JSON 才可直接写 `structured_response` 并 `jump_to: "end"`。正常路径只要求 tool args；文本 JSON 仅后备。
-- **SubAgent recovery 默认 schema 是 Philips**：`runtime_middlewares()` 无参构造的 `StructuredOutputRecovery` 默认校验 `PhilipsWgqRecognitionResult`。Tecan SubAgent 使用 `ExtractionReference` 时工具路径可正常，但**文本后备 recovery 语义错位**；改 SubAgent 结构化输出须显式传入正确 schema，或明确禁用文本 recovery 路径。
-- **Philips consolidated 票次**：同一 HAWB/运单下多张商业发票或多个 PO/DN 视为一票；header 字段可逗号拼接，items 按发票顺序展开。规则见 Skill 与 `PHILIPS_WORKFLOW_PROMPT`，改提示词时两边同步。
-- **OMS 旁路索引（非 run_events）**：实现在 `runtime/oms_log.py`。仅 HTTP `POST /runs` 在 `create_run` **成功之后** best-effort 追加 JSONL（默认 `backend/log/oms_log.log`，锚定 `backend/`）；写失败吞异常、不阻塞已创建 run。**不是**第 8 类事件，不进入 `run_events`。`/upload`、422、409 不写；程序内 `execute_run` 不经此路径。细节见 backend `INTEGRATIONS.md` / `ARCHITECTURE.md`。
-- **时间戳中国时区**：`SqliteRunLedger` 与 `oms_log` 统一使用 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`；改格式须两边同步。
-- **运行时日志目录不入库**：`backend/log/` 已 gitignore（含 `oms_log.log`）；勿提交本地 OMS 索引文件。
+- 运行时 middleware 集中于 `runtime/middleware.py`。跨模型/工具的观测、循环检测、兼容性放这里；业务字段裁决和渠道 outcome 不放全局 middleware。
+- `StructuredOutputRecovery` 是 WGQ 专用 class-based `after_model` hook。它必须保留 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，不能只返回 `None`。
+- 空 data 壳只可凭同回合 `ToolMessage.tool_call_id` 匹配同一 AIMessage；合法文本 JSON 才能恢复。空壳耗尽保留 all-null `partial_success` + runtime problem 技术 fallback，其他未恢复的 Philips structured response 使 run 失败。
+- DK/普通 run 用 `runtime_middlewares(structured_schema=None)`，不按 Philips schema 做文本恢复。Tecan finalizer 是更窄的业务校验边界。
+- LangChain middleware 顺序：`before_*` 正序、`after_*` 逆序、`wrap_*` 外层先入后出；需最后处理 response 的 recovery 放在列表最前。
+
+## HTTP、事件与存储
+
+- HTTP 固定四端点，禁止重引入 SSE、session CRUD 或旧顶层辅助模块。
+- 事件固定 7 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
+- OMS 旁路索引在 HTTP `create_run` 成功后 best-effort 写 JSONL；非 `run_events`、无查询 API、失败不阻塞 run。
+- SQLite 的 run/checkpoint/store 三库分离；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`。
+
+## 文档与验证
+
+- backend 代码变更后，先更新 `backend/.planning/codebase/`，再更新根级 `ARCHITECTURE.md`、`INTERFACES.md`、`coding_maps/SYSTEM_MAP.md` 与相关说明。
+- 长期文档用简体中文，保留标识符、路径、命令和配置键；不记录密钥、`.env` 值或私有连接串。
+- 测试是 `cd backend; python -m tests.<name>` 的 assert 脚本，不是 pytest。真实模型、MinerU、Oracle、外部 HTTP 与本地回归分开。
+- 修改 recovery 跑 `test_harness`；改 workflow 工具表跑 `test_workflow_setup`；改渠道最终合同跑 Philips/Tecan 测试；最后全量七脚本和根目录 `git diff --check`。
+
+本地默认门禁（七脚本）：
+
+```powershell
+cd backend
+uv sync
+python -m tests.test_tools
+python -m tests.test_run_ledger
+python -m tests.test_harness
+python -m tests.test_api
+python -m tests.test_workflow_setup
+python -m tests.test_philips_wgq_inbound_recognition
+python -m tests.test_tecan_import
+```
+
+完整命令、真实集成开关与启动方式见 [commands.md](commands.md)。

@@ -43,7 +43,8 @@ from runtime.observability import (
 )
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import ToolCatalog
-from skills.philipswgqinboundrecognition.schema import PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition.schema import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import.schema import DK_WORKFLOW
 from tests.test_support import (
     FakeBrainFactory,
     _recognition_result,
@@ -108,7 +109,7 @@ def _check_model_env_loading(tmp: str) -> None:
                 resources=SimpleNamespace(backend=object(), checkpointer=object(), store=object()),
                 middleware=[],
                 tools=[],
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         kwargs = create.call_args.kwargs
         assert kwargs["model"] is factory.model
@@ -407,7 +408,7 @@ def _check_empty_data_shell_coaching() -> None:
     assert is_empty_recognition_data_shell(
         {
             "outcome": "partial_success",
-            "data": {"shipment": {}, "header": {}, "items": []},
+            "data": {"header": {}, "items": []},
             "problems": [
                 {
                     "source": "pdf",
@@ -418,20 +419,8 @@ def _check_empty_data_shell_coaching() -> None:
             ],
         }
     )
-    assert not is_empty_recognition_data_shell(
-        {
-            "outcome": "input_problems",
-            "data": None,
-            "problems": [
-                {
-                    "source": "batch",
-                    "location": "shipment",
-                    "issue": "multi",
-                    "action": "split",
-                }
-            ],
-        }
-    )
+    input_problem = _recognition_result("input problems")
+    assert not is_empty_recognition_data_shell(input_problem)
     assert not is_empty_recognition_data_shell(_recognition_result("success"))
 
     class _FakeStructuredValidationError(Exception):
@@ -440,7 +429,7 @@ def _check_empty_data_shell_coaching() -> None:
             self.ai_message = ai_message
             super().__init__(
                 f"Failed to parse structured output for tool '{tool_name}': "
-                "data.shipment Field required"
+                "data.header Field required"
             )
 
     empty_ai = AIMessage(
@@ -458,7 +447,7 @@ def _check_empty_data_shell_coaching() -> None:
         _FakeStructuredValidationError("PhilipsWgqRecognitionResult", empty_ai)
     )
     assert "data 不能是 {}" in empty_err
-    assert "shipment" in empty_err
+    assert "header" in empty_err
     assert "请修正后重试" in empty_err
     assert "```json" in empty_err
     assert "original_waybill_number" in empty_err
@@ -589,11 +578,11 @@ def _check_empty_data_shell_coaching() -> None:
     # Empty-shell coaching must include the minimal legal shape and tool-first guidance.
     coach = tool_retry["messages"][0].content
     assert "```json" in coach
-    assert "shipment" in coach and "original_waybill_number" in coach
+    assert "header" in coach and "original_waybill_number" in coach
     assert "product_id" in coach
     assert "只调用结构化工具" in coach
     assert "只补 problems" in coach or "只改 problems" in EMPTY_DATA_SHELL_HINT
-    # Skeleton itself is a valid success payload (all-null fields).
+    # Skeleton itself is a valid all-null recovery payload.
     assert PhilipsWgqRecognitionResult.model_validate(PHILIPS_MINIMAL_DATA_SKELETON)
 
     # Exhausted empty-shell retries: legal all-null data skeleton, not run failure.
@@ -607,7 +596,6 @@ def _check_empty_data_shell_coaching() -> None:
     assert isinstance(fallback, PhilipsWgqRecognitionResult)
     assert fallback.outcome == "partial_success"
     assert fallback.data is not None
-    assert fallback.data.shipment.pieces is None
     assert fallback.data.header.original_waybill_number is None
     assert len(fallback.data.items) == 1
     assert fallback.data.items[0].product_id is None
@@ -896,6 +884,20 @@ def _check_harness(tmp: str) -> None:
         }
         assert factory.received_payloads[0] == hello_messages
 
+        tecan_messages = [user_message(text_block("tecan final"))]
+        resources.runs.create_run("run-tecan", "thread-tecan", messages_json(tecan_messages))
+        list(harness.execute_run(tecan_messages, "thread-tecan", "run-tecan"))
+        tecan_snapshot = resources.runs.get_run("run-tecan")
+        assert tecan_snapshot.status == "succeeded"
+        assert tecan_snapshot.result["data"]["header"]["po"] == "PO123"
+        assert len(tecan_snapshot.result["data"]["items"][0]) == 24
+        tecan_tools = [
+            event.payload["name"]
+            for event in resources.runs.get_run_events("run-tecan")
+            if event.event_type == "tool_execution"
+        ]
+        assert "finalize_tecan_overseas_recognition" in tecan_tools
+
         # Usage: one main_agent call + one subagent call, summed correctly.
         # The subagent chunk carried usage but its text never leaks as text_delta.
         usage_events = [event for event in raw_events if event.event_type == "model_usage"]
@@ -925,7 +927,7 @@ def _check_harness(tmp: str) -> None:
         ]
         resources.runs.create_run("run-h3", "thread-b", messages_json(multimodal_messages))
         list(harness.execute_run(multimodal_messages, "thread-b", "run-h3"))
-        normalized_messages = factory.received_payloads[2]
+        normalized_messages = factory.received_payloads[3]
         assert len(normalized_messages) == 2
         assert normalized_messages[1]["content"] == [
             {"type": "text", "text": "What is in this file?"},
@@ -952,19 +954,19 @@ def _check_harness(tmp: str) -> None:
             "run-workflow",
             "thread-workflow",
             messages_json(workflow_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         workflow_events = list(
             harness.execute_run(
                 workflow_messages,
                 "thread-workflow",
                 "run-workflow",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         workflow_snapshot = resources.runs.get_run("run-workflow")
         assert workflow_snapshot.status == "succeeded"
-        assert workflow_snapshot.workflow == "philips_wgq_inbound_recognition"
+        assert workflow_snapshot.workflow == WAG_WORKFLOW
         assert workflow_snapshot.result["data"]["header"]["original_waybill_number"] == "9198153694"
         assert workflow_events[-1].payload["result"] == workflow_snapshot.result
 
@@ -973,14 +975,14 @@ def _check_harness(tmp: str) -> None:
             "run-input-problems",
             "thread-input-problems",
             messages_json(input_problem_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         list(
             harness.execute_run(
                 input_problem_messages,
                 "thread-input-problems",
                 "run-input-problems",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         assert resources.runs.get_run("run-input-problems").status == "succeeded"
@@ -991,14 +993,14 @@ def _check_harness(tmp: str) -> None:
             "run-missing-structured",
             "thread-missing-structured",
             messages_json(missing_messages),
-            workflow="philips_wgq_inbound_recognition",
+            workflow=WAG_WORKFLOW,
         )
         list(
             harness.execute_run(
                 missing_messages,
                 "thread-missing-structured",
                 "run-missing-structured",
-                workflow="philips_wgq_inbound_recognition",
+                workflow=WAG_WORKFLOW,
             )
         )
         missing_snapshot = resources.runs.get_run("run-missing-structured")

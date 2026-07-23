@@ -1,29 +1,27 @@
 # 项目总览
 
-> 本文件承接 AGENTS.md 的详细说明（当前重点、技术栈指针、源码阅读入口）。项目定位、关键约定见 [`AGENTS.md`](../AGENTS.md)。
+> 本文件承接 `AGENTS.md` 的项目定位和源码阅读入口。稳定边界见 `ARCHITECTURE.md`，具体事实见 `backend/.planning/codebase/`。
 
 ## 当前重点
 
-- 对话短期上下文：LangGraph `checkpointer` + `thread_id=session_id`
-- 本地 SQLite：run ledger + LangGraph store/checkpointer，路径固定在 `backend/data/`，文件按需创建；新 schema 使用中国时区 UTC+8 本地时间 `YYYY-MM-DD HH:MM:SS`（与 OMS 一致）；三库互不共享连接
-- HTTP：`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`、`POST /upload`；`POST /runs` 可选固定 Philips workflow；成功 `create_run` 后 best-effort OMS 旁路索引；无 SSE、无鉴权/CORS
-- 事件：固定 7 类；GET 返回快照、顶层 `workflow`/`result`、增量 events、`latest_content_event` 与 `usage`；OMS JSONL **不是** run event
-- 业务能力：Philips 外高桥用 `philips_wgq_inbound_recognition` + 单一主数据 Tool 返回结构化 JSON；workflow 工具收窄用 denylist（保留共享 MinerU）；Tecan 保留 2 Tool 与 A/B extractor/Excel
-- middleware：集中在 `runtime/middleware.py`（含 `StructuredOutputRecovery` 有界重试、空 data 壳按 `tool_call_id` 同回合恢复、空壳耗尽 all-null skeleton；SubAgent 默认 recovery schema 仍是 Philips）
-- 源码布局：`api.py` + `runtime/`（含 `oms_log.py`）+ `integrations/` + `skills/`（发行名 `dsagents`）；Skill 为 kebab 资源目录 + 可 import 包成对；OMS 日志 `backend/log/oms_log.log`
+- run-first：SQLite run ledger 记录事件和投影；LangGraph checkpointer/store 分别保存图上下文和 Agent memory；三库互不共享连接。
+- HTTP：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`，客户端轮询，无 SSE/session API；HTTP create_run 成功后写 best-effort OMS JSONL（非 `run_events`、无查询 API、失败不阻塞 run）。
+- 事件：固定 7 类；GET 返回快照、顶层 `workflow` / `result`、增量 events、最新内容事件与 usage。OMS JSONL 不是 run event。
+- 业务：`WGQ` 路由 Philips 外高桥，`DK` 路由 Tecan 境外供应链；两者把最终 JSON 写到 `run.result`。header 各自独立，`items[]` 共用完整 24 字段，不输出 `shipment` 或 Excel。
+- Skill：**单目录**下划线可 import 包（资源与代码同目录）；新增须更新 `package-data`。Tecan 不携带 Excel 模板或生成器。
+- 工具：静态 5 个，覆盖 PDF/ZIP 通用处理、Philips 主数据、共享 XLSX inspection 和 Tecan finalizer。WGQ denylist 排除 Tecan finalizer，DK denylist 排除 Philips lookup；禁止业务-only allowlist。没有 Tecan extractor SubAgent 或业务状态机。
+- middleware：集中于 `runtime/middleware.py`。WGQ 使用有界 `StructuredOutputRecovery`（`can_jump_to` 含 `"end"`，耗尽显式 `jump_to: "end"`）；DK/普通 run 不强制 Philips schema，DK 使用 finalizer 工具验证终态。
+- 源码权威：仅 `backend/api.py`、`runtime/`、`integrations/`、`skills/`；**不要**把 `backend/build/` 当源码。
 
 ## 技术栈指针
 
-完整技术栈（含 DeepAgents/LangGraph、SQLite、MinerU、openpyxl 与可选 oracledb）见 [`coding_maps/SYSTEM_MAP.md`](../coding_maps/SYSTEM_MAP.md) §2 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md)。
+完整技术栈见 [`coding_maps/SYSTEM_MAP.md`](../coding_maps/SYSTEM_MAP.md) 与 [`backend/.planning/codebase/STACK.md`](../backend/.planning/codebase/STACK.md)：Python + uv、FastAPI、DeepAgents/LangGraph、SQLite、MinerU、openpyxl（XLSX 输入）和可选 Oracle。
 
 ## 源码阅读入口
 
-- 运行时主链：`backend/runtime/execution.py`（`HarnessRuntime.execute_run`）、`backend/runtime/agent.py`（Brain/SubAgent 装配）、`backend/runtime/middleware.py`（middleware hook）
-- Philips 识别（成对）：资源 `backend/skills/philips-wgq-inbound-recognition/SKILL.md` + 包 `backend/skills/philipswgqinboundrecognition/`（`schema.py` + `scripts/tools.py`），以及 [`philips-wgq-inbound-recognition-prd.md`](philips-wgq-inbound-recognition-prd.md)
-- Tecan（成对）：资源 `backend/skills/tecan-import/`（`SKILL.md` + `references/` + `assets/`）+ 包 `backend/skills/tecanimport/scripts/{tools.py,documents.py}`
-- artifact 基础设施：`backend/integrations/artifacts.py` — 文件名清洗、artifact 虚拟路径与物理路径互转、原子落盘
-- MinerU 集成：`backend/integrations/mineru.py` — `parse_documents` / `extract_archives`
-- Run 持久化：`backend/runtime/runs.py`
-- HTTP 契约：[INTERFACES.md](../INTERFACES.md)
-- 系统地图：[coding_maps/SYSTEM_MAP.md](../coding_maps/SYSTEM_MAP.md)
-- 按任务分类的完整阅读顺序：[reading-order.md](reading-order.md)
+- 运行时主链：`backend/runtime/execution.py`（执行/结果投影）、`backend/runtime/agent.py`（Brain 装配与 denylist）、`backend/runtime/middleware.py`（hook）。
+- 共享渠道合同：`backend/skills/channel_contract.py`，业务验收见 [`channel-supply-chain-json-prd.md`](channel-supply-chain-json-prd.md)。
+- Philips：`backend/skills/philips_wgq_inbound_recognition/`（`SKILL.md`、货代版式 `references/`、`schema.py`、`scripts/tools.py`）。
+- Tecan：`backend/skills/tecan_import/`（`SKILL.md`、`references/`、`schema.py`、`scripts/tools.py`；无 Excel 资产）。
+- artifact 基础设施：`backend/integrations/artifacts.py`；MinerU：`backend/integrations/mineru.py`；run 持久化：`backend/runtime/runs.py`。
+- 接口：[INTERFACES.md](../INTERFACES.md)；地图：[coding_maps/SYSTEM_MAP.md](../coding_maps/SYSTEM_MAP.md)；按任务阅读：[reading-order.md](reading-order.md)。

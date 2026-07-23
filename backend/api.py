@@ -41,7 +41,7 @@ _PRICEABLE_MODELS = {"MiniMax-M3"}
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    workflow: Literal["philips_wgq_inbound_recognition"] | None = None
+    workflow: Literal["WGQ", "DK"] | None = None
     session_id: str | None = None
     messages: list["RunMessage"]
 

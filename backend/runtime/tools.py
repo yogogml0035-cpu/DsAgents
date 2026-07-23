@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from integrations.mineru import extract_archives, parse_documents
-from skills.philipswgqinboundrecognition.scripts.tools import lookup_philips_wgq_master_data
-from skills.tecanimport.scripts.tools import (
-    generate_tecan_import,
-    save_tecan_extraction,
+from skills.philips_wgq_inbound_recognition.scripts.tools import lookup_philips_wgq_master_data
+from skills.tecan_import.scripts.tools import (
+    finalize_tecan_overseas_recognition,
+    inspect_supply_chain_workbooks,
 )
 
 ToolHandler = Callable[..., Any]
@@ -31,7 +31,7 @@ def default_tool_catalog() -> ToolCatalog:
             parse_documents,
             extract_archives,
             lookup_philips_wgq_master_data,
-            save_tecan_extraction,
-            generate_tecan_import,
+            inspect_supply_chain_workbooks,
+            finalize_tecan_overseas_recognition,
         )
     )

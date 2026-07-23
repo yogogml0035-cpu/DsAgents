@@ -1,53 +1,43 @@
----
-last_mapped_commit: 555bca7
-analysis_date: 2026-07-20
-focus: quality
----
-
 # TESTING — backend 测试体系事实
 
-> 记录 `backend/tests/` 的组织方式、本地回归与真实集成分离、mock 辅助与门禁建议。
-> **非 pytest**：测试为可执行 assert 脚本。
+> Analysis Date: 2026-07-22。测试是可直接执行的 assert 脚本，**不使用 pytest 收集器**。以 `backend/tests/` 源码为准。
 
-## 运行模型
-
-- 包管理：`cd backend && uv sync`（不要用 `pip install -e .` 绕过 `uv.lock`）
-- 调用方式：
-
-```powershell
-cd backend
-python -m tests.<module_name>
-```
-
-- 每个测试模块提供 `run() -> None`，以 `assert` 失败即非零退出；多数含：
-
-```python
-if __name__ == "__main__":
-    run()
-```
-
-- **没有** `pytest` 配置、fixture 发现或 `conftest.py` 依赖
-- 工作目录应为 `backend/`（或保证包 `runtime` / `skills` / `tests` 可 import）
-- Windows PowerShell 友好：上表命令直接可用；长路径/中文路径在 real 测试中常见，注意引号
-
-## 测试清单（本地回归）
-
-| 模块 | 用途 |
-|------|------|
-| `tests.test_tools` | 静态 5 工具目录名；MinerU `parse_documents` / `extract_archives` 在 mock HTTP 下的路径、进度、部分失败、缺 `MINERU_BASE_URL` 快速失败 |
-| `tests.test_run_ledger` | `AgentResources` 路由与 SQLite 三库；`SqliteRunLedger` 状态/事件/时间戳格式；`model_usage` 聚合；`/memories/AGENTS.md` seed 不覆盖 |
-| `tests.test_harness` | FakeBrain 事件管线；middleware（telemetry / no-progress / memory / recovery / empty shell）；Philips `structured_response` 缺失 → `failed`；`input_problems` 仍 `succeeded`；env 加载 |
-| `tests.test_api` | FastAPI `TestClient`：upload / runs / cancel / 启动中断恢复 / usage 计价 / OMS `run_created`；workflow API 与冲突 session |
-| `tests.test_workflow_setup` | Skill `SKILL.md` 体量与关键文案；middleware 数量（主 5 / 子 4）；**denylist** 工具表；Philips prompt / ToolStrategy / skills 挂载 |
-| `tests.test_philips_wgq_inbound_recognition` | `PhilipsWgqRecognitionResult` 契约；`normalize_product_id`；Tracking Excel + **mock Oracle** 主数据与降级 |
-| `tests.test_tecan_import` | `save_tecan_extraction` / `generate_tecan_import`：A/B/C 一致与冲突、`input_problems`、币种/主数据冲突、xlsx 输出 |
-| `tests.test_support` | **非独立门禁**：共享 `FakeBrain` / `FakeBrainFactory` / message helpers / `wait_for_run`；被 api/harness 等 import |
-
-### 建议本地门禁顺序（与 `Agents.md` 一致）
+## 1. 运行方式
 
 ```powershell
 cd backend
 uv sync
+python -m tests.<module_name>
+```
+
+硬性约定：
+
+- 必须用 `python -m tests.<name>`，使包导入（`from runtime...` / `from api...` / `from tests.test_support...`）成立。
+- **不要** `python tests/test_xxx.py`（顶层导入会失败）。
+- **不要** `pytest` / `unittest discover` 作为默认门禁。
+- **不要**用 `pip install -e .` 绕过 `uv.lock`。
+- 入口形态：各模块定义 `run() -> None`，末尾 `if __name__ == "__main__": run()`（真实 HTTP 脚本另有 `main()` + argparse 的变体）。
+- 断言使用内置 `assert`；失败即 traceback 非零退出。成功通常无冗长输出（真实集成脚本会打印进度）。
+- `tests/` 为普通包（含 `__init__.py`）；无 pytest.ini / conftest / 参数化装饰器。
+
+## 2. 本地回归 vs 外部依赖（分层）
+
+| 层级 | 特征 | 是否默认门禁 |
+|------|------|----------------|
+| **本地回归** | `FakeBrain` / `unittest.mock.patch` / 临时目录 SQLite / 无真实模型·MinerU·Oracle·外网 | **是** |
+| **真实集成** | 需已启动服务、样例文件、真实 `MINIMAX_*` / MinerU / 可选 Oracle；环境变量 opt-in | **否** |
+| **诊断基线** | 如 MiniMax cache；直接 `-m` 可跑但对发布不强制 | **否** |
+
+本地回归**不**证明模型识别质量；真实样例才验证同票归集、冲突裁决与主数据唯一匹配。
+
+## 3. 测试模块全表
+
+### 3.1 本地回归（七脚本，默认门禁）
+
+建议按序全量执行：
+
+```powershell
+cd backend
 python -m tests.test_tools
 python -m tests.test_run_ledger
 python -m tests.test_harness
@@ -57,140 +47,155 @@ python -m tests.test_philips_wgq_inbound_recognition
 python -m tests.test_tecan_import
 ```
 
-文档变更：仓库根目录 `git diff --check`。
+| 模块 | 职责摘要 | 典型 mock / 夹具 |
+|------|----------|------------------|
+| `tests.test_tools` | 五工具静态目录；MinerU `parse_documents` / `extract_archives` 表单、轮询、zip/json 落盘、进度事件、缺 env 错误 | `patch` HTTP / sleep / 时间戳；临时 artifacts |
+| `tests.test_run_ledger` | `SqliteRunLedger` 状态机、append-only 事件、查询游标、大 payload 外置、UTC+8 时间戳、usage 聚合；`AgentResources` 三库与 FS 路由；`/memories/AGENTS.md` baseline | `tempfile` + `ResourceConfig(data_dir=...)` |
+| `tests.test_harness` | stream 归一化（7 类事件）、cancel/`GraphDrained`、`NoProgress`、ToolTelemetry、MemoryMiddleware、**StructuredOutputRecovery**（重试封顶、`jump_to: "end"`、空壳 skeleton / 非空壳耗尽无 structured_response）、Philips/Tecan 结果投影 | `FakeBrainFactory`、`create_agent` 小图、`patch` env；临时 resources |
+| `tests.test_api` | 四 HTTP 端点、`WGQ` / `DK` workflow-session 422、session 单飞 409、轮询 `result`/events/usage 计价、cancel 404/409/202、启动 `fail_incomplete_runs`、OMS `run_created` JSONL best-effort | `TestClient` + 注入 `FakeBrainFactory` 的 `harness_factory`；`patch` OMS 路径 |
+| `tests.test_workflow_setup` | Skill.md / 货代版式参考关键句；WGQ / DK **denylist** 后工具名集合；`subagents=[]`；WGQ `ToolStrategy`、DK finalizer 路径、无 workflow 无 `response_format`；middleware 装配（Recovery 首位 / `structured_schema=None` 无 Recovery / Memory 源路径）；`/skills/` 挂载 | `patch create_deep_agent`；临时 `AgentResources` |
+| `tests.test_philips_wgq_inbound_recognition` | Philips schema 合同（24 字段 items、日期、outcome）；`normalize_product_id`；Tracking XLSX；Oracle 路径 mock 与降级 | `openpyxl` 夹具；`patch` artifacts 根与 Oracle 连接 |
+| `tests.test_tecan_import` | `inspect_supply_chain_workbooks` 只读与 JSON artifact；`finalize_tecan_overseas_recognition` 终态；24 字段、空白→`null`、数值格式、outcome/`input_problems` | 临时 uploads；`patch artifacts_root` |
 
-## 真实集成测试（`test_real_*` 与 opt-in）
+### 3.2 共享支持（非独立门禁）
 
-与本地回归**严格分离**：默认不跑外部依赖；多数通过环境变量 gate，未设置则 print skip 后返回。
-
-| 模块 | Gate / 说明 |
-|------|-------------|
-| `tests.test_real_philips_wgq_inbound_recognition` | `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；真实 HTTP API + 样本 PDF/Tracking；覆盖 DHL/DSV/FedEx/UPS/康捷空等 case |
-| `tests.test_real_philips_wgq_ups` | 手动/诊断向 UPS 普货 case；默认连本地 API；依赖样本目录 env |
-| `tests.test_real_image_run` | `DSAGENTS_RUN_REAL_IMAGE_TEST=1`；上传图片 + 真实模型描述 |
-| `tests.test_real_multi_pdf_run` | `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；多 PDF + MinerU 解析覆盖检查 |
-| `tests.test_minimax_cache_baseline` | **opt-in 诊断**，非 Stage-1 门禁；对真实 MiniMax 服务打两次同 session 请求观察 cache_read；需已启动 server + 真实 `MINIMAX_*` |
-
-常见 env（名称保留原文，**不**记录密钥值）：
-
-- API：`DSAGENTS_API_BASE_URL` / `DSAGENTS_BASE_URL`（默认如 `http://127.0.0.1:8500`）
-- 样本路径：`DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT`、`DSAGENTS_IMAGE_PATH`、`DSAGENTS_PDF_DIR` 等
-- 超时/轮询：`DSAGENTS_REAL_*_TIMEOUT_SECONDS`、`DSAGENTS_REAL_*_POLL_SECONDS`
-- 外部能力本身：`MINIMAX_*`、`MINERU_*`、`ORACLE_*`、`ORACLE_CLIENT_LIB_DIR`（thick mode；缺失优雅降级）
-
-真实集成前通常需另开终端启动服务，例如：
-
-```powershell
-cd backend
-uv run uvicorn api:app --host 0.0.0.0 --port 8500
-```
-
-```powershell
-cd backend
-$env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST = "1"
-python -m tests.test_real_philips_wgq_inbound_recognition
-```
-
-## test_support 辅助
-
-路径：`backend/tests/test_support.py`
-
-| 符号 | 作用 |
+| 模块 | 职责 |
 |------|------|
-| `FakeBrain` | 脚本化 v2 stream：`messages` / `custom` / `updates`；产出 thinking、subagent usage（文本过滤）、tool_execution、tool_progress、`structured_response`（Philips）、assistant_message |
-| `FakeBrainFactory` | 记录 `created_workflows` / `received_payloads`；注入 `HarnessRuntime` |
-| `StreamControl` | `started` / `release` Event，配合 `hold` 消息测 cancel |
-| `text_block` / `artifact_block` / `user_message` / `messages_json` | 构造 Run 输入 |
-| `wait_for_run(client, run_id, expected_status)` | `TestClient` 短轮询至目标 status |
-| `_recognition_result(text)` | Philips 成功或 `input_problems` 样例 dict |
+| `tests.test_support` | `FakeBrain` / `FakeBrainFactory` / `StreamControl`、消息构造、`wait_for_run`、Philips/Tecan 夹具结果；被 `test_api` / `test_harness` 等导入 |
+| `tests.__init__` | 包标记，无测试逻辑 |
 
-注入模式（api 测试）：
+### 3.3 真实集成与诊断（opt-in，非默认门禁）
 
-```python
-def fake_harness(resources: AgentResources) -> HarnessRuntime:
-    return HarnessRuntime(
-        resources=resources,
-        tools=ToolCatalog(()),
-        brain_factory=factory,
-    )
+| 模块 | 开关 / 入口 | 依赖 |
+|------|-------------|------|
+| `tests.test_real_image_run` | `DSAGENTS_RUN_REAL_IMAGE_TEST=1`；可选 `DSAGENTS_API_BASE_URL`、`DSAGENTS_IMAGE_PATH`、超时/轮询 env；支持 `main()` argparse | 已启动 HTTP + 真实模型 |
+| `tests.test_real_multi_pdf_run` | `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；`--pdf-dir` / `DSAGENTS_PDF_DIR` 等 | 已启动 HTTP + MinerU + 模型 |
+| `tests.test_real_philips_wgq_inbound_recognition` | `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；样例根 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` | 多承运商样例 + Tracking + 模型/MinerU；Oracle 按部署 |
+| `tests.test_real_philips_wgq_ups` | 直接 `-m`（脚本内路径/env）；可选 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` | UPS 双 PDF 验收；流式打印事件 |
+| `tests.test_minimax_cache_baseline` | 无门禁开关；`DSAGENTS_BASE_URL` 指向 live 服务 | 真实 MiniMax；同 session 两轮观察 cache_read；**非**发布门禁 |
 
-app = create_app(
-    resource_config=ResourceConfig(data_dir=...),
-    harness_factory=fake_harness,
-)
-```
+未设置 opt-in 开关时，真实脚本打印 skip 说明后 `return`（不失败）。
 
-## Mock 策略 vs 真实
-
-### 本地回归（默认 CI/开发门禁）
-
-- **不**调用真实 MiniMax / MinerU HTTP / Oracle
-- HTTP 外部：`unittest.mock.patch`（如 `integrations.mineru` 的 requests、`oracledb.connect`）
-- Brain：`FakeBrain` / `FakeBrainFactory` 或 `patch("runtime.agent.create_deep_agent", ...)`
-- 文件系统：`tempfile.TemporaryDirectory` + `ResourceConfig(data_dir=...)`；artifact 根通过 `patch("integrations.artifacts.artifacts_root", ...)`
-- env：`patch.dict(os.environ, ...)`；模型相关可写临时 `.env` + `load_dotenv`
-- 断言业务契约：Pydantic `ValidationError`、工具返回 `code == "input_problems"`、run `status`/`result.outcome`
-
-### 真实集成
-
-- 走完整 HTTP 四端点或 live server
-- 需要真实模型、MinerU、样本文件、可选 Oracle
-- 失败应视为环境/样本/服务问题，**不**替代本地 assert 门禁
-- `test_minimax_cache_baseline` 明确声明：非 release gate，仅观察 cache 指标
-
-## 覆盖重点
-
-1. **Run-first**：queued→running→终态；事件 7 类；cancel / 启动中断 `failed`
-2. **StructuredOutputRecovery**：合法文本恢复、空壳 coaching、耗尽 skeleton vs 无 structured_response、`can_jump_to` 含 end
-3. **Workflow denylist**：Philips 工具 = MinerU 共享 + 主数据；排除 Tecan 两工具
-4. **业务 outcome**：`input_problems` 时 run `succeeded`；缺 structured 时 `failed`
-5. **Skill 契约**：Philips schema forbid extra；Tecan A/B/C 与 xlsx 生成
-6. **资源边界**：`/artifacts/`、`/artifacts/`、`/large_tool_results/`、`/skills/`；手册 seed 一次
-7. **时间戳**：UTC+8 `YYYY-MM-DD HH:MM:SS`
-8. **OMS**：best-effort JSONL，不进入 `run_events`
-9. **工具静态表**：5 handler 名称顺序/集合稳定
-
-## 门禁建议
-
-| 层级 | 包含 | 何时跑 |
-|------|------|--------|
-| **L0 文档** | 根目录 `git diff --check` | 任何文档/代码提交前 |
-| **L1 本地回归** | 上表 7 个 `python -m tests.test_*`（不含 real / support / minimax baseline） | 每次改 `backend/` 实现；middleware / workflow / harness 必跑 `test_harness` + `test_workflow_setup` |
-| **L2 专项** | 按改动面：tools→`test_tools`；ledger→`test_run_ledger`；HTTP→`test_api`；Philips tools→`test_philips_*`；Tecan→`test_tecan_import` | 局部修改时缩小范围，合并前仍建议 L1 全量 |
-| **L3 真实集成** | `test_real_*` + 可选 `test_minimax_cache_baseline` | 发版前或联调；需样本与密钥环境；**不**作为默认 PR 硬门禁除非流水线已配置隔离 runner |
-
-改 middleware / recovery 后最低验证：
+示例：
 
 ```powershell
-cd backend
-python -m tests.test_harness
-python -m tests.test_workflow_setup
+$env:DSAGENTS_RUN_REAL_IMAGE_TEST="1"
+python -m tests.test_real_image_run
+
+$env:DSAGENTS_RUN_REAL_MULTI_PDF_TEST="1"
+python -m tests.test_real_multi_pdf_run --pdf-dir <dir>
+
+$env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
+python -m tests.test_real_philips_wgq_inbound_recognition
+
+python -m tests.test_real_philips_wgq_ups
+python -m tests.test_minimax_cache_baseline
 ```
 
-改工具 denylist / Skill 挂载后最低验证：
+真实脚本通过 HTTP 客户端（`requests` / `urllib`）打四端点，**不**替代本地七脚本。
+
+## 4. 关键门禁与按改动复跑
+
+| 改动面 | 至少运行 |
+|--------|----------|
+| `runtime/middleware.py` / recovery / `jump_to` | `test_harness` |
+| 工具注册 / WGQ-DK denylist / Skill 装配 | `test_workflow_setup` + `test_tools` |
+| ledger / 事件 / 时区 | `test_run_ledger` |
+| HTTP / cancel / OMS 写点 | `test_api` |
+| Philips schema / Tracking / Oracle 工具 | `test_philips_wgq_inbound_recognition` |
+| Tecan finalizer / XLSX | `test_tecan_import` |
+| 渠道 JSON 合同共享层 | Philips + Tecan 两脚本 |
+
+发布或大改后跑满七脚本，并在仓库根执行 `git diff --check`（文档变更）。
+
+根级 `AGENTS.md` 明确的关键门禁集：
+
+- `test_tools`
+- `test_run_ledger`
+- `test_harness`
+- `test_api`
+- `test_workflow_setup`
+- `test_philips_wgq_inbound_recognition`
+- `test_tecan_import`
+
+## 5. 共享测试支持：`tests/test_support.py`
+
+- **`FakeBrain`**：脚本化 v2 stream（`messages` / `custom` / `updates`），覆盖 thinking、subagent usage（文本过滤）、text_delta、tool_execution、tool_progress、assistant_message、model_usage；按用户文本触发 `fail` / `hold` / Philips structured / Tecan finalizer。
+- **`FakeBrainFactory`**：记录 `created_workflows` 与 `received_payloads`；实现 `create(...)` 形状以注入 harness。
+- **`StreamControl`**：`started` / `release` Event，配合 cancel 与 hold run。
+- 消息构造：`text_block` / `artifact_block` / `user_message` / `messages_json`。
+- **`wait_for_run(client, run_id, expected_status)`**：短超时轮询 GET。
+- 夹具结果：`_recognition_result` / `_tecan_recognition_result`（含 `input_problems` 分支）。
+
+说明：`FakeBrain` 仍可发出 subagent 元数据以锻炼过滤与 usage 聚合；**不**表示生产 `DeepAgentsBrainFactory` 会创建业务 SubAgent。
+
+## 6. Mock 策略（本地回归）
+
+| 依赖 | 策略 |
+|------|------|
+| LLM / DeepAgents 图 | `FakeBrain` 或 `patch("runtime.agent.create_deep_agent")`；recovery 单测可用 `create_agent` + 可控 model（`_StructuredOutputModel`） |
+| MinerU HTTP | `unittest.mock.patch` 替换 `requests` 会话方法；固定 task/result 字节；`_FakeJsonResponse` / `_FakeZipResponse` |
+| Oracle | `patch` 连接/查询（`_FakeConnection` / `_FakeCursor`）；或只测 env 缺失降级 |
+| 时钟 / sleep | patch 时间戳命名与 `time.sleep`，避免慢测 |
+| 文件系统 | `tempfile.TemporaryDirectory`；`ResourceConfig(data_dir=...)`；`patch integrations.artifacts.artifacts_root` / `integrations.mineru.artifacts_root` |
+| OMS 日志路径 | 指向临时目录，断言写/不写条件 |
+| dotenv | harness 测用临时 `.env` + `load_dotenv(override=True)`；**不**读取开发者真实 `.env` 密钥做断言 |
+| HTTP API | FastAPI `TestClient` + `create_app(harness_factory=..., resource_config=...)` |
+
+原则：
+
+- 本地回归**零**外网、**零**真实 API key 依赖。
+- mock 边界贴近集成点（HTTP client、DB 路径、factory），避免过度 mock 导致合同漂移。
+- 渠道合同以 **Pydantic `model_validate` / finalizer 返回 JSON** 为准，不以模糊字符串匹配代替字段集合。
+- `patch.dict(os.environ, ..., clear=True)` 用于隔离 MinerU/Oracle/模型 env。
+
+## 7. 渠道供应链合同在测试中的覆盖
+
+- Philips / Tecan `items[]` 均须完整 **24** 字段；未知为 `null`，不是空字符串。
+- 数量、金额、重量：JSON 中为不带科学计数法的十进制字符串；日期 `YYYY-MM-DD`。
+- `input_problems`：完整 `data.header` + 已证实 items（可 `[]`）+ 至少一条 `{source, location, issue, action}`；run 仍可 `succeeded`。
+- Philips：ToolStrategy / `structured_response` 路径（harness + schema 脚本）。
+- Tecan：`finalize_tecan_overseas_recognition` 投影（harness 事件链 + tecan 脚本）。
+- `test_workflow_setup` 锁定 denylist：WGQ 工具集**含**共享 MinerU + XLSX + lookup，**不含** Tecan finalizer；DK 工具集保留共享 MinerU + XLSX + finalizer，**不含** Philips lookup。
+- SKILL.md 行数 ≤100；Philips 关键业务句与 Tecan「不生成 Excel」等由 `test_workflow_setup` 字符串断言。
+
+## 8. StructuredOutputRecovery 测试要点（`test_harness`）
+
+实现与测试共同锁定：
+
+- 重试次数封顶（约 `1 + max_retries` 次模型调用量级；`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES=2`）。
+- 耗尽时 **`jump_to: "end"`**，禁止只返回 `None`。
+- 空壳：`tool_call_id` 精确匹配同回合 AI 文本 JSON；否则 `EMPTY_DATA_SHELL_HINT` / skeleton 纠错。
+- **空壳耗尽** → all-null nested `partial_success`（可 `succeeded`）。
+- **其它失败耗尽** → 无 `structured_response`（可 `failed`）。
+- 普通/Tecan：`runtime_middlewares(structured_schema=None)`，不按 Philips schema 恢复。
+- 另覆盖：ToolTelemetry 起止事件、Memory 源路径、NoProgress 同 tool 连击、model_usage helper、WGQ 缺 structured 失败、Tecan finalizer 成功投影。
+
+## 9. 事件与 API 契约断言（摘录）
+
+`test_api` / `test_harness` 锁定的事件类型集合与顺序形态（示例，非唯一合法序列）包括：
+
+- `status` → … → `thinking` / `model_usage` / `text_delta` / `tool_execution` / `tool_progress` / `assistant_message` → 终态 `status`
+- `tool_progress` payload 含 `name` ∈ {`parse_documents`, `extract_archives`}
+- GET 响应含 `run` / `workflow` / `result` / `events` / `latest_content_event` / `usage`
+- workflow + 客户端 `session_id` → 422；同 session 并发 → 409
+
+## 10. 残余空白（测试不保证的）
+
+- 模型对复杂多票 PDF/XLSX 的角色识别与同票归集质量。
+- Oracle thick mode / `ORACLE_CLIENT_LIB_DIR` 在真实库上的连通性（本地只测降级与 mock）。
+- MinerU 服务端正确性与计费侧最终账单（API usage 仅为趋势估算）。
+- 生产并发与多进程部署下的 session 锁（当前锁为**进程内**）。
+- 未覆盖的未来 Skill / 新事件类型（新增须扩测试与文档）。
+
+## 11. 文档与代码同步
+
+- backend 行为变更：先更新 `backend/.planning/codebase/`（含本文与 `CONVENTIONS.md`），再按影响更新根级架构/接口/系统地图。
+- 文档检查：
 
 ```powershell
-cd backend
-python -m tests.test_workflow_setup
-python -m tests.test_tools
+# 仓库根目录
+git diff --check
 ```
 
-## 文件索引
-
-```
-backend/tests/
-  __init__.py
-  test_support.py
-  test_tools.py
-  test_run_ledger.py
-  test_harness.py
-  test_api.py
-  test_workflow_setup.py
-  test_philips_wgq_inbound_recognition.py
-  test_tecan_import.py
-  test_real_philips_wgq_inbound_recognition.py
-  test_real_philips_wgq_ups.py
-  test_real_image_run.py
-  test_real_multi_pdf_run.py
-  test_minimax_cache_baseline.py
-```
+- 命令总表与启动方式见根级 `docs/commands.md`。

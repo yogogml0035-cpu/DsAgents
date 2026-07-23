@@ -11,8 +11,9 @@ from typing import Any
 
 import requests
 
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
 
-WORKFLOW = "philips_wgq_inbound_recognition"
+WORKFLOW = WAG_WORKFLOW
 DEFAULT_BASE_URL = "http://127.0.0.1:8500"
 DEFAULT_SAMPLE_ROOT = Path(r"C:\Users\0325\Desktop\Agent测试用例\渠道文件测试用例\飞利浦外高桥\进境")
 DEFAULT_TIMEOUT_SECONDS = 7200.0

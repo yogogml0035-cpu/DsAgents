@@ -26,9 +26,9 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
-改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：Philips 工具名集合须**含** `parse_documents` / `extract_archives`（及本业务主数据工具），**不含**帝肯业务工具；禁止业务-only allowlist 导致共享 MinerU 工具从模型工具表消失。
+改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：WGQ / DK 均用 **denylist**（不是业务-only allowlist）。WGQ 工具名集合须**含** `parse_documents` / `extract_archives`、`inspect_supply_chain_workbooks` 与 Philips lookup，**不含** `finalize_tecan_overseas_recognition`；DK 保留共享工具和 finalizer，**不含** `lookup_philips_wgq_master_data`。禁止 allowlist 导致共享材料工具从模型工具表消失。Tecan 终态仅为 finalizer JSON，不生成 Excel。
 
-改 `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON，否则用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。改 Tecan SubAgent 结构化输出时另核 recovery schema（默认仍是 Philips，见 `docs/conventions.md`）。
+改 WGQ `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON，否则用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。DK/普通 run 传 `structured_schema=None`，DK 终态由 finalizer 工具校验。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、中国时区本地时间戳、状态机与 usage 聚合的本地 assert 脚本。
 
@@ -99,15 +99,23 @@ curl -X POST http://127.0.0.1:8500/runs ^
   -d "{\"session_id\":null,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"帮我看看这个文件\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/demo.pdf\"}]}]}"
 ```
 
-Philips 外高桥进境识别必须省略 `session_id` 并传固定 workflow：
+Philips 外高桥进境识别必须省略 `session_id` 并传 `workflow=WGQ`：
 
 ```powershell
 curl -X POST http://127.0.0.1:8500/runs ^
   -H "Content-Type: application/json" ^
-  -d "{\"workflow\":\"philips_wgq_inbound_recognition\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/waybill.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/invoice.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/tracking.xlsx\"}]}]}"
+  -d "{\"workflow\":\"WGQ\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/waybill.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/invoice.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/tracking.xlsx\"}]}]}"
 ```
 
-该请求仍立即返回 `queued`。轮询终态后从 GET 顶层 `result` 读取经 schema 校验的业务 JSON；不要解析 `reply`。未知 workflow 或给该 workflow 传非空 `session_id` 均返回 `422`。
+帝肯境外供应链识别同样省略 `session_id`，传 `workflow=DK`：
+
+```powershell
+curl -X POST http://127.0.0.1:8500/runs ^
+  -H "Content-Type: application/json" ^
+  -d "{\"workflow\":\"DK\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/waybill.pdf\"},{\"type\":\"artifact\",\"path\":\"/artifacts/uploads/invoice.pdf\"}]}]}"
+```
+
+两种 workflow 请求都会立即返回 `queued`。轮询终态后从 GET 顶层 `result` 读取经 schema 校验的业务 JSON；不要解析 `reply`。未知 workflow 或给 workflow 传非空 `session_id` 均返回 `422`。
 
 ```powershell
 curl "http://127.0.0.1:8500/runs/<run_id>"

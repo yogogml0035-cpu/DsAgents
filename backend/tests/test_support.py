@@ -9,7 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from skills.philipswgqinboundrecognition import WORKFLOW
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
+from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
 class StreamControl:
@@ -89,8 +90,12 @@ class FakeBrain:
         reply = f"echo[{len(history)}]: {text}"
         tool_call = {
             "id": f"call-{thread_id}-{len(history)}",
-            "name": "read_file",
-            "args": {"file_path": "/artifacts/uploads/demo.jpg"},
+            "name": FINALIZE_TECAN_RESULT_TOOL if text == "tecan final" else "read_file",
+            "args": (
+                {"result": _tecan_recognition_result()}
+                if text == "tecan final"
+                else {"file_path": "/artifacts/uploads/demo.jpg"}
+            ),
         }
         # 3. main-agent text delta
         yield {"type": "messages", "ns": (), "data": (AIMessageChunk(content="echo["), {"langgraph_node": "model"})}
@@ -106,7 +111,24 @@ class FakeBrain:
                 }
             },
         }
-        if self.workflow == WORKFLOW and "missing structured" not in text:
+        if text == "tecan final":
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "tools": {
+                        "messages": [
+                            ToolMessage(
+                                content=json.dumps(_tecan_recognition_result(), ensure_ascii=False),
+                                id=f"tecan-result-{thread_id}-{len(history)}",
+                                tool_call_id=tool_call["id"],
+                                name=FINALIZE_TECAN_RESULT_TOOL,
+                            )
+                        ]
+                    }
+                },
+            }
+        if self.workflow == WAG_WORKFLOW and "missing structured" not in text:
             yield {
                 "type": "updates",
                 "ns": (),
@@ -224,7 +246,28 @@ def _recognition_result(text: str) -> dict[str, Any]:
     if "input problems" in text:
         return {
             "outcome": "input_problems",
-            "data": None,
+            "data": {
+                "header": {
+                    "om": None,
+                    "dn": None,
+                    "po": None,
+                    "so": None,
+                    "original_waybill_number": None,
+                    "buyer": None,
+                    "seller": None,
+                    "shipper": None,
+                    "consignee": None,
+                    "payment_terms": None,
+                    "contract_number": None,
+                    "salesperson": None,
+                    "invoice_number": None,
+                    "etd": None,
+                    "trade_terms": None,
+                    "port_of_departure": None,
+                    "port_of_arrival": None,
+                },
+                "items": [],
+            },
             "problems": [
                 {
                     "source": "batch",
@@ -237,48 +280,104 @@ def _recognition_result(text: str) -> dict[str, Any]:
     return {
         "outcome": "success",
         "data": {
-            "shipment": {"pieces": "2", "total_gross_weight": "18.5"},
             "header": {
-                "om": None,
+                "om": "OM123",
                 "dn": "DN123",
                 "po": "PO123",
                 "so": "SO123",
                 "original_waybill_number": "9198153694",
-                "buyer": None,
-                "seller": None,
+                "buyer": "buyer",
+                "seller": "seller",
                 "shipper": "shipper",
                 "consignee": "consignee",
-                "payment_terms": None,
-                "contract_number": None,
-                "salesperson": None,
+                "payment_terms": "NET30",
+                "contract_number": "CON123",
+                "salesperson": "salesperson",
                 "invoice_number": "INV123",
                 "etd": "2026-05-25",
-                "port_of_departure": None,
-                "port_of_arrival": None,
+                "trade_terms": "FOB",
+                "port_of_departure": "Shanghai",
+                "port_of_arrival": "Shanghai",
             },
             "items": [
                 {
+                    "invoice_number": "INV123",
+                    "invoice_date": "2026-05-25",
                     "so_item": "10",
                     "product_id": "989000085103",
-                    "new_or_used": None,
+                    "new_or_used": "新",
                     "chinese_name": "医疗设备部件",
-                    "specification": None,
+                    "specification": "MODEL-1",
                     "quantity": "2",
                     "unit": "个",
                     "currency": "USD",
                     "unit_price": "10.00",
                     "total_price": "20.00",
+                    "trade_terms": "FOB",
                     "origin_country": "美国",
                     "customs_code": "9018909090",
-                    "declaration_elements": None,
-                    "legal_quantity_1": None,
+                    "declaration_elements": "用途：医疗",
+                    "legal_quantity_1": "2",
                     "legal_unit_1": "个",
-                    "legal_quantity_2": None,
-                    "legal_unit_2": None,
-                    "gross_weight": None,
-                    "net_weight": None,
+                    "legal_quantity_2": "2",
+                    "legal_unit_2": "千克",
+                    "gross_weight": "1.2",
+                    "net_weight": "1",
                     "business_unit": "CT",
-                    "pre_or_post_sales": None,
+                    "pre_or_post_sales": "售前",
+                }
+            ],
+        },
+        "problems": [],
+    }
+
+
+def _tecan_recognition_result() -> dict[str, Any]:
+    return {
+        "outcome": "success",
+        "data": {
+            "header": {
+                "po": "PO123",
+                "dn": "DN123",
+                "original_waybill_number": "0012345678",
+                "buyer": "buyer",
+                "seller": "seller",
+                "shipper": "shipper",
+                "consignee": "consignee",
+                "payment_terms": "NET30",
+                "contract_number": "CON123",
+                "invoice_number": "INV123",
+                "invoice_date": "2026-05-25",
+                "trade_terms": "FOB",
+                "port_of_departure": "Vienna",
+                "port_of_arrival": "Shanghai",
+            },
+            "items": [
+                {
+                    "invoice_number": "INV123",
+                    "invoice_date": "2026-05-25",
+                    "so_item": "10",
+                    "product_id": "989000085103",
+                    "new_or_used": "新",
+                    "chinese_name": "医疗设备部件",
+                    "specification": "MODEL-1",
+                    "quantity": "2",
+                    "unit": "个",
+                    "currency": "USD",
+                    "unit_price": "10",
+                    "total_price": "20",
+                    "trade_terms": "FOB",
+                    "origin_country": "美国",
+                    "customs_code": "9018909090",
+                    "declaration_elements": "用途：医疗",
+                    "legal_quantity_1": "2",
+                    "legal_unit_1": "个",
+                    "legal_quantity_2": "2",
+                    "legal_unit_2": "千克",
+                    "gross_weight": "1.2",
+                    "net_weight": "1",
+                    "business_unit": "CT",
+                    "pre_or_post_sales": "售前",
                 }
             ],
         },

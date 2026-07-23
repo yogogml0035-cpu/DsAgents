@@ -1,379 +1,378 @@
----
-title: backend 架构事实
-last_mapped_commit: 555bca7
-analysis_date: 2026-07-20
-focus: arch
----
-
 # ARCHITECTURE — backend（dsagents）
 
-> 分析日期：2026-07-20
-> 映射提交：`555bca7`
-> 范围：`backend/` 源码与包结构（不含 venv、artifacts 大文件、egg-info）
+> Analysis Date: 2026-07-22。事实来源是 `backend/api.py`、`runtime/`、`integrations/` 与 `skills/`；不以历史构建产物（`backend/build/`、`backend/dist/`、`dsagents.egg-info/`）为权威源。
 
 ## Pattern Overview
 
-`backend/` 是发行名 **dsagents** 的单子项目 agent 运行时底座。核心模式如下。
+DsAgents 是**单子项目** Agent 运行时底座：产品代码在 `backend/`，发行名 `dsagents`，以可注入 Brain、执行器、工具和资源承载通用文档处理与 Philips / Tecan 内置 Skill。**无前端子项目**。
 
-| 模式 | 实现要点 |
-|------|----------|
-| **run-first harness runtime** | 执行与查询的唯一单位是 `run`；`HarnessRuntime.execute_run(...)` 驱动 brain 流式执行，并将观测写入 ledger |
-| **事件溯源 ledger** | `run_events` append-only；`runs` 表为投影快照（status / reply / error / result） |
-| **Brain Protocol** | `typing.Protocol` 仅用于 `Brain` / `BrainFactory`；默认实现 `DeepAgentsBrainFactory` → `create_deep_agent` |
-| **ToolCatalog** | 静态 5 个 callable 工具注册；workflow 用 **denylist** 收窄业务工具，不扫描目录 |
-| **Skill 成对目录** | kebab-case 资源目录（`SKILL.md` / references / assets，挂载 `/skills/`）+ 可 import 的 Python 包 |
-| **OMS 旁路** | `append_run_created_log` 写 JSONL 索引；best-effort，不阻塞已创建 run，不进入 `run_events` |
+核心模式：
 
-无 session 业务 API、无 SSE。`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁键。
+| 概念 | 说明 |
+|------|------|
+| **run-first** | `run` 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照 |
+| **轮询 HTTP** | 仅四端点；无 SSE、无 session CRUD API |
+| **可注入 Brain** | `Brain` / `BrainFactory` 为唯一 `typing.Protocol`；默认 `DeepAgentsBrainFactory` |
+| **静态工具表** | 五工具经 `ToolCatalog` 静态注册；workflow 用 **denylist** 收窄 |
+| **渠道终态 JSON** | Philips ToolStrategy / Tecan finalizer → `run.result`；业务问题走 `input_problems`，run 仍 `succeeded` |
+| **DeepAgents / LangGraph** | `create_deep_agent` 装配图；`checkpointer` + `store` + `CompositeBackend`；stream 投影到 ledger |
 
-## Layers
+不存在的边界（刻意不做）：
 
-```
-HTTP 层          api.py（FastAPI：POST /upload、POST /runs、GET /runs/{run_id}、POST /runs/{run_id}/cancel）
-      ↓
-资源 / 执行层    runtime/resources.py（AgentResources）
-                 runtime/execution.py（HarnessRuntime / create_harness）
-                 runtime/oms_log.py（OMS 旁路索引）
-      ↓
-Agent 图层       runtime/agent.py（DeepAgentsBrainFactory、workflow denylist、Tecan SubAgent）
-                 runtime/middleware.py（ToolTelemetry / NoProgress / StructuredOutput* / Memory）
-                 runtime/observability.py（纯 chunk → 事件 payload 抽取）
-      ↓
-工具 / Skill 层  runtime/tools.py（ToolCatalog）
-                 integrations/mineru.py、integrations/artifacts.py
-                 skills/philipswgqinboundrecognition/、skills/tecanimport/
-                 skills/philips-wgq-inbound-recognition/、skills/tecan-import/（资源）
-      ↓
-Ledger / 集成    runtime/runs.py（SqliteRunLedger、RunEvent、RunSnapshot）
-                 SQLite：runs.db / store.db / checkpoints.db
-                 外部：MinerU HTTP、Oracle（Philips 主数据，可选 thick）
-```
+- session 列表 / 创建 / 删除 API
+- SSE 或 WebSocket 推送
+- 业务 SubAgent / 任务状态表 / 业务-only middleware
+- Tecan Excel 模板或生成器
+- 多 worker 跨进程互斥（session 单飞与 `run_controls` 均为进程内）
 
-### 层职责
+## 分层与依赖方向
 
-1. **HTTP（`api.py`）**
-   装配 lifespan 内的 `AgentResources` + `HarnessRuntime`；处理上传、创建 run、查询、取消；维护 `session_locks` / `active_runs` 进程内注册表；对 MiniMax-M3 做 usage 费用趋势估算（非计费事实）。
-
-2. **资源 / 执行（`runtime/resources.py`、`runtime/execution.py`）**
-   `AgentResources` 打开 SQLite store/checkpointer/ledger，装配 `CompositeBackend` 路由。
-   `HarnessRuntime` 创建 brain、消费 stream、写事件、终态投影、协作式 cancel。
-
-3. **Agent 图（`runtime/agent.py`、`middleware.py`、`observability.py`）**
-   通过 deepagents `create_deep_agent` 构图；middleware 洋葱模型；observability 无 I/O。
-
-4. **工具 / Skill**
-   通用 MinerU 工具 + 业务工具；Skill 资源只读挂载；业务逻辑在 skill Python 包。
-
-5. **Ledger / 集成**
-   事件与快照；大 blob 溢出到 `data/internal/run-events/`；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`。
-
-## Data Flow
-
-### 1. Upload
-
-```
-POST /upload (multipart files)
-  → clean_filename + make_timestamped_name
-  → 写入 data/artifacts/uploads/
-  → 返回 { file_path: "/artifacts/uploads/...", name, mime_type, size }
+```text
+api.py                          HTTP 适配层
+  └── runtime/                  运行时核心
+        ├── agent.py            Brain 装配
+        ├── execution.py        run 执行与 stream 投影
+        ├── middleware.py       横切 middleware
+        ├── tools.py            ToolCatalog
+        ├── resources.py        三库 + CompositeBackend
+        ├── runs.py             SqliteRunLedger
+        ├── observability.py    纯抽取（无 I/O）
+        └── oms_log.py          OMS JSONL（旁路）
+              ├── integrations/ 外部系统与 artifact
+              │     ├── artifacts.py
+              │     └── mineru.py
+              └── skills/       业务 Skill + 渠道合同
+                    ├── channel_contract.py
+                    ├── philips_wgq_inbound_recognition/   Skill 资源 + 包
+                    └── tecan_import/                      Skill 资源 + 包
 ```
 
-虚拟路径前缀固定为 `/artifacts/...`，与 `CompositeBackend` 的 `/artifacts/` 路由一致。
+| 层 | 位置 | 职责 |
+|----|------|------|
+| HTTP | `api.py` | 请求校验、上传、创建 run、后台线程、轮询、cancel、usage 计价层 |
+| 运行时 | `runtime/` | Brain 装配、stream 投影、middleware、ledger、资源、工具目录 |
+| 集成 | `integrations/` | `/artifacts` 路径、MinerU HTTP、JSON artifact 读写 |
+| 业务 Skill | `skills/` | 流程提示（`SKILL.md`）、schema、主数据 / XLSX / finalizer 工具 |
+| 测试 | `tests/` | 可执行 assert 脚本（非 pytest） |
 
-### 2. Create run
+依赖单向：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`Brain` / `BrainFactory` 是仅有的 `Protocol` 注入点；工具是普通 callable；资源与 ledger 用具体类。
 
-```
-POST /runs { workflow?, session_id?, messages: [{ role, content: text|artifact }] }
-  → session_id = 请求值或 uuid4.hex（workflow 与 session_id 互斥：workflow 强制新 session）
-  → run_id = uuid4.hex
-  → _acquire_session_run：同 session 非阻塞锁，冲突 409「该会话正在运行」
-  → SqliteRunLedger.create_run → status=queued + status 事件
-  → append_run_created_log（best-effort try/except）
-  → daemon Thread(_run_background) → execute_run
-  → 立即返回 { run_id, session_id, status: "queued" }
-```
+## 执行数据流
 
-### 3. execute_run
+### HTTP 四端点
 
-```
-HarnessRuntime.execute_run(messages, session_id, run_id, workflow)
-  → emit status=running
-  → 注册 RunControl 到 run_controls[run_id]
-  → brain_factory.create(
-        middleware=runtime_middlewares(memory_backend=backend),  # 主 Agent 含 Memory
-        tools=ToolCatalog.as_list(),
-        workflow=workflow,
-     )
-  → brain.stream(
-        {"messages": normalized},  # artifact 块 → 文本提示 ARTIFACT_REFERENCE_HINT
-        config={"configurable": {"thread_id": session_id}},
-        stream_mode=["messages", "custom", "updates"],
-        subgraphs=True, version="v2", control=RunControl,
-     )
-  → 按 chunk 类型写事件（见「事件 7 类」）
-  → workflow==philips_wgq_inbound_recognition 时：
-        必须从 updates 得到 structured_response
-        → PhilipsWgqRecognitionResult.model_validate → result dict
-  → 终态 succeeded（reply + result）| failed | cancelled
-  → finally 移除 run_controls
-```
+| 方法 | 路径 | 行为 |
+|------|------|------|
+| `POST` | `/upload` | 多文件写入 `data/artifacts/uploads/`，返回虚拟路径 `/artifacts/uploads/...` |
+| `POST` | `/runs` | 校验 `RunRequest` → 创建 `queued` run → best-effort OMS 索引 → 后台线程 `execute_run` → 立即返回 `{run_id, session_id, status: "queued"}` |
+| `GET` | `/runs/{run_id}` | 投影快照 + 增量 `events`（`after_event_id`）+ `latest_content_event` + `usage` |
+| `POST` | `/runs/{run_id}/cancel` | `cancelling` → `RunControl.request_drain`；无 control 则直接 `cancelled` |
 
-后台线程 `_run_background` 消费 generator 至耗尽；未捕获异常时 `_ensure_failed_run`；`finally` 释放 session 锁。
+`RunRequest` 约束：
 
-### 4. Query snapshot + events
+- `workflow: Literal["WGQ", "DK"] | None` — `WGQ` 为飞利浦外高桥，`DK` 为帝肯境外供应链
+- `workflow` 与客户端 `session_id` 互斥（workflow run 必须服务端生成新 session）
+- `messages[].content` 为 `text` | `artifact` 判别联合；`extra="forbid"`
 
-```
-GET /runs/{run_id}?after_event_id=
-  → run 投影（RunSnapshot）
-  → events（可增量）
-  → latest_content_event（排除 status / model_usage）
-  → usage（aggregate_model_usage + API 层 CNY 估算）
-```
+### upload → run create → background execute → poll → cancel
 
-### 5. Cancel
+```text
+POST /upload
+  → data/artifacts/uploads/<stem>_<timestamp>.<ext>
+  → 响应 file_path = /artifacts/uploads/...
 
-```
+POST /runs
+  → 进程内 session 单飞锁（同 session_id 冲突 → 409）
+  → SqliteRunLedger.create_run(status=queued) + status 事件
+  → append_run_created_log（best-effort，失败不阻塞）
+  → threading.Thread → HarnessRuntime.execute_run
+      → emit status=running
+      → BrainFactory.create(middleware, tools, workflow)
+      → brain.stream(messages, thread_id=session_id, control=RunControl)
+      → 七类事件写入 run_events；终态投影 runs
+      → succeeded | failed | cancelled
+  → finally 释放 session 锁
+
+GET /runs/{run_id}
+  → run 快照、workflow、result、events、latest_content_event、usage
+
 POST /runs/{run_id}/cancel
-  → 终态 succeeded/failed → 409
-  → cancelling/cancelled → 200 幂等
-  → 否则 emit cancelling
+  → emit status=cancelling
   → harness.request_cancel(run_id) → RunControl.request_drain
-       True：执行中协作 drain → GraphDrained → cancelled
-       False：尚未进入 execute_run（queued）→ 直接 emit cancelled
-  → 202 { status: "cancelling" }
+  → 若尚无 control（queued / 未进入 execute_run）→ 直接 cancelled
+  → 活跃 drain 后 GraphDrained → cancelled
 ```
 
-启动时 `fail_incomplete_runs` 将残留 `queued|running|cancelling` 标为 failed（`INTERRUPTED_RUN_ERROR`）。
+状态机：
+
+```text
+queued → running → succeeded | failed | cancelled
+queued → cancelled
+running → cancelling → cancelled
+```
+
+启动时 `fail_incomplete_runs("执行已中断，请重试")` 清理残留 `queued` / `running` / `cancelling`。
+
+### stream → 事件投影
+
+`HarnessRuntime.execute_run` 以 `stream_mode=["messages", "custom", "updates"]` 消费 LangGraph：
+
+| stream kind | 产出事件 |
+|-------------|----------|
+| `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（主 Agent 文本；subagent 文本过滤） |
+| `custom` | `tool_progress`（`parse_documents` / `extract_archives` 进度）或 `tool_execution`（`ToolTelemetry` 等） |
+| `updates` | `tool_execution`（tool_calls）、`assistant_message`；同时捕获 `structured_response` 与 Tecan finalizer ToolMessage |
+
+终态业务结果：
+
+- **WGQ**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
+- **DK**：必须接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`；缺失则 `failed`
+- **通用 Tecan 请求**（`workflow=None` 但调用 finalizer）：同样投影结果
+- **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
+
+`artifact` 内容块在进入 Brain 前归一为带路径提示的 `text`（`ARTIFACT_REFERENCE_HINT`）。
+
+## 七类事件与错误模型
+
+固定事件类型（不可随意扩展为业务状态通道）：
+
+| type | 来源 | 语义 |
+|------|------|------|
+| `status` | ledger `emit_run_status` | 状态机投影；终态可带 `reply` / `error` / `result` |
+| `tool_execution` | `ToolTelemetry` custom + updates tool_calls | 工具开始/完成/错误或调用意图 |
+| `tool_progress` | MinerU 工具 `get_stream_writer` | 解析/解压进度 |
+| `thinking` | messages 流 thinking 块 | 模型思考增量 |
+| `text_delta` | messages 流文本 | 主 Agent 流式文本 |
+| `assistant_message` | updates 终态助手消息 | 完整助手文本（可附 thinking） |
+| `model_usage` | messages `usage_metadata` | 单次模型调用 token；API 层聚合并可选计价 |
+
+大 payload 超过 `max_inline_bytes`（默认 256KiB）时落盘到 `data/internal/run-events/`，DB 仅存引用。
+
+`latest_content_event` 排除 `status` 与 `model_usage`，取最新内容类事件。
+
+### 业务问题 vs 执行失败
+
+| 条件 | run status | `run.result` | 备注 |
+|------|------------|--------------|------|
+| 合法 Philips/Tecan 终态 JSON（含 `input_problems`） | `succeeded` | 完整业务 JSON | 业务问题 ≠ 执行失败 |
+| Philips 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
+| DK 未调用 Tecan finalizer | `failed` | `null` | workflow 终态缺失 |
+| 未调用 Tecan finalizer 的通用 run | `succeeded` | `null` | 普通阅读合法 |
+| `NoProgressLoop` | `failed` | `null` | 同工具死循环 |
+| 其它模型/工具/运行时异常 | `failed` | `null` | `_ensure_failed_run` 兜底 |
+| 用户 cancel + GraphDrained | `cancelled` | 不伪造 | 协作 drain |
+| 同 session 并发 | HTTP 409 | — | 进程内锁 |
+| 未知 run_id | HTTP 404 | — | |
+| 已终态再 cancel | HTTP 409 | — | |
+| OMS 索引写失败 | 忽略 | — | 不阻塞已创建 run |
+| Oracle 配置/客户端缺失 | 工具返回 problem | — | 优雅降级，不崩溃 run |
+| MinerU 超时/失败 | 工具抛错 → 可能 failed | — | 视 Agent 是否恢复 |
+
+## 渠道供应链 JSON 合同
+
+共享合同在 `skills/channel_contract.py`：
+
+### 共用结构
+
+- **`OrderItem`**：固定 **24 字段**，Philips 与 Tecan 共用
+  `invoice_number`, `invoice_date`, `so_item`, `product_id`, `new_or_used`, `chinese_name`, `specification`, `quantity`, `unit`, `currency`, `unit_price`, `total_price`, `trade_terms`, `origin_country`, `customs_code`, `declaration_elements`, `legal_quantity_1`, `legal_unit_1`, `legal_quantity_2`, `legal_unit_2`, `gross_weight`, `net_weight`, `business_unit`, `pre_or_post_sales`
+- 每个已返回行字段齐全，未知为 `null`；`extra="forbid"`
+- 数量/金额/重量：无千分位、非科学计数法十进制字符串
+- 日期 JSON：`YYYY-MM-DD`；编号保留前导零
+- `currency`：大写三位 ISO；`trade_terms` 大写；`new_or_used` ∈ {新, 旧}；`pre_or_post_sales` ∈ {售前, 售后}
+- **`RecognitionProblem`**：`{source, location, issue, action}` 均非空
+
+### outcome 语义（`validate_channel_outcome`）
+
+| outcome | 约束 |
+|---------|------|
+| `success` | 无未解决缺失；若仍有 null 路径则自动降为 `partial_success` 并补 problem |
+| `partial_success` | 至少一条 problem；核心事实已确认（票次身份 + 行级 product_id/quantity/unit/currency/total_price）；字段已完整则归正为 `success` |
+| `input_problems` | 至少一条 problem；`items` 可为空；正式字段只放已证实值 |
+
+### 渠道独立 header
+
+| 渠道 | header 模型 | 差异要点 |
+|------|-------------|----------|
+| Philips | `OrderHeader` | 含 `om`/`so`/`salesperson`/`etd` 等；无 `invoice_date` |
+| Tecan | `TecanHeader` | 含 `invoice_date`；无 `om`/`so`/`salesperson`/`etd` |
+
+终态外壳均为：`{outcome, data: {header, items}, problems}`。
+
+**不输出**：`shipment`、Excel、候选列表、审计明细。OMS 只消费 `run.result`，不解析 `reply` 或工具候选文本。
+
+业务规则（同票归集、多发票逗号拼接、同 12NC 不合并、主数据仅补缺）由 Skill 提示词驱动，在**单一 run** 内完成；无跨 run 消息/任务状态表。
+
+## Agent、middleware 与状态
+
+### Brain 装配（`runtime/agent.py`）
+
+- `Brain` Protocol：`stream(payload, config, **kwargs) -> Iterator`
+- `BrainFactory` Protocol：`create(resources, middleware, tools, workflow) -> Brain`
+- 默认实现 `DeepAgentsBrainFactory`：
+  - 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`
+  - `create_deep_agent`：`subagents=[]`，`skills=["/skills/"]`，`/skills/**` 写拒绝
+  - harness profile `anthropic`：关闭 general-purpose subagent
+  - `WGQ` 时追加 `WAG_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist
+  - `DK` 时追加 `DK_WORKFLOW_PROMPT`、保留 `structured_schema=None`，并以 finalizer 终态校验
+
+### middleware 栈（`runtime_middlewares`）
+
+每次 `create` 新建实例（洋葱模型；Recovery 列表靠前 → `after_model` 最后执行）：
+
+| 顺序 | Middleware | 条件 |
+|------|------------|------|
+| 1 | `StructuredOutputRecovery` | 仅 `structured_schema` 非空（Philips workflow） |
+| 2 | `ToolTelemetry` | 始终 |
+| 3 | `NoProgressMiddleware` | 始终；同工具同参连续 `NO_PROGRESS_WINDOW=3` 次 → `NoProgressLoop` |
+| 4 | `StructuredOutputCompatibility` | 始终；ToolStrategy 请求关闭 thinking |
+| 5 | `MemoryMiddleware` | 主 Agent 且传入 `memory_backend`；加载 `/memories/AGENTS.md` |
+
+主 Agent 有 memory 时约 **5** 个 middleware；无 schema 时约 4 个（无 Recovery）。生产不配置业务 SubAgent。
+
+### StructuredOutputRecovery（Philips / WGQ 专用）
+
+- hook：`after_model`，`can_jump_to` 必须含 **`"model"` 与 `"end"`**
+- 从助手 fenced/raw JSON 恢复 `structured_response`；校验失败则 `jump_to: "model"` 纠错（默认最多 2 次）
+- 空 `data: {}` 壳：按同回合 `tool_call_id` 配对恢复或 skeleton 纠错
+- **耗尽时必须显式 `jump_to: "end"`**，禁止只返回 `None`（否则 ToolStrategy 可能无限重入 model）
+- 空壳耗尽 → all-null `data` + `partial_success` + runtime problem
+- 其它失败耗尽 → 无 `structured_response` → harness `failed`
+- 普通 / Tecan run：`structured_schema=None`，不走此路径；Tecan 由 finalizer 工具校验
+
+### 虚拟文件系统（`AgentResources`）
+
+`CompositeBackend` 路由：
+
+| 虚拟前缀 | 后端 |
+|----------|------|
+| 默认 | `StateBackend`（图状态临时文件） |
+| `/memories/` | `StoreBackend` → `dsagents_store.db` |
+| `/artifacts/` | `FilesystemBackend` → `data/artifacts/` |
+| `/large_tool_results/` | 同上磁盘 |
+| `/skills/` | `FilesystemBackend` → `backend/skills/`（只读权限拒绝写） |
+
+首次启动若 `/memories/AGENTS.md` 缺失则写入 baseline 手册（ZIP/`parse_documents` 使用约定）。
+
+### State：runs 投影 + append-only events；session_id
+
+| 概念 | 角色 |
+|------|------|
+| `runs` 表 | 投影快照：`status`、`reply`、`error`、`result_json`、`workflow`、时间戳 |
+| `run_events` 表 | append-only 事件流；`event_id` 自增，支持 `after_event_id` 增量拉取 |
+| `session_id` | 仅作 LangGraph `thread_id`（checkpoint 线程）+ 进程内单飞锁；**不是**独立 session 资源 |
+| `run_controls` | 进程内 `dict[run_id, RunControl]`，供协作 cancel |
+
+时间戳：ledger 与 OMS 统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
+
+持久化：
+
+- `data/dsagents_runs.db` — runs + run_events
+- `data/dsagents_checkpoints.db` — LangGraph checkpointer
+- `data/dsagents_store.db` — StoreBackend / memory
+- `data/artifacts/` — uploads / downloads
+- `log/oms_log.log` — best-effort JSONL 旁路索引（非第八类 event，无查询 API）
+
+无自动 schema migration；三库均 `create table if not exists`。
+
+## workflow 与工具表
+
+### 业务 workflow：WGQ vs DK
+
+`WGQ`（常量 `WAG_WORKFLOW = "WGQ"`，飞利浦外高桥）：
+
+1. API 收窄 `workflow` 字面量
+2. Brain 加载 `/skills/philips_wgq_inbound_recognition/SKILL.md` 提示
+3. `ToolStrategy(PhilipsWgqRecognitionResult)` + `StructuredOutputRecovery`
+4. 工具 denylist 去掉 Tecan finalizer
+5. harness 强制 `structured_response` → `run.result`
+
+`DK`（常量 `DK_WORKFLOW = "DK"`，帝肯境外供应链）：
+
+1. Brain 加载 `/skills/tecan_import/SKILL.md`
+2. `structured_schema=None`（无 ToolStrategy / Recovery）
+3. 工具 denylist 去掉 Philips 主数据 lookup，保留共享 MinerU / XLSX 与 Tecan finalizer
+4. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
+
+### ToolCatalog 五工具（`runtime/tools.py`）
+
+| 工具 | 来源 | 角色 |
+|------|------|------|
+| `parse_documents` | `integrations.mineru` | MinerU 批量解析 PDF/Office → JSON 或 ZIP |
+| `extract_archives` | `integrations.mineru` | 解压 ZIP artifact |
+| `lookup_philips_wgq_master_data` | Philips scripts | Tracking XLSX + Oracle 补齐 12NC 主数据 |
+| `inspect_supply_chain_workbooks` | Tecan scripts（共享） | XLSX → 可读 JSON artifact |
+| `finalize_tecan_overseas_recognition` | Tecan scripts | 校验并返回 Tecan 终态 JSON 字符串 |
+
+**WGQ denylist**（`_WAG_EXCLUDED_TOOLS`）：
+
+```text
+finalize_tecan_overseas_recognition
+```
+
+保留共享 MinerU、共享 XLSX 检查器与 Philips 主数据工具。**禁止**业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引会失效）。
+
+**DK denylist**（`_DK_EXCLUDED_TOOLS`）：
+
+```text
+lookup_philips_wgq_master_data
+```
+
+保留共享 MinerU / XLSX 与 Tecan finalizer。
+
+新增 Skill 工具：在 `default_tool_catalog()` 静态 import + 注册一行；不自动扫描。
 
 ## Key Abstractions
 
-### HarnessRuntime（`runtime/execution.py`）
-
-- 持有 `AgentResources`、`ToolCatalog`、`BrainFactory`、`run_controls: dict[str, RunControl]`。
-- `execute_run`：唯一执行入口；yield `RunEvent`。
-- `request_cancel`：协作 drain；无 control 返回 `False`。
-- `create_harness(resources)`：默认 `default_tool_catalog()` + `DeepAgentsBrainFactory()`。
-
-### Brain / BrainFactory Protocol（`runtime/agent.py`）
-
-```python
-class Brain(Protocol):
-    def stream(self, payload, config=None, **kwargs) -> Iterator: ...
-
-class BrainFactory(Protocol):
-    def create(self, *, resources, middleware, tools, workflow=None) -> Brain: ...
-```
-
-`DeepAgentsBrainFactory`：
-
-- 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`。
-- `create_deep_agent`：backend / checkpointer / store / skills=`["/skills/"]` / permissions deny write `/skills/**`。
-- 注册 harness profile `anthropic` 且 **关闭** auto general-purpose subagent。
-- 主 Agent 名：`MAIN_AGENT_NAME = "dsagents-main"`。
-
-### AgentResources / ResourceConfig（`runtime/resources.py`）
-
-- 数据根：`backend/data/`（与 CWD 无关）。
-- `dsagents_runs.db`、`dsagents_store.db`、`dsagents_checkpoints.db`、`artifacts/`、`internal/run-events/`。
-- `CompositeBackend` 路由：
-  - `/memories/` → `StoreBackend`（跨 run 共享；启动写 baseline `AGENTS.md`）
-  - `/artifacts/`、`/large_tool_results/` → `FilesystemBackend(artifacts_dir)`
-  - `/skills/` → `FilesystemBackend(skills_dir)`（包内资源）
-  - default → `StateBackend`
-
-### ToolCatalog（`runtime/tools.py`）
-
-静态 5 个 handler：
-
-| 工具 | 来源 |
-|------|------|
-| `parse_documents` | `integrations.mineru` |
-| `extract_archives` | `integrations.mineru` |
-| `lookup_philips_wgq_master_data` | Philips skill |
-| `save_tecan_extraction` | Tecan skill |
-| `generate_tecan_import` | Tecan skill |
-
-新增 Skill：静态 import + 注册一行；不自动扫描。
-
-### SqliteRunLedger / RunEvent / RunSnapshot（`runtime/runs.py`）
-
-- **Run 状态机**：`queued → running → succeeded|failed|cancelled`；取消路径 `queued → cancelled` 或 `running → cancelling → cancelled`。
-- **RunEvent**：`event_id, run_id, event_type, created_at, payload, raw`。
-- **RunSnapshot**：`run_id, session_id, input_messages_json, workflow, status, timestamps, reply, error, result`。
-- 大 payload：`max_inline_bytes`（默认 262_144）溢出到 `run_events_dir` 文件。
-- `aggregate_model_usage`：按 run 汇总 token + by_agent + per-call（供 API 分层计价）。
-
-### Middleware（`runtime/middleware.py`）
-
-`runtime_middlewares(memory_backend=?)` 返回**每次构图新实例**：
-
-| 顺序（列表前 = after_model 后执行） | 类 | 作用 |
-|-----------------------------------|-----|------|
-| 0 | `StructuredOutputRecovery` | 文本 JSON / 空 data 壳恢复；`can_jump_to=["model","end"]` |
-| 1 | `ToolTelemetry` | tool start/complete/error → custom stream |
-| 2 | `NoProgressMiddleware` | 同 tool+args 连续 3 次 → `NoProgressLoop` |
-| 3 | `StructuredOutputCompatibility` | ToolStrategy 请求关闭 thinking |
-| 4（仅主 Agent） | `MemoryMiddleware` | 加载 `/memories/AGENTS.md`；受限追加提示 |
-
-主 Agent 约 **5** 个 middleware；SubAgent 各 **4** 个（无 Memory）。
-
-Philips workflow 额外：
-
-- `DeepAgentsBrainFactory` 确保 `StructuredOutputCompatibility` + 将 `StructuredOutputRecovery` **insert(0)**（after_model 最后跑）。
-- `response_format = ToolStrategy(PhilipsWgqRecognitionResult, handle_errors=philips_structured_output_error_message)`。
-
-### Workflow denylist
-
-唯一固定 workflow：`philips_wgq_inbound_recognition`（常量 `WORKFLOW`，schema 模块）。
-
-```python
-_PHILIPS_EXCLUDED_TOOLS = frozenset({
-    "save_tecan_extraction",
-    "generate_tecan_import",
-})
-```
-
-- **denylist** 排除其他业务（帝肯）工具；**保留**共享 MinerU（`parse_documents` / `extract_archives`）与本业务主数据工具。
-- 禁止业务-only allowlist。
-- workflow 时 `subagents=[]`（不挂 Tecan 抽取器）；系统提示追加 `PHILIPS_WORKFLOW_PROMPT`。
-
-### SubAgent（Tecan）
-
-非 Philips workflow 时 `workflow_subagents()` 注册两个无状态抽取器：
-
-- `tecan-extractor-a` / `tecan-extractor-b`
-- 工具仅 `save_tecan_extraction`；只读 FS permission；`response_format=ToolStrategy(ExtractionReference)`
-- 各自 `runtime_middlewares()`（无 memory）
-- 主 Agent 技能资源：`/skills/tecan-import/SKILL.md`；生成侧 `generate_tecan_import`
-
-### Skill 成对目录
-
-| 资源目录（kebab，挂载 `/skills/`） | Python 包 | 用途 |
-|----------------------------------|-----------|------|
-| `skills/philips-wgq-inbound-recognition/` | `skills/philipswgqinboundrecognition/` | 唯一固定 workflow 识别 |
-| `skills/tecan-import/` | `skills/tecanimport/` | 帝肯进口发票箱单 |
-
-`pyproject.toml` `package-data` 打包 kebab 目录下 `SKILL.md`、references、assets。
+| 抽象 | 类型 | 位置 | 说明 |
+|------|------|------|------|
+| `Brain` | `Protocol` | `runtime/agent.py` | 可 stream 的 Agent 图 |
+| `BrainFactory` | `Protocol` | `runtime/agent.py` | 按 run 创建 Brain |
+| `DeepAgentsBrainFactory` | 具体类 | `runtime/agent.py` | 默认 DeepAgents 实现 |
+| `HarnessRuntime` | 具体类 | `runtime/execution.py` | 执行 run、投影事件、协作 cancel |
+| `AgentResources` | 具体类 | `runtime/resources.py` | 三 SQLite + backend 生命周期 |
+| `ResourceConfig` | dataclass | `runtime/resources.py` | 路径配置（锚定 `backend/`） |
+| `SqliteRunLedger` | 具体类 | `runtime/runs.py` | runs / run_events 持久化 |
+| `RunSnapshot` / `RunEvent` | dataclass | `runtime/runs.py` | 投影与事件值对象 |
+| `ToolCatalog` | dataclass | `runtime/tools.py` | 有序 callable 元组 |
+| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WGQ 结构化输出恢复 |
+| `ContractModel` | Pydantic | `skills/channel_contract.py` | `extra="forbid"` 基类 |
+| `PhilipsWgqRecognitionResult` | schema | Philips | ToolStrategy + run.result |
+| `TecanOverseasRecognitionResult` | schema | Tecan | finalizer 校验 + run.result |
 
 ## Entry Points
 
-### HTTP（`api.py`）
+| 入口 | 用途 |
+|------|------|
+| `api:app` / `create_app()` | uvicorn HTTP 服务 |
+| `create_harness(resources)` | 程序内装配默认 Brain + 五工具 |
+| `AgentResources(config).__enter__()` | 打开三库与 backend |
+| `HarnessRuntime.execute_run(...)` | 同步生成器驱动单次 run |
+| `python -m tests.test_*` | 本地 assert 门禁（非 pytest） |
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/upload` | 多文件上传 → `/artifacts/uploads/...` |
-| `POST` | `/runs` | 创建 run 并后台执行 |
-| `GET` | `/runs/{run_id}` | 投影 + 事件 + usage |
-| `POST` | `/runs/{run_id}/cancel` | 协作取消 |
+程序内典型装配：
 
-模块级 `app = create_app()`；可注入 `resource_config` / `harness_factory`（测试用）。
-
-### 程序内
-
-```python
-with AgentResources(ResourceConfig(...)) as resources:
+```text
+with AgentResources(ResourceConfig()) as resources:
     harness = create_harness(resources)
     for event in harness.execute_run(messages, session_id, run_id, workflow=...):
         ...
 ```
 
-对外稳定导出见 `runtime/__init__.py`：`AgentResources`、`ResourceConfig`、`HarnessRuntime`、`create_harness`、`RunEvent`、`RunSnapshot`、`SqliteRunLedger`。
+HTTP lifespan 等价装配：`AgentResources` → `create_harness` → 进程内 `session_locks` / `active_runs`。
 
-## session_id 语义
+## 验证入口
 
-- **仅**两处用途：
-  1. LangGraph `config["configurable"]["thread_id"]`（checkpoint 线程）
-  2. 进程内 `_acquire_session_run` / `_release_session_run` 单飞锁（`threading.Lock`，非阻塞）
-- 不是业务会话 API；无 list sessions、无 session CRUD。
-- `workflow` 与客户端 `session_id` 同时出现 → 校验失败（workflow 必须新 server-generated session）。
+本地 assert 脚本（`cd backend`）：
 
-## 唯一固定 workflow
+```text
+python -m tests.test_tools
+python -m tests.test_run_ledger
+python -m tests.test_harness
+python -m tests.test_api
+python -m tests.test_workflow_setup
+python -m tests.test_philips_wgq_inbound_recognition
+python -m tests.test_tecan_import
+```
 
-- 名称：`philips_wgq_inbound_recognition`
-- HTTP：`RunRequest.workflow: Literal["philips_wgq_inbound_recognition"] | None`
-- 业务结果：`run.result` = `PhilipsWgqRecognitionResult` JSON（英文字段）
-- outcome：`success` | `partial_success` | `input_problems`
-  - `input_problems`：`data=null` 且 `problems` 非空；**run 仍可 `succeeded`**（业务问题 ≠ 执行失败）
-  - `success` / `partial_success`：完整 `data.shipment` / `header` / `items`（未知 `null`）
-- 工具：MinerU 共享 + `lookup_philips_wgq_master_data`（Tracking xlsx + 可选 Oracle）
-
-Tecan 无 HTTP workflow 字面量；走默认（`workflow=None`）+ Skill 引导 + SubAgent。
-
-## 事件 7 类
-
-执行路径固定写入以下类型（`emit_run_event` / `emit_run_status`）：
-
-| type | 来源 | payload 要点 |
-|------|------|----------------|
-| `status` | ledger | `status`；终态可带 `reply`/`error`/`result` |
-| `model_usage` | messages + usage_metadata | model/scope/agent_name/tokens/cache |
-| `thinking` | messages thinking delta | `{content}` |
-| `text_delta` | messages 文本 delta（过滤 subagent 文本） | `{content}` |
-| `tool_progress` | custom，name ∈ {parse_documents, extract_archives} | 工具进度字段 |
-| `tool_execution` | custom（telemetry）或 updates 中 tool_calls | name/args/status 或 message 侧调用 |
-| `assistant_message` | updates 终端助手文本 | message_id/text[/thinking] |
-
-Subagent 的 **usage 仍记录**；subagent **文本**不进入 `text_delta`。
-
-业务问题统一结构 `problems: [{source, location, issue, action}]`（Philips schema / Tecan `input_problems` 返回体）。
-
-## Error handling 与 StructuredOutputRecovery
-
-### 执行层失败
-
-| 条件 | 终态 |
-|------|------|
-| `GraphDrained`（cancel） | `cancelled`，error=`run cancelled` |
-| `NoProgressLoop` | `failed` |
-| 其他 Exception | `failed`，error 文本 |
-| Philips 缺 `structured_response` | `failed`（`ValueError: structured_response missing...`） |
-| 正常完成 | `succeeded`（可有 `result`） |
-
-API 层线程异常：`_ensure_failed_run` 仅在非终态时补 `failed`。
-
-### StructuredOutputRecovery 要点（与代码一致）
-
-- Hook：`after_model`；`@hook_config(can_jump_to=["model", "end"])` — **必须含 `"end"`**。
-- 已有 `structured_response` → 返回 `None`。
-- 空 data 壳（`success`/`partial_success` 且 `data:{}` 或缺 shipment/header/items）：
-  1. 若最新为 ToolMessage：用 `tool_call_id` **精确**匹配同一 AIMessage 的 schema call；
-  2. 若该 AI 文本 JSON 合法 → 写 `structured_response` + `jump_to: "end"`；
-  3. 否则 `EMPTY_DATA_SHELL_HINT` + `PHILIPS_MINIMAL_DATA_SKELETON` 纠错，`jump_to: "model"`。
-- 正常提示：优先 schema **tool args**；文本 JSON 仅无法调工具时的后备。
-- **空壳耗尽**（`max_retries` 默认 2）：all-null skeleton + `outcome=partial_success` + runtime problem → 可有 `structured_response` → harness **`succeeded`**。
-- **其它失败耗尽**：仅 `jump_to: "end"`，**无** `structured_response` → harness 可 **`failed`**。
-- **禁止**耗尽时只返回 `None`（否则 ToolStrategy model↔model 死循环）。
-- **不编造**业务字段；骨架字段为 `null`。
-
-### 集成降级
-
-- **Oracle**（`lookup_philips_wgq_master_data`）：缺 `ORACLE_DSN`/`USERNAME`/`PASSWORD` → problems 提示，不抛死；`ORACLE_CLIENT_LIB_DIR` 存在时 thick `init_oracle_client`，缺失则跳过 init（依赖 thin/默认行为）；查询异常 → problems，不拖垮整次 lookup。
-- **MinerU**：缺 env 或任务失败 → 工具异常 / failed progress；部分无效路径记入 `failed` 列表。
-- **OMS 日志**：I/O 异常吞掉，不影响 run 创建。
-
-## CompositeBackend 与权限
-
-- 写 `/skills/**`：**deny**（主 Agent permissions）。
-- Tecan SubAgent：写 `/**` deny（只读文件）。
-- 业务产物写 `/artifacts/downloads/` 等。
-
-## 测试形态（架构相关）
-
-可执行 assert 脚本（非 pytest）：`cd backend && python -m tests.<name>`。
-
-| 模块 | 覆盖 |
-|------|------|
-| `tests.test_tools` | MinerU 工具与 artifact 路径 |
-| `tests.test_run_ledger` | ledger / resources / usage 聚合 / 手册 |
-| `tests.test_harness` | 事件管线 / recovery / cancel 等 |
-| `tests.test_api` | 四端点与 session 锁 |
-| `tests.test_workflow_setup` | Philips denylist 与构图 |
-| `tests.test_philips_wgq_inbound_recognition` | schema / master data |
-| `tests.test_tecan_import` | 抽取与生成 |
-| `tests.test_real_*` | 真实模型 / 外部服务（与本地回归分开） |
-
-## 包与依赖边界
-
-- 发行名：`dsagents`；安装根 `backend/`；顶层模块 `api` + 包 `runtime*` / `integrations*` / `skills*`。
-- 依赖：deepagents、langgraph、langchain*、fastapi/uvicorn、oracledb、openpyxl、requests、python-dotenv 等（见 `pyproject.toml`）。
-- 包管理：`uv sync`（`uv.lock`）；不用 `pip install -e .` 绕过锁。
+修改 backend 后先同步本目录 codebase 事实文档，再按影响更新根级 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`，并执行 `git diff --check`。
