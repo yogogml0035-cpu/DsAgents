@@ -24,7 +24,7 @@
 | 方法 | 路径 | 入站 | 出站副作用 |
 |------|------|------|------------|
 | `POST` | `/upload` | multipart `files` | 写 `artifacts/uploads/`，返回虚拟路径 |
-| `POST` | `/runs` | JSON：`messages`、可选 `workflow`（`WAG`\|`DK`）、可选 `session_id` | ledger + daemon 线程 + 可选 OMS 行 + 下游 LLM/MinerU/Oracle |
+| `POST` | `/runs` | JSON：`messages`、可选 `workflow`（`WGQ`\|`DK`）、可选 `session_id` | ledger + daemon 线程 + 可选 OMS 行 + 下游 LLM/MinerU/Oracle |
 | `GET` | `/runs/{run_id}` | query `after_event_id?` | 只读：`run`、`workflow`、`result`、`events`、`latest_content_event`、`usage` |
 | `POST` | `/runs/{run_id}/cancel` | 无 body | ledger `cancelling`/`cancelled` + `RunControl` drain |
 
@@ -50,7 +50,7 @@
 | 文件 | `backend/runtime/agent.py`（`BACKEND_ENV_PATH = backend/.env`） |
 | 依赖链 | `langchain-anthropic` → `anthropic` SDK；经 `httpx` 出站 |
 | 注入点 | 可向 `DeepAgentsBrainFactory(model=...)` 注入假模型（测试） |
-| 运行时用途 | 主 Agent 推理、工具调用、WAG `ToolStrategy` 结构化提交、DK finalizer 终态 |
+| 运行时用途 | 主 Agent 推理、工具调用、WGQ `ToolStrategy` 结构化提交、DK finalizer 终态 |
 | 用量标签 | `runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"` 写入每条 `model_usage` |
 | API 估价 | `api._usage_summary` 对可计价模型（`MiniMax-M3`）按档估算 CNY；未知模型则金额为 null |
 
@@ -67,7 +67,7 @@
 **Harness 相关**
 
 - `register_harness_profile("anthropic", HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))`
-- `thread_id = session_id`；WAG / DK workflow 禁止客户端复用 `session_id`（服务端新建）
+- `thread_id = session_id`；WGQ / DK workflow 禁止客户端复用 `session_id`（服务端新建）
 
 ### 2. MinerU — 文档解析服务
 
@@ -265,14 +265,14 @@
 
 | 项 | 事实 |
 |----|------|
-| HTTP 触发 | `POST /runs` body `workflow: "WAG"` |
+| HTTP 触发 | `POST /runs` body `workflow: "WGQ"` |
 | Skill 资源 | `/skills/philips_wgq_inbound_recognition/SKILL.md` |
 | 货代版式 | `references/freight-forwarders.md`（DHL、DSV、FedEx、UPS、康捷空） |
 | 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philips_wgq_inbound_recognition`） |
 | 投影 | ToolStrategy `structured_response` → `run.result` |
 | 主数据 | Tracking XLSX + 可选 Oracle |
 | 工具 denylist | 去掉 `finalize_tecan_overseas_recognition` |
-| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（WAG 专用；`can_jump_to` 须含 `"end"`） |
+| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（WGQ 专用；`can_jump_to` 须含 `"end"`） |
 
 ### Tecan 境外
 

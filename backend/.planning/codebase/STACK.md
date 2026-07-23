@@ -107,7 +107,7 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 | `GET` | `/runs/{run_id}` | 投影快照 + events + usage（可选 `after_event_id`） |
 | `POST` | `/runs/{run_id}/cancel` | 协作 cancel（`RunControl.request_drain`） |
 
-请求体用 Pydantic v2（`extra="forbid"`）。HTTP workflow 字面量：`WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。
+请求体用 Pydantic v2（`extra="forbid"`）。HTTP workflow 字面量：`WGQ`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。
 **无** session 管理 API、**无** SSE、**无** 下载端点、**无** HTTP Auth 中间件。
 
 ### Agent：DeepAgents + LangGraph + LangChain
@@ -119,7 +119,7 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 | 执行 | `runtime.execution.HarnessRuntime` | stream → 7 类事件投影 |
 | 取消 | `langgraph.runtime.RunControl` / `GraphDrained` | 协作 drain，非强杀 |
 | 模型 | `langchain.chat_models.init_chat_model` | `anthropic:{MINIMAX_MODEL}` + `base_url`/`api_key` + `thinking={"type":"adaptive"}` |
-| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` | 仅 WAG workflow |
+| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` | 仅 WGQ workflow |
 | Harness profile | `register_harness_profile("anthropic", ...)` | `GeneralPurposeSubagentProfile(enabled=False)` |
 | Skills 挂载 | `skills=[SKILLS_SOURCE]` → `"/skills/"` | 资源目录只读 deny write |
 | Middleware | `runtime.middleware` | ToolTelemetry、NoProgress、Memory、Philips recovery 等 |
@@ -165,7 +165,7 @@ Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）
 
 | workflow | 排除 |
 |----------|------|
-| `WAG` | `finalize_tecan_overseas_recognition` |
+| `WGQ` | `finalize_tecan_overseas_recognition` |
 | `DK` | `lookup_philips_wgq_master_data` |
 
 ### 文档解析
@@ -284,6 +284,6 @@ python -m tests.test_tecan_import
 ## 架构边界摘要（栈视角）
 
 - **run-first**：`runs` 投影 + append-only `run_events`；`session_id` 仅作 LangGraph `thread_id` 与进程内单飞。
-- **渠道终态**：Philips（WAG）→ `ToolStrategy` → `run.result`；Tecan（DK）→ finalizer 工具消息 → `run.result`。
+- **渠道终态**：Philips（WGQ）→ `ToolStrategy` → `run.result`；Tecan（DK）→ finalizer 工具消息 → `run.result`。
 - **OMS**：`runtime.oms_log` 旁路 JSONL，best-effort，不阻塞 HTTP 200 queued。
 - **权威源码树**：`api.py` + `runtime/` + `integrations/` + `skills/`；忽略 `build/` 历史产物。

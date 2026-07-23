@@ -42,7 +42,7 @@
 ### workflow 工具收窄依赖手写 denylist
 
 - **位置**：`runtime/agent.py` `_WAG_EXCLUDED_TOOLS` / `_DK_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
-- **事实**：WAG 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、Philips 主数据与 XLSX 检查器；DK 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。生产 `subagents=[]`。
+- **事实**：WGQ 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、Philips 主数据与 XLSX 检查器；DK 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。生产 `subagents=[]`。
 - **债**：新增跨业务工具时必须同步 denylist；若误改成业务-only allowlist，会破坏 `/memories/AGENTS.md` 中 ZIP/`extract_archives` 指引。
 - **验证**：`python -m tests.test_workflow_setup`。
 
@@ -91,19 +91,19 @@
 
 ### Philips `StructuredOutputRecovery` 耗尽路径
 
-- **位置**：`runtime/middleware.py` `StructuredOutputRecovery`；装配于 `runtime_middlewares(structured_schema=...)` 与 `DeepAgentsBrainFactory`（WAG 时补装）。
+- **位置**：`runtime/middleware.py` `StructuredOutputRecovery`；装配于 `runtime_middlewares(structured_schema=...)` 与 `DeepAgentsBrainFactory`（WGQ 时补装）。
 - **关键约束**（改坏会卡死或假成功）：
   1. `@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`。
   2. 重试耗尽（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）时必须 `jump_to: "end"`，禁止只返回 `None`（注释明确：ToolStrategy 无 tools 时 model↔model 无限循环）。
   3. 空 `data` 壳：同回合 `ToolMessage.tool_call_id` 绑定恢复；耗尽 → all-null skeleton + `partial_success` + runtime problem（**不编造业务值**）。
-  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对 WAG 抛 `structured_response missing for WAG` → run `failed`。
+  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对 WGQ 抛 `structured_response missing for WGQ` → run `failed`。
   5. DK / 普通 run：`structured_schema=None`，不装 recovery；DK 终态靠 `finalize_tecan_overseas_recognition`。
 - **风险**：把 empty-shell fallback 当成业务「正常 partial」模板；或把 recovery 泛化到 Tecan。
 - **验证**：`python -m tests.test_harness`。
 
 ### 通用 / 非 workflow 路径可不产出业务 `result`
 
-- **位置**：`runtime/execution.py`：WAG 强制 `structured_response`；DK 强制 Tecan finalizer；否则可 `result=None` 仍 `succeeded`。
+- **位置**：`runtime/execution.py`：WGQ 强制 `structured_response`；DK 强制 Tecan finalizer；否则可 `result=None` 仍 `succeeded`。
 - **风险**：客户端若只认 HTTP 200/`succeeded` 而不检查 `result`，会把「闲聊式成功」当业务完成。
 
 ### OMS 索引 best-effort、可静默丢失

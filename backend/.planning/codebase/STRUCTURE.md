@@ -31,7 +31,7 @@ backend/
 │   ├── __init__.py
 │   ├── channel_contract.py         # 共享 OrderItem(24)、RecognitionProblem、outcome 校验
 │   ├── philips_wgq_inbound_recognition/   # 可 import 包，也是 /skills/ 资源目录
-│   │   ├── __init__.py             # 导出 WAG_WORKFLOW、PhilipsWgqRecognitionResult
+│   │   ├── __init__.py             # 导出 WAG_WORKFLOW（值为 WGQ）、PhilipsWgqRecognitionResult
 │   │   ├── SKILL.md
 │   │   ├── references/
 │   │   │   └── freight-forwarders.md      # DHL / DSV / FedEx / UPS / 康捷空版式提示
@@ -106,7 +106,7 @@ backend/
 | 路径 | 职责 |
 |------|------|
 | `api.py` | `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`；session 单飞；usage 聚合计价 |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；WAG `ToolStrategy`；WAG/DK denylist |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；WGQ `ToolStrategy`；WGQ/DK denylist |
 | `runtime/execution.py` | `HarnessRuntime`：归一化消息、stream → 七类事件、Philips structured_response、Tecan finalizer 捕获、协作 cancel |
 | `runtime/middleware.py` | `StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、`runtime_middlewares` |
 | `runtime/tools.py` | 五工具静态注册唯一入口 |
@@ -117,7 +117,7 @@ backend/
 | `integrations/artifacts.py` | 虚拟路径、`clean_filename` / `make_timestamped_name`、`write_json_artifact` |
 | `integrations/mineru.py` | MinerU 提交/轮询/下载；ZIP 解压 |
 | `skills/channel_contract.py` | 渠道共用 24 字段 item 与 outcome 语义 |
-| `skills/philips_wgq_inbound_recognition/schema.py` | `WAG_WORKFLOW`、`PhilipsWgqRecognitionResult` |
+| `skills/philips_wgq_inbound_recognition/schema.py` | `WAG_WORKFLOW`（值为 `WGQ`）、`PhilipsWgqRecognitionResult` |
 | `skills/philips_wgq_inbound_recognition/scripts/tools.py` | Tracking + Oracle 主数据 |
 | `skills/tecan_import/schema.py` | `DK_WORKFLOW`、`TecanOverseasRecognitionResult` |
 | `skills/tecan_import/scripts/tools.py` | XLSX 检查 + finalizer（无 Excel 生成） |
@@ -161,7 +161,7 @@ backend/
 | 类别 | 约定 | 示例 |
 |------|------|------|
 | 包 / 模块 | snake_case | `runtime`、`philips_wgq_inbound_recognition` |
-| workflow 标识 | 大写渠道代码 | `WAG`、`DK` |
+| workflow 标识 | 大写渠道代码 | `WGQ`、`DK` |
 | 工具函数 | snake_case callable `__name__` | `parse_documents`、`finalize_tecan_overseas_recognition` |
 | 虚拟路径 | POSIX 风格前缀 | `/artifacts/...`、`/skills/...`、`/memories/...` |
 | 主 Agent 名 | 常量 | `dsagents-main`（`MAIN_AGENT_NAME`） |

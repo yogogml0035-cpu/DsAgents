@@ -13,7 +13,7 @@ from skills.channel_contract import (
 )
 
 
-WAG_WORKFLOW = "WAG"
+WAG_WORKFLOW = "WGQ"
 
 
 class OrderHeader(ContractModel):

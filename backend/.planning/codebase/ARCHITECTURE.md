@@ -70,7 +70,7 @@ api.py                          HTTP 适配层
 
 `RunRequest` 约束：
 
-- `workflow: Literal["WAG", "DK"] | None` — `WAG` 为飞利浦外高桥，`DK` 为帝肯境外供应链
+- `workflow: Literal["WGQ", "DK"] | None` — `WGQ` 为飞利浦外高桥，`DK` 为帝肯境外供应链
 - `workflow` 与客户端 `session_id` 互斥（workflow run 必须服务端生成新 session）
 - `messages[].content` 为 `text` | `artifact` 判别联合；`extra="forbid"`
 
@@ -125,7 +125,7 @@ running → cancelling → cancelled
 
 终态业务结果：
 
-- **WAG**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
+- **WGQ**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
 - **DK**：必须接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`；缺失则 `failed`
 - **通用 Tecan 请求**（`workflow=None` 但调用 finalizer）：同样投影结果
 - **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
@@ -213,7 +213,7 @@ running → cancelling → cancelled
   - 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`
   - `create_deep_agent`：`subagents=[]`，`skills=["/skills/"]`，`/skills/**` 写拒绝
   - harness profile `anthropic`：关闭 general-purpose subagent
-  - `WAG` 时追加 `WAG_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist
+  - `WGQ` 时追加 `WAG_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist
   - `DK` 时追加 `DK_WORKFLOW_PROMPT`、保留 `structured_schema=None`，并以 finalizer 终态校验
 
 ### middleware 栈（`runtime_middlewares`）
@@ -230,7 +230,7 @@ running → cancelling → cancelled
 
 主 Agent 有 memory 时约 **5** 个 middleware；无 schema 时约 4 个（无 Recovery）。生产不配置业务 SubAgent。
 
-### StructuredOutputRecovery（Philips / WAG 专用）
+### StructuredOutputRecovery（Philips / WGQ 专用）
 
 - hook：`after_model`，`can_jump_to` 必须含 **`"model"` 与 `"end"`**
 - 从助手 fenced/raw JSON 恢复 `structured_response`；校验失败则 `jump_to: "model"` 纠错（默认最多 2 次）
@@ -277,9 +277,9 @@ running → cancelling → cancelled
 
 ## workflow 与工具表
 
-### 业务 workflow：WAG vs DK
+### 业务 workflow：WGQ vs DK
 
-`WAG`（常量 `WAG_WORKFLOW = "WAG"`，飞利浦外高桥）：
+`WGQ`（常量 `WAG_WORKFLOW = "WGQ"`，飞利浦外高桥）：
 
 1. API 收窄 `workflow` 字面量
 2. Brain 加载 `/skills/philips_wgq_inbound_recognition/SKILL.md` 提示
@@ -304,7 +304,7 @@ running → cancelling → cancelled
 | `inspect_supply_chain_workbooks` | Tecan scripts（共享） | XLSX → 可读 JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan scripts | 校验并返回 Tecan 终态 JSON 字符串 |
 
-**WAG denylist**（`_WAG_EXCLUDED_TOOLS`）：
+**WGQ denylist**（`_WAG_EXCLUDED_TOOLS`）：
 
 ```text
 finalize_tecan_overseas_recognition
@@ -335,7 +335,7 @@ lookup_philips_wgq_master_data
 | `SqliteRunLedger` | 具体类 | `runtime/runs.py` | runs / run_events 持久化 |
 | `RunSnapshot` / `RunEvent` | dataclass | `runtime/runs.py` | 投影与事件值对象 |
 | `ToolCatalog` | dataclass | `runtime/tools.py` | 有序 callable 元组 |
-| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WAG 结构化输出恢复 |
+| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WGQ 结构化输出恢复 |
 | `ContractModel` | Pydantic | `skills/channel_contract.py` | `extra="forbid"` 基类 |
 | `PhilipsWgqRecognitionResult` | schema | Philips | ToolStrategy + run.result |
 | `TecanOverseasRecognitionResult` | schema | Tecan | finalizer 校验 + run.result |

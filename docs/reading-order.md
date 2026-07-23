@@ -26,7 +26,7 @@
 ## middleware 或 DeepAgents 任务
 
 1. `backend/runtime/middleware.py`（`StructuredOutputRecovery`：`can_jump_to` 含 `"end"`，耗尽 `jump_to: "end"`）
-2. `backend/runtime/agent.py`（WAG/DK **denylist**，禁止业务-only allowlist）
+2. `backend/runtime/agent.py`（WGQ/DK **denylist**，禁止业务-only allowlist）
 3. `backend/.planning/codebase/CONVENTIONS.md` 与 `CONCERNS.md`
 4. `backend/tests/test_harness.py`、`backend/tests/test_workflow_setup.py`
 

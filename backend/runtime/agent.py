@@ -45,7 +45,7 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 WAG_WORKFLOW_PROMPT = (
-    "API 已选择 workflow=WAG（飞利浦外高桥进境识别）。"
+    "API 已选择 workflow=WGQ（飞利浦外高桥进境识别）。"
     "本 run 必须加载并遵循 `/skills/philips_wgq_inbound_recognition/SKILL.md`，"
     "并按其引用读取货代版式说明。"
     "最终结果必须通过 PhilipsWgqRecognitionResult 结构化工具提交。"

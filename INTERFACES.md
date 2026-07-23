@@ -14,8 +14,8 @@
 ### 请求约束
 
 - `messages[]` 项为 `{role, content:[{type:"text",text}|{type:"artifact",path}]}`，请求模型 `extra="forbid"`。旧 `{message:"..."}` 体不支持。
-- `workflow` 只允许 `WAG`、`DK` 或省略。
-- WAG / DK workflow **不能**携带客户端 `session_id`（服务端总是分配新 session）；违者 **422**。通用请求保留普通 session 语义。
+- `workflow` 只允许 `WGQ`、`DK` 或省略。
+- WGQ / DK workflow **不能**携带客户端 `session_id`（服务端总是分配新 session）；违者 **422**。通用请求保留普通 session 语义。
 - 同 `session_id` 并发第二跑 → HTTP **409** + `active_run_id`（进程内锁）。
 - 未知 `run_id` → **404**。
 - cancel：活跃 run → **202** `{"status":"cancelling"}`；已 `cancelling`/`cancelled` → **200** 回显；已终态（`succeeded`/`failed`）再 cancel → **409**。
@@ -64,7 +64,7 @@ running → cancelling → cancelled
 
 | 路径 | 触发 | 投影到 `run.result` | 缺结果时 |
 |------|------|---------------------|----------|
-| WAG（Philips） | `workflow=WAG` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` | run **`failed`** |
+| WGQ（Philips） | `workflow=WGQ` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` | run **`failed`** |
 | DK（Tecan） | `workflow=DK` | `finalize_tecan_overseas_recognition` ToolMessage → `TecanOverseasRecognitionResult` | run **`failed`** |
 | 通用 Tecan 请求 | 无 workflow + 明确 Skill 请求 | 同一 finalizer 路径 | 可 `succeeded` 且 `result=null` |
 | 普通阅读 | 无 workflow、无 finalizer | 可为 `null` | 仍 `succeeded` |
@@ -104,7 +104,7 @@ Philips header 含 `om`/`so`/`salesperson`/`etd` 等、无 `invoice_date`；Teca
 | `success` | 无未解决业务字段缺失；已解决冲突或无关材料不降级 | `succeeded` |
 | `partial_success` | 核心商品事实已确认，补充字段为 `null` 且列入 problems | `succeeded` |
 | `input_problems` | 票次或核心事实不能确认；只带已证实字段和复核线索 | `succeeded` |
-| WAG structured response 缺失/非法、DK finalizer 缺失、工具或运行时异常 | 无有效业务终态 | `failed` |
+| WGQ structured response 缺失/非法、DK finalizer 缺失、工具或运行时异常 | 无有效业务终态 | `failed` |
 
 共享校验（`validate_channel_outcome`）会将「有缺失却声明 `success`」归正为 `partial_success`（并补 problem），将「字段已完整却声明 `partial_success`」归正为 `success`。
 
@@ -130,16 +130,16 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 | `inspect_supply_chain_workbooks` | 共享 XLSX 只读检查 → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan 终态 schema 校验并返回 JSON 字符串 |
 
-- WAG 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；执行层从 `updates` 读取并再次 Pydantic 校验。
+- WGQ 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；执行层从 `updates` 读取并再次 Pydantic 校验。
 - DK 由 `/skills/tecan_import/SKILL.md` 引导；Agent 必须调用 finalizer，执行层**只**读取该名字的 ToolMessage 并写 `run.result`。
 - 不设业务 SubAgent、业务任务状态表或全局 Tecan middleware。
-- WAG 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- WGQ 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
 - 工具在 `runtime/tools.py` **静态**注册；不自动扫描目录。
 - Skill 单目录：下划线命名的可 import 包内同时存放资源与代码；`package-data` 必须打包 `SKILL.md` / references。
 
 ### StructuredOutputRecovery（Philips 专用）
 
-- 仅 WAG 的 `structured_schema` 非空；DK / 普通 run 为 `None`。
+- 仅 WGQ 的 `structured_schema` 非空；DK / 普通 run 为 `None`。
 - `after_model` + `jump_to`；`can_jump_to` 必须含 `"model"` 与 **`"end"`**。
 - 耗尽必须显式 `jump_to: "end"`，禁止只返回 `None`。
 - 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton 纠错；空壳耗尽 → all-null + `partial_success`（技术兜底）。

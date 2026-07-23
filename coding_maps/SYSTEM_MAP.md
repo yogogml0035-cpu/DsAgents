@@ -12,7 +12,7 @@ DsAgents 是**单子项目、run-first** 的 Agent 运行时底座：接收本�
 | 产品代码 | 仅 `backend/`（`api.py` + `runtime/` + `integrations/` + `skills/`） |
 | 前端子项目 | **无**；无 TypeScript / Web UI 子仓 |
 | 交互模式 | HTTP 轮询四端点；**无 SSE / session CRUD / 下载路由 / Webhook** |
-| 业务 workflow | `WAG`（飞利浦外高桥）与 `DK`（帝肯境外供应链） |
+| 业务 workflow | `WGQ`（飞利浦外高桥）与 `DK`（帝肯境外供应链） |
 | 包管理 | `uv` + `backend/uv.lock`（勿用 `pip install -e .` 绕过 lock） |
 | 部署假设 | 单进程 session 锁与 cancel control；多 worker 无跨进程互斥 |
 
@@ -56,7 +56,7 @@ flowchart LR
 |------|------|----------|
 | HTTP | `backend/api.py` | 四端点、run/session 校验、后台执行、轮询、cancel、OMS 索引 |
 | 执行 | `backend/runtime/execution.py` | `HarnessRuntime.execute_run`、stream→七类 events、结果投影、协作 cancel |
-| Agent | `backend/runtime/agent.py` | `Brain`/`BrainFactory` Protocol、`DeepAgentsBrainFactory`、WAG ToolStrategy、denylist、关闭默认子代理 |
+| Agent | `backend/runtime/agent.py` | `Brain`/`BrainFactory` Protocol、`DeepAgentsBrainFactory`、WGQ ToolStrategy、denylist、关闭默认子代理 |
 | Middleware | `backend/runtime/middleware.py` | Philips recovery、telemetry、loop 检测、thinking 兼容、memory |
 | 工具目录 | `backend/runtime/tools.py` | 静态 **5** 工具 `ToolCatalog` |
 | 资源 / 三库 | `backend/runtime/resources.py` | `AgentResources`、`CompositeBackend`、路径锚定 `backend/` |
@@ -66,7 +66,7 @@ flowchart LR
 | artifacts | `backend/integrations/artifacts.py` | 虚拟路径、上传命名、JSON 读写 |
 | MinerU | `backend/integrations/mineru.py` | `parse_documents` / `extract_archives` |
 | 业务合同 | `backend/skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
-| Philips（WAG） | `backend/skills/philips_wgq_inbound_recognition/` | workflow、Skill、schema、Tracking/Oracle lookup |
+| Philips（WGQ） | `backend/skills/philips_wgq_inbound_recognition/` | workflow、Skill、schema、Tracking/Oracle lookup |
 | Tecan（DK） | `backend/skills/tecan_import/` | workflow、Skill/references、XLSX inspection、finalizer |
 
 依赖方向（单向）：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具 = callable + `ToolCatalog`；资源与 ledger = 具体类。
@@ -144,7 +144,7 @@ with AgentResources(...) as resources:
 
 | 路径 | 触发 | 投影 | 缺结果时 |
 |------|------|------|----------|
-| WAG（Philips） | `workflow=WAG` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` → `run.result` | run `failed` |
+| WGQ（Philips） | `workflow=WGQ` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` → `run.result` | run `failed` |
 | DK（Tecan） | `workflow=DK` | `finalize_tecan_overseas_recognition` ToolMessage → `TecanOverseasRecognitionResult` → `run.result` | run `failed` |
 | 通用 Tecan 请求 | 无 workflow + 明确 Skill 请求 | 同一 finalizer 路径 | 可 `succeeded` 且 `result=null`（普通阅读合法） |
 | 普通阅读 | 无 workflow、无 finalizer | `result` 可为 `null` | 仍 `succeeded` |
@@ -154,7 +154,7 @@ with AgentResources(...) as resources:
 ### 3.5 渠道路径（同票单一 run）
 
 ```text
-WAG workflow
+WGQ workflow
   → /skills/philips_wgq_inbound_recognition/SKILL.md
   → references/freight-forwarders.md（DHL / DSV / FedEx / UPS / 康捷空）
   → parse_documents / inspect_supply_chain_workbooks
@@ -183,7 +183,7 @@ AgentResources
 DeepAgentsBrainFactory
   ├─ general-purpose subagent disabled；subagents=[]
   ├─ static ToolCatalog（5）
-  ├─ WAG: ToolStrategy + WAG_WORKFLOW_PROMPT + denylist + Recovery
+  ├─ WGQ: ToolStrategy + WAG_WORKFLOW_PROMPT + denylist + Recovery
   ├─ DK: DK_WORKFLOW_PROMPT + finalizer + denylist；structured_schema=None
   └─ generic: Skill-driven，structured_schema=None
 ```
@@ -194,7 +194,7 @@ DeepAgentsBrainFactory
 
 | 顺序 | middleware | 适用范围 |
 |------|------------|----------|
-| 1 | `StructuredOutputRecovery` | 仅 WAG（`structured_schema` 非空）；`after_model` + `jump_to` |
+| 1 | `StructuredOutputRecovery` | 仅 WGQ（`structured_schema` 非空）；`after_model` + `jump_to` |
 | 2 | `ToolTelemetry` | 所有 Agent |
 | 3 | `NoProgressMiddleware` | 所有 Agent（同参连续 3 次 → `NoProgressLoop` → failed） |
 | 4 | `StructuredOutputCompatibility` | 所有；仅 ToolStrategy 时关 thinking |
@@ -220,7 +220,7 @@ DeepAgentsBrainFactory
 | `inspect_supply_chain_workbooks` | Tecan 包（共享） | 只读 XLSX → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan | Pydantic 校验并返回终态 JSON 字符串 |
 
-WAG **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`。均保留共享 MinerU / XLSX。**禁止**业务-only allowlist（保护 `/memories/AGENTS.md` 中 ZIP 指引）。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
+WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`。均保留共享 MinerU / XLSX。**禁止**业务-only allowlist（保护 `/memories/AGENTS.md` 中 ZIP 指引）。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
 
 ---
 
@@ -238,7 +238,7 @@ WAG **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `looku
 约束摘要：
 
 - `messages[]`：`{role, content:[{type:"text",text}|{type:"artifact",path}]}`，`extra="forbid"`；旧 `{message:"..."}` 不支持
-- `workflow` 仅允许 `WAG`、`DK` 或省略；与客户端 `session_id` **互斥**（workflow 强制服务端新 session → 否则 **422**）
+- `workflow` 仅允许 `WGQ`、`DK` 或省略；与客户端 `session_id` **互斥**（workflow 强制服务端新 session → 否则 **422**）
 - 同 `session_id` 并发第二跑 → **409** + `active_run_id`（进程内锁）
 - **无** Auth 中间件、**无** Webhook、**无** session CRUD、**无** 下载端点、**无** SSE
 - 建议 `after_event_id` 增量拉取；终态业务数据读顶层 `result`，不要只看 `reply`
@@ -394,7 +394,7 @@ WAG **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `looku
 
 1. 单一下划线 Skill 包（`SKILL.md` / references / schema / scripts）
 2. `runtime/tools.py` 静态注册
-3. WAG / DK denylist 是否需排除**其他业务**新工具
+3. WGQ / DK denylist 是否需排除**其他业务**新工具
 4. `pyproject.toml` package-data
 5. tests + codebase 事实 + 本地图/INTERFACES（若 HTTP 边界变）
 

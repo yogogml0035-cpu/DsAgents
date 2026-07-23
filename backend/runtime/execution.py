@@ -128,7 +128,7 @@ class HarnessRuntime:
                         )
             if workflow == WAG_WORKFLOW:
                 if structured_response is None:
-                    raise ValueError("structured_response missing for WAG")
+                    raise ValueError("structured_response missing for WGQ")
                 result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
                     mode="json",
                 )

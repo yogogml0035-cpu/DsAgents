@@ -474,6 +474,7 @@ def _check_workflow_api(tmp: str) -> None:
     with TestClient(app) as client:
         assert client.post("/runs", json={**request, "session_id": "reused"}).status_code == 422
         assert client.post("/runs", json={**request, "workflow": "unknown"}).status_code == 422
+        assert client.post("/runs", json={**request, "workflow": "WAG"}).status_code == 422
         assert client.post(
             "/runs", json={**request, "workflow": "philips_wgq_inbound_recognition"}
         ).status_code == 422

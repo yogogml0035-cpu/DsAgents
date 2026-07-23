@@ -23,7 +23,7 @@
 | 常量 | `UPPER_SNAKE` | `WAG_WORKFLOW`、`DK_WORKFLOW`、`NO_PROGRESS_WINDOW`、`SKILLS_SOURCE` |
 | 私有助手 | 单下划线前缀 | `_normalize_messages`、`_update_events`、`_WAG_EXCLUDED_TOOLS` |
 | 虚拟 FS 路径 | 前导 `/` 的挂载前缀 | `/skills/`、`/artifacts/`、`/memories/` |
-| workflow 字面量 | 固定大写渠道代码 | `WAG`、`DK` |
+| workflow 字面量 | 固定大写渠道代码 | `WGQ`、`DK` |
 | 工具函数名 | 与注册 callable `__name__` 一致 | `parse_documents`、`finalize_tecan_overseas_recognition` |
 | 事件类型 | 固定小写下划线字符串（见 §10） | `tool_execution`、`model_usage` |
 | 环境变量 | `UPPER_SNAKE` 前缀分组 | `MINIMAX_*`、`MINERU_*`、`ORACLE_*`、`DSAGENTS_*`（测试 opt-in） |
@@ -127,7 +127,7 @@ def default_tool_catalog() -> ToolCatalog:
 ## 6. HTTP 与注入点
 
 - 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`（轮询，**无 SSE**）。
-- `RunRequest.workflow` 当前仅允许 `WAG`、`DK` 或省略；workflow run **禁止**客户端复用 `session_id`（422）。
+- `RunRequest.workflow` 当前仅允许 `WGQ`、`DK` 或省略；workflow run **禁止**客户端复用 `session_id`（422）。
 - 程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`；`create_app(harness_factory=...)` 便于测试注入 FakeBrain。
 - OMS 旁路：`create_run` 成功后 best-effort 写 JSONL（`runtime/oms_log.py`，默认 `backend/log/oms_log.log`）；失败吞掉，不阻塞已创建 run；**非** `run_events`、无查询 API。
 
@@ -136,7 +136,7 @@ def default_tool_catalog() -> ToolCatalog:
 | 场景 | 层 | 行为 |
 |------|----|------|
 | 业务 `input_problems` | 渠道 schema / finalizer | 合法 `run.result`，status **`succeeded`** |
-| 缺 Philips `structured_response` | Harness（WAG） | `ValueError` → status `failed` |
+| 缺 Philips `structured_response` | Harness（WGQ） | `ValueError` → status `failed` |
 | DK 缺 Tecan finalizer 终态 | Harness（DK） | `ValueError` → status `failed` |
 | `NoProgressLoop`（同 tool+args 连续 `NO_PROGRESS_WINDOW=3`） | middleware → Harness | status `failed`，error 文本携带原因 |
 | 其它 Exception | Harness | status `failed`，`error` 文本 + raw repr |
@@ -178,13 +178,13 @@ def default_tool_catalog() -> ToolCatalog:
 
 ### denylist（禁止业务-only allowlist）
 
-WAG / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他业务**工具：
+WGQ / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他业务**工具：
 
 ```python
 _WAG_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
 _DK_EXCLUDED_TOOLS = frozenset({"lookup_philips_wgq_master_data"})
 # 保留 parse_documents / extract_archives / inspect_supply_chain_workbooks
-# WAG 另保留 lookup_philips_wgq_master_data；DK 另保留 finalize_tecan_overseas_recognition
+# WGQ 另保留 lookup_philips_wgq_master_data；DK 另保留 finalize_tecan_overseas_recognition
 ```
 
 - **禁止**业务-only allowlist（避免共享 MinerU / XLSX 工具从模型工具表消失，导致 `/memories/AGENTS.md` ZIP 指引失效）。
@@ -219,7 +219,7 @@ Harness / ledger 对外事件类型仅：
 
 | 包 | workflow | 终态路径 |
 |----|----------|----------|
-| `philips_wgq_inbound_recognition` | `WAG` | `ToolStrategy(PhilipsWgqRecognitionResult)` + `structured_response` |
+| `philips_wgq_inbound_recognition` | `WGQ` | `ToolStrategy(PhilipsWgqRecognitionResult)` + `structured_response` |
 | `tecan_import` | `DK` | `finalize_tecan_overseas_recognition` 工具返回值 |
 
 - 不做 Skill 目录自动发现；`skills: [SKILLS_SOURCE]` 固定 `/skills/`。
@@ -259,7 +259,7 @@ Harness / ledger 对外事件类型仅：
 
 ### Philips vs Tecan 终态路径
 
-- **WAG**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing for WAG`）。
+- **WGQ**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing for WGQ`）。
 - **DK**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；缺失则 run `failed`；无 `response_format` / 无 Philips recovery。
 - 普通 run：`structured_schema=None`，不强制按 Philips schema 恢复；若仍调用 Tecan finalizer 可投影 result。
 
@@ -275,8 +275,8 @@ Harness / ledger 对外事件类型仅：
   4. `StructuredOutputCompatibility`（ToolStrategy 请求关闭 thinking）
   5. 可选 `MemoryMiddleware`（主 Agent 挂 `/memories/AGENTS.md`）
 
-- Harness 对 WAG 传 `structured_schema=PhilipsWgqRecognitionResult`；DK / 普通 run 传 `None`。
-- `DeepAgentsBrainFactory` 在 WAG 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
+- Harness 对 WGQ 传 `structured_schema=PhilipsWgqRecognitionResult`；DK / 普通 run 传 `None`。
+- `DeepAgentsBrainFactory` 在 WGQ 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
 
 ### StructuredOutputRecovery（硬约束）
 
@@ -317,7 +317,7 @@ Harness / ledger 对外事件类型仅：
 ## 16. 快速自检清单（编码时）
 
 - [ ] 未新增 Protocol（除非 Brain 形状变更）
-- [ ] 新工具已静态注册，且 WAG / DK denylist 仍只排除其他业务工具
+- [ ] 新工具已静态注册，且 WGQ / DK denylist 仍只排除其他业务工具
 - [ ] 业务终态只进 `run.result`；`input_problems` 仍 `succeeded`
 - [ ] 事件类型落在 7 类之内
 - [ ] Skill 单目录 + `package-data`；虚拟路径用下划线名

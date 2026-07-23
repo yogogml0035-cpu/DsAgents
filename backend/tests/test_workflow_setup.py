@@ -47,7 +47,7 @@ def run() -> None:
     ).read_text(encoding="utf-8")
     assert all(name in freight_forwarders for name in ("DHL", "DSV", "FedEx", "UPS", "康捷空"))
     assert "普通 PDF 抽取请求不够" in DEFAULT_SYSTEM_PROMPT
-    assert WAG_WORKFLOW == "WAG"
+    assert WAG_WORKFLOW == "WGQ"
     assert DK_WORKFLOW == "DK"
     assert "philips_wgq_inbound_recognition/SKILL.md" in WAG_WORKFLOW_PROMPT
     assert "tecan_import/SKILL.md" in DK_WORKFLOW_PROMPT
