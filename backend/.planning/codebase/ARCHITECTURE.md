@@ -291,8 +291,9 @@ running → cancelling → cancelled
 
 1. Brain 加载 `/skills/tecan_import/SKILL.md`
 2. `structured_schema=None`（无 ToolStrategy / Recovery）
-3. 工具 denylist 去掉 Philips 主数据 lookup，保留共享 MinerU / XLSX 与 Tecan finalizer
-4. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
+3. 空 denylist 保留共享 MinerU / XLSX / 12NC 主数据查询与 Tecan finalizer
+4. 对确认的唯一 12NC 批量调用 `lookup_philips_wgq_master_data`（不传 Tracking）补齐稳定字段
+5. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
 
 ### ToolCatalog 五工具（`runtime/tools.py`）
 
@@ -300,7 +301,7 @@ running → cancelling → cancelled
 |------|------|------|
 | `parse_documents` | `integrations.mineru` | MinerU 批量解析 PDF/Office → JSON 或 ZIP |
 | `extract_archives` | `integrations.mineru` | 解压 ZIP artifact |
-| `lookup_philips_wgq_master_data` | Philips scripts | Tracking XLSX + Oracle 补齐 12NC 主数据 |
+| `lookup_philips_wgq_master_data` | Philips scripts（两渠道共享） | WGQ Tracking XLSX + 共享 Oracle 补齐 12NC 主数据 |
 | `inspect_supply_chain_workbooks` | Tecan scripts（共享） | XLSX → 可读 JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan scripts | 校验并返回 Tecan 终态 JSON 字符串 |
 
@@ -310,15 +311,15 @@ running → cancelling → cancelled
 finalize_tecan_overseas_recognition
 ```
 
-保留共享 MinerU、共享 XLSX 检查器与 Philips 主数据工具。**禁止**业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引会失效）。
+保留共享 MinerU、共享 XLSX 检查器与共享 12NC 主数据工具。**禁止**业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引会失效）。
 
 **DK denylist**（`_DK_EXCLUDED_TOOLS`）：
 
 ```text
-lookup_philips_wgq_master_data
+（当前为空）
 ```
 
-保留共享 MinerU / XLSX 与 Tecan finalizer。
+DK 没有其它渠道专属工具可排除；保留共享 MinerU / XLSX / 12NC 主数据工具与 Tecan finalizer。
 
 新增 Skill 工具：在 `default_tool_catalog()` 静态 import + 注册一行；不自动扫描。
 

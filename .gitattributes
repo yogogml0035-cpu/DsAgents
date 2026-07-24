@@ -1,0 +1,2 @@
+# Keep the bundled Oracle Instant Client, including its license notices, byte-for-byte intact.
+backend/.oracle/** -text -diff

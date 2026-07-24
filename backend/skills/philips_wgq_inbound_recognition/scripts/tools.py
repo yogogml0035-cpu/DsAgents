@@ -88,7 +88,7 @@ def lookup_philips_wgq_master_data(
     product_ids: list[str],
     tracking_artifact: str | None = None,
 ) -> dict[str, Any]:
-    """按 product_id(12NC) 查询合格 Tracking 行，并仅用 Oracle 补齐缺失的稳定字段。"""
+    """按唯一 12NC 查询共享主数据；WGQ 可额外传 Tracking，Oracle 只补稳定字段。"""
     normalized_ids = list(dict.fromkeys(filter(None, (normalize_product_id(value) for value in product_ids))))
     items = {product_id: {field: None for field in MASTER_FIELDS} for product_id in normalized_ids}
     problems: list[dict[str, str]] = []
@@ -256,12 +256,23 @@ def _oracle_data(product_ids: Sequence[str]) -> tuple[dict[str, dict[str, str | 
 
 def _init_oracle_client(lib_dir: str | None) -> None:
     global _ORACLE_CLIENT_INITIALIZED
-    if not lib_dir or _ORACLE_CLIENT_INITIALIZED:
+    if _ORACLE_CLIENT_INITIALIZED:
+        return
+    lib_dir = lib_dir or _bundled_oracle_client_dir()
+    if not lib_dir:
         return
     import oracledb
 
     oracledb.init_oracle_client(lib_dir=lib_dir)
     _ORACLE_CLIENT_INITIALIZED = True
+
+
+def _bundled_oracle_client_dir() -> str | None:
+    """Use the checked-in Windows Instant Client when no explicit path is configured."""
+    if os.name != "nt":
+        return None
+    client_dir = Path(__file__).resolve().parents[3] / ".oracle" / "instantclient" / "instantclient_19_31"
+    return str(client_dir) if (client_dir / "oci.dll").is_file() else None
 
 
 def _problem(source: str, location: str, issue: str, action: str) -> dict[str, str]:

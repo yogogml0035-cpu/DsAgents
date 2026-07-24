@@ -9,7 +9,7 @@
 - 事件：固定 7 类；GET 返回快照、顶层 `workflow` / `result`、增量 events、最新内容事件与 usage。OMS JSONL 不是 run event。
 - 业务：`WGQ` 路由 Philips 外高桥，`DK` 路由 Tecan 境外供应链；两者把最终 JSON 写到 `run.result`。header 各自独立，`items[]` 共用完整 24 字段，不输出 `shipment` 或 Excel。
 - Skill：**单目录**下划线可 import 包（资源与代码同目录）；新增须更新 `package-data`。Tecan 不携带 Excel 模板或生成器。
-- 工具：静态 5 个，覆盖 PDF/ZIP 通用处理、Philips 主数据、共享 XLSX inspection 和 Tecan finalizer。WGQ denylist 排除 Tecan finalizer，DK denylist 排除 Philips lookup；禁止业务-only allowlist。没有 Tecan extractor SubAgent 或业务状态机。
+- 工具：静态 5 个，覆盖 PDF/ZIP 通用处理、WGQ / DK 共享的 12NC 主数据、共享 XLSX inspection 和 Tecan finalizer。WGQ denylist 排除 Tecan finalizer，DK 当前为空以保留共享 lookup；禁止业务-only allowlist。没有 Tecan extractor SubAgent 或业务状态机。
 - middleware：集中于 `runtime/middleware.py`。WGQ 使用有界 `StructuredOutputRecovery`（`can_jump_to` 含 `"end"`，耗尽显式 `jump_to: "end"`）；DK/普通 run 不强制 Philips schema，DK 使用 finalizer 工具验证终态。
 - 源码权威：仅 `backend/api.py`、`runtime/`、`integrations/`、`skills/`；**不要**把 `backend/build/` 当源码。
 

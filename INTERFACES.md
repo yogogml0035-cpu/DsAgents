@@ -126,14 +126,15 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 |------|------|
 | `parse_documents` | MinerU 批量解析 → downloads JSON 或 ZIP |
 | `extract_archives` | 本地解压 ZIP artifact |
-| `lookup_philips_wgq_master_data` | Tracking XLSX + 可选 Oracle 补齐 12NC 主数据 |
+| `lookup_philips_wgq_master_data` | WGQ Tracking XLSX + WGQ / DK 共用 Oracle 补齐 12NC 主数据 |
 | `inspect_supply_chain_workbooks` | 共享 XLSX 只读检查 → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan 终态 schema 校验并返回 JSON 字符串 |
 
 - WGQ 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；执行层从 `updates` 读取并再次 Pydantic 校验。
 - DK 由 `/skills/tecan_import/SKILL.md` 引导；Agent 必须调用 finalizer，执行层**只**读取该名字的 ToolMessage 并写 `run.result`。
+- DK 对确认的唯一 12NC 必须批量调用 `lookup_philips_wgq_master_data`（不传 `tracking_artifact`）；只以返回稳定字段补齐空值。
 - 不设业务 SubAgent、业务任务状态表或全局 Tecan middleware。
-- WGQ 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- WGQ 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 当前空 denylist，保留共享 `lookup_philips_wgq_master_data` 与 finalizer；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
 - 工具在 `runtime/tools.py` **静态**注册；不自动扫描目录。
 - Skill 单目录：下划线命名的可 import 包内同时存放资源与代码；`package-data` 必须打包 `SKILL.md` / references。
 
@@ -169,7 +170,7 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 |------|------|----------|
 | MiniMax（Anthropic 兼容） | `DeepAgentsBrainFactory`；`MINIMAX_MODEL` / `API_KEY` / `BASE_URL` | 模型/流异常 → run `failed` |
 | MinerU | `integrations/mineru.py`；`MINERU_BASE_URL` / `BACKEND` / `TIMEOUT_SECONDS` | 工具异常/超时；可投影 `tool_progress` |
-| Oracle（可选） | Philips lookup；`ORACLE_DSN` / `USERNAME` / `PASSWORD`；可选 `ORACLE_CLIENT_LIB_DIR` | problems + null，不拖垮已证实结果 |
+| Oracle（可选） | WGQ / DK 共享 lookup；`ORACLE_DSN` / `USERNAME` / `PASSWORD`；Windows 随仓库 client，`ORACLE_CLIENT_LIB_DIR` 可覆盖 | problems + null，不拖垮已证实结果 |
 | OMS JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log` | best-effort，失败不阻塞已创建 run |
 
 - OMS 在 HTTP `create_run` **成功之后**写 `event=run_created` 行（含 `run_id`、`session_id`、`workflow`、`created_at`、从 messages 抽取的 artifact `files[{name,path}]`）；**不是** `run_events`、**无**查询 API、**不含** prompt/thinking/`run.result`。

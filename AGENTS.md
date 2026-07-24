@@ -14,7 +14,7 @@ DsAgents 是**单子项目** agent 运行时底座：产品代码在 `backend/`�
 | FastAPI / uvicorn | 四 HTTP 端点（轮询，无 SSE） |
 | DeepAgents / LangGraph | Brain 与 checkpointer / store |
 | SQLite（三库） | run ledger / checkpoints / store |
-| MinerU / openpyxl / 可选 oracledb | PDF 解析、XLSX 输入读取、Philips 主数据 |
+| MinerU / openpyxl / 可选 oracledb | PDF 解析、XLSX 输入读取、WGQ / DK 共享 12NC 主数据 |
 
 ## 命令与验证
 
@@ -44,7 +44,7 @@ python -m tests.test_tecan_import
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照；`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁。
 - HTTP 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`（无 SSE / session API）。程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`。
 - HTTP workflow 仅 `WGQ`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。两者均将最终业务 JSON 写入 `run.result`（`input_problems` 时 run 仍 `succeeded`）；`WGQ` 需 structured response，`DK` 需 Tecan finalizer。工具静态 **5** 个；生产不配置业务 SubAgent。
-- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具：WGQ 排除 Tecan finalizer，DK 排除 Philips lookup；保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
+- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具：WGQ 排除 Tecan finalizer；DK 保留共享 12NC 主数据查询与其 finalizer（当前无其它业务工具可排除）；两者均保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
 - **Skill 单目录**：每个业务 Skill 用一个下划线命名、可 import 的 Python 包；包内同时包含 `SKILL.md` / 按需 references、schema 与 scripts。新增须更新 `package-data`。Tecan 不携带 Excel 模板或生成器。
 - `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具用 callable + `ToolCatalog`；资源与 ledger 用具体类。
 - 事件固定 **7** 类；业务问题统一 `input_problems`；不要重新引入 session API、SSE 或旧顶层辅助模块。
@@ -53,7 +53,7 @@ python -m tests.test_tecan_import
 - OMS 旁路索引 best-effort、不阻塞已创建 run（非 `run_events`、无查询 API）；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS）。
 - 改 backend 代码后先同步子项目 codebase 事实文档，再按影响更新根级系统文档与系统地图；文档变更至少 `git diff --check`。
 - 长期文档用简体中文；保留标识符、路径、命令、配置键、API 名；不写密钥 / `.env` 值 / 私有连接串。
-- Oracle thick mode 依赖 `ORACLE_CLIENT_LIB_DIR`；缺失时优雅降级（见 backend 风险文档）。
+- Windows checkout 随仓库提供 `backend/.oracle/instantclient/instantclient_19_31`，未设置 `ORACLE_CLIENT_LIB_DIR` 时用作 Oracle thick mode 默认路径；显式配置可覆盖它，缺客户端或连接配置时优雅降级（见 backend 风险文档）。
 
 ## 详细文档
 

@@ -58,8 +58,8 @@ flowchart LR
 | ledger | `runtime/runs.py` | runs 投影 + append-only events |
 | OMS 旁路 | `runtime/oms_log.py` | `run_created` JSONL best-effort |
 | 合同 | `skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
-| Philips（WGQ） | `skills/philips_wgq_inbound_recognition/` | Skill 资源 + schema + Tracking/Oracle lookup |
-| Tecan（DK） | `skills/tecan_import/` | Skill 资源 + XLSX inspection + finalizer（无 Excel） |
+| Philips（WGQ） | `skills/philips_wgq_inbound_recognition/` | Skill 资源 + schema + Tracking / 共享 Oracle lookup |
+| Tecan（DK） | `skills/tecan_import/` | Skill 资源 + 共享 Oracle lookup + XLSX inspection + finalizer（无 Excel） |
 
 ## 渠道供应链业务设计
 
@@ -92,6 +92,7 @@ WGQ workflow
 DK workflow
   → /skills/tecan_import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
+  → 唯一 12NC 时 lookup_philips_wgq_master_data（不传 Tracking）
   → finalize_tecan_overseas_recognition → run.result
 ```
 
@@ -115,10 +116,10 @@ middleware 只保留横切运行时能力：
 ## 运行时装配
 
 - `DeepAgentsBrainFactory` 关闭默认 general-purpose subagent，并传递 `subagents=[]`。
-- 固定工具 **5** 个：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`、`inspect_supply_chain_workbooks`、`finalize_tecan_overseas_recognition`（静态注册，无自动扫描）。
+- 固定工具 **5** 个：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`（WGQ / DK 共享 12NC 主数据）、`inspect_supply_chain_workbooks`、`finalize_tecan_overseas_recognition`（静态注册，无自动扫描）。
 - HTTP workflow：`WGQ` 使用 `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery，`DK` 使用 Tecan finalizer；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
 - `DK` 只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`，缺 finalizer 终态即失败。
-- WGQ 用 **denylist** 排除 Tecan finalizer，DK 用 **denylist** 排除 Philips lookup；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- WGQ 用 **denylist** 排除 Tecan finalizer；DK 当前以空 denylist 保留共享 12NC lookup 与 finalizer；两者均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
 - Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
 - Agent 虚拟 FS：`/artifacts/`、`/skills/`（写拒绝）、`/memories/`、`/large_tool_results/` + 默认 `StateBackend`。
 
@@ -128,7 +129,7 @@ middleware 只保留横切运行时能力：
 - 事件固定 **7** 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。大 payload 可外置到 `data/internal/run-events/`。
 - OMS JSONL 索引只在 HTTP `create_run` 成功后 best-effort 追加（`backend/log/oms_log.log`），不是 event、无查询接口、不阻塞 run、不含 `run.result`。程序内 `execute_run` **不**写 OMS。
 - ledger 与 OMS 时间均使用 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
-- 出站：MiniMax（Anthropic 兼容 LLM）、MinerU HTTP、可选 Oracle（Philips 主数据）。Oracle thick mode 依赖 `ORACLE_CLIENT_LIB_DIR`；缺失时优雅降级为 problems/null，不丢弃已证实单据事实。
+- 出站：MiniMax（Anthropic 兼容 LLM）、MinerU HTTP、WGQ / DK 共用的可选 Oracle 主数据。Windows checkout 随仓库提供 Instant Client，并在未设置 `ORACLE_CLIENT_LIB_DIR` 时自动用于 thick mode；缺客户端或连接配置时优雅降级为 problems/null，不丢弃已证实单据事实。
 - Cancel 为协作式 `RunControl` drain，**不能**强杀已发出的外部 HTTP/Oracle；启动 lifespan 将残留 `queued`/`running`/`cancelling` 标为 `failed`（不自动续跑）。
 
 ## 理解路径
