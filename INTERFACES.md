@@ -1,6 +1,6 @@
 # DsAgents 接口与边界
 
-> 本轮刷新：2026-07-22。具体 backend 实现事实见 `backend/.planning/codebase/INTEGRATIONS.md` 与 `ARCHITECTURE.md`；调用链见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
+> 本轮刷新：2026-07-24。对齐 `backend/.planning/codebase/INTEGRATIONS.md` 与 `ARCHITECTURE.md`（Analysis Date: 2026-07-24，`last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c`）。调用链见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
 
 ## HTTP 合同
 
@@ -58,7 +58,7 @@ running → cancelling → cancelled
 | `assistant_message` | 最终助手消息摘要 |
 | `model_usage` | 单次模型调用 token 观测；API 层可聚合并可选 MiniMax-M3 CNY 估价 |
 
-`run_events` append-only；`runs` 只保存投影。超过 `max_inline_bytes`（默认 256KiB）的大 payload 落盘到 `data/internal/run-events/`。`latest_content_event` 排除 `status` 与 `model_usage`。`session_id` 不是对外状态资源。
+`run_events` append-only；`runs` 只保存投影。超过 `max_inline_bytes`（默认 256KiB / 262144）的大 payload 落盘到 `data/internal/run-events/`。`latest_content_event` 排除 `status` 与 `model_usage`。`session_id` 不是对外状态资源。
 
 ### 终态业务结果路径
 
@@ -155,7 +155,7 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 | Checkpoints | `backend/data/dsagents_checkpoints.db` | LangGraph `SqliteSaver`（`thread_id=session_id`） |
 | Store | `backend/data/dsagents_store.db` | `/memories/`（`SqliteStore`，namespace `("dsagents",)`） |
 
-三库物理分离、连接不共享；无自动 migration。时间戳统一 **UTC+8** `YYYY-MM-DD HH:MM:SS`。`session_id` 单飞锁与 cancel control 均仅**进程内**。
+三库物理分离、连接不共享；无自动 migration。时间戳统一 **UTC+8** `YYYY-MM-DD HH:MM:SS`。`session_id` 单飞锁与 cancel control 均仅**进程内**。`ResourceConfig` 路径锚定 `backend/`（与 CWD 无关）。
 
 ### Artifacts
 
@@ -163,19 +163,26 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 - 跨层唯一虚拟路径：`/artifacts/...`（禁止 `..`；默认仅接受该前缀；MinerU 解析侧允许 local 为例外）。
 - 上传、JSON artifact、解压/解析输出均经 `integrations.artifacts`。
 - Agent 视图：`FilesystemBackend` 挂 `/artifacts/` 与 `/large_tool_results/`；`/skills/**` 写拒绝。
+- 运行时生成物不覆盖上传源。
 
 ### Provider / 出站
 
-| 集成 | 入口 | 失败策略 |
-|------|------|----------|
-| MiniMax（Anthropic 兼容） | `DeepAgentsBrainFactory`；`MINIMAX_MODEL` / `API_KEY` / `BASE_URL` | 模型/流异常 → run `failed` |
-| MinerU | `integrations/mineru.py`；`MINERU_BASE_URL` / `BACKEND` / `TIMEOUT_SECONDS` | 工具异常/超时；可投影 `tool_progress` |
-| Oracle（可选） | WGQ / DK 共享 lookup；`ORACLE_DSN` / `USERNAME` / `PASSWORD`；Windows 随仓库 client，`ORACLE_CLIENT_LIB_DIR` 可覆盖 | problems + null，不拖垮已证实结果 |
-| OMS JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log` | best-effort，失败不阻塞已创建 run |
+| 集成 | 入口 | 环境变量（仅名） | 失败策略 |
+|------|------|------------------|----------|
+| MiniMax（Anthropic 兼容） | `DeepAgentsBrainFactory` | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | 模型/流异常 → run `failed` |
+| MinerU | `integrations/mineru.py`（`requests`） | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_TIMEOUT_SECONDS`；可选 `MINERU_EFFORT` | 工具异常/超时；可投影 `tool_progress` |
+| Oracle（可选） | WGQ / DK 共享 lookup | `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD`；可选 `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | problems + null，不拖垮已证实结果 |
+| OMS JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log` | — | best-effort，失败不阻塞已创建 run |
 
 - OMS 在 HTTP `create_run` **成功之后**写 `event=run_created` 行（含 `run_id`、`session_id`、`workflow`、`created_at`、从 messages 抽取的 artifact `files[{name,path}]`）；**不是** `run_events`、**无**查询 API、**不含** prompt/thinking/`run.result`。
-- API 层可对 `MiniMax-M3` 聚合 usage 并做 CNY 趋势估价（非账单）；未知模型金额为 null。
+- API 层可对 `MiniMax-M3` 聚合 usage 并做 CNY 趋势估价（`PRICING_AS_OF = "2026-07-12"`，非账单）；未知模型金额为 null。
+- 主 Agent 用量标签：`MAIN_AGENT_MODEL = "MiniMax-M3"`、`MAIN_AGENT_NAME = "dsagents-main"`。
 - 无第二生产 LLM 接线；无 Auth / Webhooks。
+
+### Oracle thick mode（Windows）
+
+- 优先 `ORACLE_CLIENT_LIB_DIR`；Windows（`os.name == "nt"`）未设置时，若 `backend/.oracle/instantclient/instantclient_19_31/oci.dll` 存在则自动使用。
+- 缺配置 / 客户端 / 查询失败 → 工具返回 `problems`，不使 lookup 崩溃，也不阻塞已确认业务字段提交。
 
 ## 程序内入口
 
@@ -189,3 +196,25 @@ with AgentResources(...) as resources:
 - HTTP：`api:app` / `create_app()` + `uvicorn`（示例：`uv run uvicorn api:app --host 0.0.0.0 --port 8500`）。
 - 程序内调用**不**写 OMS 旁路索引。
 - 业务 JSON 的唯一读取路径仍是 ledger 中的 `run.result`。
+- 测试可注入 `harness_factory` / `FakeBrainFactory`，不涉及真实鉴权。
+
+## 未证实 / 刻意不做的关系
+
+下列项在当前源码中**无实现**或**未作为生产合同验证**，调用方与代理不得假定其存在：
+
+| 项 | 现状 |
+|----|------|
+| HTTP Auth / CORS 业务策略 | 未挂载；依赖部署层 |
+| Webhook 出站/入站 | 无 |
+| SSE / WebSocket 推送 | 无；仅轮询 |
+| session CRUD API | 无 |
+| 下载 / 静态文件 HTTP 端点 | 无；artifact 仅服务端虚拟路径 |
+| 跨进程 session 锁 / cancel | 仅进程内；多 worker **未**集成 |
+| 第二生产 LLM provider | 依赖链可含 Google GenAI，**本仓库未接线** |
+| LangSmith tracing | 仅依赖链存在，**未**显式接线 |
+| OMS 与 ledger 一一对应 | OMS best-effort，可静默丢失 |
+| `httpx2` 客户端用途 | 声明依赖；产品源码**无** import |
+| 上传大小/类型配额 | 应用层无硬限额（依赖网关/运维） |
+| 并发压测下 SQLite 锁行为 | 本地门禁未压测多并发 run |
+
+风险与脆弱点细节见 codebase [CONCERNS.md](backend/.planning/codebase/CONCERNS.md)。

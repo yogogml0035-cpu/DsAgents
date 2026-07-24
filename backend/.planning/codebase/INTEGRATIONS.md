@@ -1,6 +1,7 @@
 # INTEGRATIONS — backend 外部集成事实
 
-> Analysis Date: 2026-07-22
+> Analysis Date: 2026-07-24
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > 范围：`backend/` 源码中的出站/入站边界。
 > **不**记录密钥、`.env` 值或私有连接串；仅环境变量**名**与行为。
 
@@ -156,9 +157,9 @@
 | 工具 | `lookup_philips_wgq_master_data` |
 | 文件 | `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py` |
 | 驱动 | `import oracledb`（延迟导入） |
-| 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)` |
-| Thick | 优先 `ORACLE_CLIENT_LIB_DIR`；Windows 未设置时使用随仓库 `backend/.oracle/instantclient/instantclient_19_31`，再 `init_oracle_client(lib_dir=...)` 一次 |
-| 查询 | 按 `product_id`（12NC）查 `od.chda` 等，补齐中文品名/规格/原产国/HS/单位等 **稳定字段** |
+| 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)`；`connection.call_timeout` 毫秒 |
+| Thick | 优先 `ORACLE_CLIENT_LIB_DIR`；Windows（`os.name == "nt"`）未设置时，若 `backend/.oracle/instantclient/instantclient_19_31/oci.dll` 存在则使用该路径，再 `init_oracle_client(lib_dir=...)` 一次 |
+| 查询 | 按 `product_id`（12NC）查 `od.chda` 等，补齐中文品名/规格/原产国/HS/单位等 **稳定字段**（`ORACLE_FIELDS`） |
 | 优先级 | Tracking XLSX 合格行优先；Oracle **只填仍为 null 的 ORACLE_FIELDS** |
 | 不覆盖 | 数量、价格、金额、运单号等本票事实 |
 
@@ -176,7 +177,7 @@
 | 上传 | `POST /upload` → `artifacts/uploads/`，文件名 `make_timestamped_name` |
 | 虚拟路径 | `/artifacts/uploads/...`、`/artifacts/downloads/...` |
 | 解析 | `integrations.artifacts.resolve_artifact_path`：禁止 `..`；默认只接受 `/artifacts/...`（MinerU 解析允许 local） |
-| 写 JSON | `write_json_artifact` → downloads 下唯一路径 |
+| 写 JSON | `write_json_artifact` → downloads 下唯一路径（`unique_download_path` + touch 占位） |
 | Agent 视图 | `FilesystemBackend(root_dir=artifacts_dir, virtual_mode=True)` 挂到 `/artifacts/` 与 `/large_tool_results/` |
 | 权限 | `FilesystemPermission` deny write `/skills/**` |
 
@@ -203,7 +204,7 @@
 | 触发 | `api.post_run` 在 `create_run` **成功之后**、`append_run_created_log(...)` |
 | 语义 | best-effort；`except Exception: pass`，**永不**因 OMS 失败而回滚 run |
 | 格式 | 一行一个 JSON：`event=run_created`、`created_at`、`run_id`、`session_id`、`workflow`、`files[{name,path}]` |
-| `files` | 仅从请求 messages 的 `type=artifact` 块抽取 |
+| `files` | 仅从请求 messages 的 `type=artifact` 块抽取（`extract_run_files`；保序、不去重） |
 | 非目标 | **不是** `run_events`；**无**查询 API；**不**写 prompt/thinking/tool raw/`run.result` |
 | 时区 | 与 ledger 相同 UTC+8 `YYYY-MM-DD HH:MM:SS` |
 
@@ -243,7 +244,7 @@
 | 工具遥测 | `ToolTelemetry` middleware 经 `get_stream_writer` 发 started/completed/error + `duration_ms` |
 | 进度 | MinerU / extract_archives custom payload → `tool_progress` |
 | 查询 | `GET /runs/{run_id}` 返回 events、`latest_content_event`（排除 status/model_usage）、`usage` 汇总 |
-| 用量汇总 | `aggregate_model_usage` + API 层 cache hit rate / 分档 CNY 估价（仅 `MiniMax-M3` 可计价） |
+| 用量汇总 | `aggregate_model_usage` + API 层 cache hit rate / 分档 CNY 估价（仅 `MiniMax-M3` 可计价；`PRICING_AS_OF = "2026-07-12"`） |
 | 主 Agent 名 | `MAIN_AGENT_NAME = "dsagents-main"`；子 Agent 文本默认不投影，但 usage 仍记录 |
 | OMS | 旁路 JSONL 索引，**独立于** run_events |
 | LangSmith | 仅作为依赖链存在；本仓库**未**显式配置/接线 LangSmith tracing |

@@ -1,5 +1,6 @@
 # TESTING — backend 测试体系事实
 
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > Analysis Date: 2026-07-24。测试是可直接执行的 assert 脚本，**不使用 pytest 收集器**。以 `backend/tests/` 源码为准。
 
 ## 1. 运行方式
@@ -49,7 +50,7 @@ python -m tests.test_tecan_import
 
 | 模块 | 职责摘要 | 典型 mock / 夹具 |
 |------|----------|------------------|
-| `tests.test_tools` | 五工具静态目录；MinerU `parse_documents` / `extract_archives` 表单、轮询、zip/json 落盘、进度事件、缺 env 错误 | `patch` HTTP / sleep / 时间戳；临时 artifacts |
+| `tests.test_tools` | 五工具静态目录顺序与名称；MinerU `parse_documents` / `extract_archives` 表单、轮询、zip/json 落盘、进度事件、缺 env 错误 | `patch` HTTP / sleep / 时间戳；临时 artifacts |
 | `tests.test_run_ledger` | `SqliteRunLedger` 状态机、append-only 事件、查询游标、大 payload 外置、UTC+8 时间戳、usage 聚合；`AgentResources` 三库与 FS 路由；`/memories/AGENTS.md` baseline | `tempfile` + `ResourceConfig(data_dir=...)` |
 | `tests.test_harness` | stream 归一化（7 类事件）、cancel/`GraphDrained`、`NoProgress`、ToolTelemetry、MemoryMiddleware、**StructuredOutputRecovery**（重试封顶、`jump_to: "end"`、空壳 skeleton / 非空壳耗尽无 structured_response）、Philips/Tecan 结果投影 | `FakeBrainFactory`、`create_agent` 小图、`patch` env；临时 resources |
 | `tests.test_api` | 四 HTTP 端点、`WGQ` / `DK` workflow-session 422、session 单飞 409、轮询 `result`/events/usage 计价、cancel 404/409/202、启动 `fail_incomplete_runs`、OMS `run_created` JSONL best-effort | `TestClient` + 注入 `FakeBrainFactory` 的 `harness_factory`；`patch` OMS 路径 |
@@ -180,7 +181,26 @@ python -m tests.test_minimax_cache_baseline
 - GET 响应含 `run` / `workflow` / `result` / `events` / `latest_content_event` / `usage`
 - workflow + 客户端 `session_id` → 422；同 session 并发 → 409
 
-## 10. 残余空白（测试不保证的）
+## 10. `test_workflow_setup` 门禁要点
+
+该脚本是 **workflow 装配合同** 的集中门禁，锁定：
+
+| 断言面 | 期望 |
+|--------|------|
+| SKILL.md 行数 | Philips / Tecan 均 ≤100 |
+| 业务关键句 | 如「相同 12NC 默认不合并」「不生成 Excel」「input_problems」等 |
+| Skill `name` | `philips-wgq-inbound-recognition` / `tecan-import` 与虚拟路径一致 |
+| workflow 常量 | `WAG_WORKFLOW == "WGQ"`、`DK_WORKFLOW == "DK"` |
+| middleware | 默认列表首位为 `StructuredOutputRecovery`；`structured_schema=None` 时无 Recovery；Memory 源为 `RUNTIME_AGENTS_PATH` |
+| 工具目录 | 五工具静态集合 |
+| WGQ denylist | 含共享 MinerU + XLSX + 12NC lookup，**不含** `finalize_tecan_overseas_recognition`；有 `ToolStrategy` |
+| DK denylist | 含共享工具 + finalizer；**无** `response_format` |
+| 普通 run | 无 `response_format`；`subagents=[]` |
+| `/skills/` 挂载 | 可读 SKILL / references |
+
+改 denylist、Skill 资源、`DeepAgentsBrainFactory.create` 或 middleware 装配后**必须**复跑本脚本。
+
+## 11. 残余空白（测试不保证的）
 
 - 模型对复杂多票 PDF/XLSX 的角色识别与同票归集质量。
 - Windows 随仓库 Instant Client 默认回退与 `ORACLE_CLIENT_LIB_DIR` 覆盖在真实库上的连通性（本地只测 mock）。
@@ -188,7 +208,7 @@ python -m tests.test_minimax_cache_baseline
 - 生产并发与多进程部署下的 session 锁（当前锁为**进程内**）。
 - 未覆盖的未来 Skill / 新事件类型（新增须扩测试与文档）。
 
-## 11. 文档与代码同步
+## 12. 文档与代码同步
 
 - backend 行为变更：先更新 `backend/.planning/codebase/`（含本文与 `CONVENTIONS.md`），再按影响更新根级架构/接口/系统地图。
 - 文档检查：

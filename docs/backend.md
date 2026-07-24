@@ -30,7 +30,7 @@
 | `runtime/tools.py` | 5 工具静态目录 |
 | `integrations/` | MinerU HTTP、artifact 路径与 JSON 落盘（无业务 schema） |
 | `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引（best-effort，不阻塞 run） |
-| `skills/` | 下划线命名的渠道 Skill 包（`SKILL.md` / references / schema / scripts 同目录）、共享 `channel_contract`；WGQ / DK 共用 Oracle 主数据在 Skill 工具内 |
+| `skills/` | 下划线命名的渠道 Skill 包（`SKILL.md` / references / schema / scripts 同目录；虚拟路径为连字符 `/skills/...`）、共享 `channel_contract`；WGQ / DK 共用 Oracle 主数据在 Skill 工具内 |
 
 权威源码仅 `api.py` + `runtime/` + `integrations/` + `skills/` + `tests/` + `pyproject.toml`。**不要**把 `backend/build/`、`dist/`、`*.egg-info` 当源码。新增 Skill 须同步 `pyproject.toml` package-data 与静态工具注册。
 

@@ -1,6 +1,7 @@
 # CONVENTIONS — backend 编码与质量约定
 
-> Analysis Date: 2026-07-22。以 `backend/` 源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
+> Analysis Date: 2026-07-24。以 `backend/` 权威源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。禁止读 `.env` 值。
 
 ## 1. 源码布局与模块边界
 
@@ -48,7 +49,7 @@
 
 - `requires-python = ">=3.11,<4.0"`；使用 `str | None`、`list[...]` 等 3.10+ 语法，不写 `Optional`/`List` 旧式别名（除非第三方 API 要求）。
 
-### typing.Protocol **只**用于 Brain
+### typing.Protocol **只**用于 Brain / BrainFactory
 
 ```python
 # runtime/agent.py — 唯一 Protocol 用途
@@ -121,8 +122,8 @@ def default_tool_catalog() -> ToolCatalog:
 - 最终业务 JSON **只**写 `run.result`；不得从 `reply`、thinking、候选 tool 文本或 Excel 推断正式结果。
 - 同票渠道抽取在**单一 run** 内完成材料归集与终态裁决；不新建消息表、任务状态表、跨 run 中间态或生产业务 SubAgent。
 - run 状态机：`queued` → `running` → `succeeded` | `failed` | `cancelled`；取消路径 `queued` → `cancelled` 或 `running` → `cancelling` → `cancelled`。
-- 时间戳统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS JSONL）。
-- 大 payload 可外置到 `run_events_dir` artifact，ledger 存路径（`SqliteRunLedger.max_inline_bytes`）。
+- 时间戳统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS JSONL；`timezone(timedelta(hours=8))`，无夏令时）。
+- 大 payload 可外置到 `run_events_dir` artifact，ledger 存路径（`SqliteRunLedger.max_inline_bytes`，默认 262144）。
 
 ## 6. HTTP 与注入点
 
@@ -131,7 +132,7 @@ def default_tool_catalog() -> ToolCatalog:
 - 程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`；`create_app(harness_factory=...)` 便于测试注入 FakeBrain。
 - OMS 旁路：`create_run` 成功后 best-effort 写 JSONL（`runtime/oms_log.py`，默认 `backend/log/oms_log.log`）；失败吞掉，不阻塞已创建 run；**非** `run_events`、无查询 API。
 
-## 7. 错误处理模式
+## 7. 错误处理与 `input_problems` 约定
 
 | 场景 | 层 | 行为 |
 |------|----|------|
@@ -155,8 +156,14 @@ def default_tool_catalog() -> ToolCatalog:
 
 - **HTTP**：校验请求、投影状态码与 JSON body；不在 API 层做业务字段裁决。
 - **工具**：返回可序列化内容或明确错误字符串；MinerU 通过 custom stream 发进度。
-- **run 事件**：状态变更与内容流写入 `run_events`；业务问题统一 outcome `input_problems`，不是新事件类型。
+- **run 事件**：状态变更与内容流写入 `run_events`；业务问题统一 outcome `input_problems`，**不是**新事件类型。
 - 真实模型/工具/图异常 → Harness 投影 `failed`；协作 cancel → `cancelled`。
+
+### `input_problems` 硬规则
+
+- 渠道终态 `outcome == "input_problems"` 时：`data` 仍须完整 `header` + 已证实 `items`（可为 `[]`）+ `problems` 至少一条（`source` / `location` / `issue` / `action`）。
+- run.status 仍为 **`succeeded`**；业务问题不通过 `error` 字段或失败状态表达。
+- `success` / `partial_success` 与 `input_problems` 的升降级由 `validate_channel_outcome`（`skills/channel_contract.py`）裁决。
 
 ## 8. 日志与可观测性
 
@@ -188,6 +195,7 @@ _DK_EXCLUDED_TOOLS = frozenset()
 ```
 
 - **禁止**业务-only allowlist（避免共享 MinerU / XLSX 工具从模型工具表消失，导致 `/memories/AGENTS.md` ZIP 指引失效）。
+- 当前无其它业务工具可排除时，DK denylist 为空集合仍须走 denylist 路径，不得改写成 allowlist。
 - 验证：`python -m tests.test_workflow_setup`（工具名集合断言）。
 
 ## 10. 事件模型（固定 7 类）
@@ -227,7 +235,7 @@ Harness / ledger 对外事件类型仅：
 - Tecan **不**携带 Excel 模板或生成器；XLSX inspection 写中间 JSON artifact 供 Agent 读取，不是 OMS 合同。
 - 渠道 Skill 材料边界：解析 PDF（`parse_documents`）与 XLSX（`inspect_supply_chain_workbooks`）；ZIP/DOCX/图片内容不解析，材料足够时写入 `problems` 后继续。
 
-## 12. 渠道 JSON 合同模式
+## 12. 渠道 JSON 合同要点
 
 共用层：`skills/channel_contract.py`。
 
@@ -264,7 +272,7 @@ Harness / ledger 对外事件类型仅：
 - **DK**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；缺失则 run `failed`；无 `response_format` / 无 Philips recovery。
 - 普通 run：`structured_schema=None`，不强制按 Philips schema 恢复；若仍调用 Tecan finalizer 可投影 result。
 
-## 13. Middleware 模式
+## 13. Middleware 与 StructuredOutputRecovery 规则
 
 - 横切能力集中在 `runtime/middleware.py`；**不要**把 Philips/Tecan 字段业务裁决塞进全局 middleware。
 - `runtime_middlewares(memory_backend=..., structured_schema=...)` 每次构图返回**新实例**列表。
@@ -283,7 +291,7 @@ Harness / ledger 对外事件类型仅：
 
 - class-based `after_model` + state 扩展 `structured_recovery_attempts`。
 - **`@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`**。
-- 失败重试：`jump_to: "model"`，默认 `max_retries=2`（约 `1 + max_retries` 次模型调用量级）。
+- 失败重试：`jump_to: "model"`，默认 `max_retries=2`（`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`；约 `1 + max_retries` 次模型调用量级）。
 - 耗尽时必须 **`jump_to: "end"`**，**禁止**只返回 `None`（否则 ToolStrategy 可能无限 model→model）。
 - 空 data 壳（`success`/`partial_success` 且 `data:{}` 或缺 header/items）：
   - 优先同回合 `tool_call_id` 匹配 AI 文本合法 JSON 恢复；
@@ -291,10 +299,20 @@ Harness / ledger 对外事件类型仅：
   - 空壳耗尽 → all-null nested data + `partial_success` + runtime problem（可 `succeeded`）；
   - **其它**失败耗尽 → 无 `structured_response`（可 `failed`）。
 - `input_problems` **不**视为 empty-data shell。
-- Philips schema 对 runtime recovery skeleton 有 validator 豁免路径（空壳 fallback）。
+- Philips schema 对 runtime recovery skeleton 有 validator 豁免路径（`_is_runtime_recovery_skeleton`）。
 - 验证：`python -m tests.test_harness`。
 
-## 14. 禁止重新引入
+## 14. 时间戳约定
+
+| 写入点 | 格式 | 时区 |
+|--------|------|------|
+| `SqliteRunLedger`（`created_at` / `updated_at` / 事件） | `YYYY-MM-DD HH:MM:SS` | UTC+8 固定偏移（`timezone(timedelta(hours=8))`） |
+| OMS JSONL（`runtime/oms_log.py`） | 同上 | 同上 |
+
+- 不使用 UTC `Z` 后缀、不使用 ISO 带偏移字符串作为 ledger/OMS 权威格式。
+- 文档与断言可用正则或样例匹配该格式；测试见 `tests.test_run_ledger`。
+
+## 15. 禁止重新引入
 
 | 禁止项 | 原因 |
 |--------|------|
@@ -309,13 +327,13 @@ Harness / ledger 对外事件类型仅：
 | Protocol 滥用（工具/资源） | 仅 Brain 形状可插拔 |
 | 动态 Skill/工具扫描 | 静态 package-data + ToolCatalog |
 
-## 15. 文档与变更同步
+## 16. 文档与变更同步
 
 - 改 backend 代码后：先同步 `backend/.planning/codebase/` 事实文档，再按影响更新根级 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`。
 - 文档 diff 至少：`git diff --check`（仓库根目录）。
 - 验证命令与门禁见同目录 `TESTING.md` 与根级 `docs/commands.md`。
 
-## 16. 快速自检清单（编码时）
+## 17. 快速自检清单（编码时）
 
 - [ ] 未新增 Protocol（除非 Brain 形状变更）
 - [ ] 新工具已静态注册，且 WGQ / DK denylist 仍只排除其他业务工具
@@ -323,5 +341,6 @@ Harness / ledger 对外事件类型仅：
 - [ ] 事件类型落在 7 类之内
 - [ ] Skill 单目录 + `package-data`；虚拟路径用连字符名
 - [ ] `StructuredOutputRecovery` 的 `can_jump_to` 含 `end`，耗尽显式 `jump_to: "end"`
+- [ ] 时间戳为 UTC+8 `YYYY-MM-DD HH:MM:SS`
 - [ ] 无 SSE / session API / 生产业务 SubAgent
 - [ ] 对应 `python -m tests.*` 已跑通

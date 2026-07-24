@@ -1,6 +1,7 @@
 # STACK — backend 技术栈事实
 
-> Analysis Date: 2026-07-22
+> Analysis Date: 2026-07-24
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > 范围：`backend/` 权威源码（`api.py`、`runtime/`、`integrations/`、`skills/`、`tests/`、`pyproject.toml`、`uv.lock`）。
 > **不**把 setuptools 构建产物（历史 `backend/build/`、`dist/`、`*.egg-info`）当源码；忽略 `data/`、`log/`、`__pycache__/`、`.venv/`。
 
@@ -140,6 +141,7 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 | `/large_tool_results/` | 同上磁盘 backend | 大工具结果落盘 |
 | `/skills/` | 嵌套 `CompositeBackend` | 下划线源码包以连字符 Agent Skills 别名暴露 |
 
+Skill 路由：`/philips-wgq-inbound-recognition/` → `skills/philips_wgq_inbound_recognition`；`/tecan-import/` → `skills/tecan_import`。
 启动时若缺失则写入 `/memories/AGENTS.md` 基线手册（`RUNTIME_AGENTS_BASELINE`）。`FilesystemPermission` deny write `/skills/**`。
 
 ## Key Dependencies（按能力）
@@ -147,8 +149,8 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 ### LLM / Agent 栈
 
 - **MiniMax** 经 Anthropic 兼容接口：环境变量 `MINIMAX_MODEL`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL`。
-- 可观测模型名常量：`runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"`。
-- `api.py` 内嵌 MiniMax-M3 用量估价（`PRICING_AS_OF = "2026-07-12"`，标准/长上下文分档）；仅趋势估算，非账单。
+- 可观测模型名常量：`runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"`；主 Agent 名 `MAIN_AGENT_NAME = "dsagents-main"`。
+- `api.py` 内嵌 MiniMax-M3 用量估价（`PRICING_AS_OF = "2026-07-12"`，标准/长上下文分档，阈值 512k input tokens）；仅趋势估算，非账单。
 - 测试可向 `DeepAgentsBrainFactory(model=...)` 注入假模型。
 
 ### 工具静态目录（5 个）
@@ -188,6 +190,7 @@ Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）
 | 主数据（可选） | `oracledb` | 环境变量 DSN，非本地文件 |
 
 三库连接**不共享**。时间戳统一 **UTC+8** 文本 `YYYY-MM-DD HH:MM:SS`。
+ledger 大事件默认阈值：`max_inline_bytes=262_144`。
 
 ### Skills 单目录
 
@@ -249,6 +252,7 @@ Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）
 | `backend/data/artifacts/downloads/` | MinerU / 工具输出 |
 | `backend/log/oms_log.log` | OMS JSONL 索引（默认） |
 | `backend/skills/` | Skill 资源 + Python 包 |
+| `backend/.oracle/instantclient/instantclient_19_31` | Windows 默认 Oracle thick client（存在 `oci.dll` 时） |
 
 `ResourceConfig` 可注入覆盖 `data_dir`（测试常用临时目录）。
 
@@ -277,7 +281,7 @@ python -m tests.test_tecan_import
 | Python | `>=3.11,<4.0` |
 | 磁盘 | 可写 `backend/data/`、`backend/log/` |
 | 网络 | 出站访问 MiniMax（或兼容端点）与 MinerU；Oracle 按部署网络 |
-| **Oracle thick（可选）** | Windows checkout 自带 `backend/.oracle/instantclient/instantclient_19_31` 并自动使用；`ORACLE_CLIENT_LIB_DIR` 可覆盖，缺客户端或配置不全则软降级为 `problems` |
+| **Oracle thick（可选）** | Windows checkout 自带 `backend/.oracle/instantclient/instantclient_19_31` 并在存在 `oci.dll` 时自动使用；`ORACLE_CLIENT_LIB_DIR` 可覆盖，缺客户端或配置不全则软降级为 `problems`（非 Windows 不自动绑定 Instant Client） |
 | 多 worker | 不支持跨进程 session 锁与 cancel 协调；**单 worker** 部署假设 |
 | 包管理 | 生产同步必须 `uv sync` + `uv.lock` |
 

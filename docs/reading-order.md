@@ -32,10 +32,11 @@
 
 ## 新增 Skill
 
-1. `backend/.planning/codebase/STRUCTURE.md`（Skill 单目录与放置规则）
-2. 新建下划线可 import 包：`SKILL.md` / references、schema、`scripts/tools.py`
-3. `runtime/tools.py` 静态注册；跨业务互斥时更新 denylist
-4. `pyproject.toml` `[tool.setuptools.package-data]`
-5. 对应 tests + codebase 事实文档；本地回归见 `docs/commands.md`
+1. `backend/.planning/codebase/STRUCTURE.md`（Skill 单目录、下划线包 ↔ 连字符 `/skills/` 别名）
+2. 新建下划线可 import 包：`SKILL.md`（frontmatter `name` 为连字符）/ references、schema、`scripts/tools.py`
+3. `runtime/resources.py` 为 `/skills/<hyphen-name>/` 增加 `FilesystemBackend` 路由
+4. `runtime/tools.py` 静态注册；跨业务互斥时更新 denylist（禁止业务-only allowlist）
+5. `pyproject.toml` `[tool.setuptools.package-data]`
+6. 对应 tests + codebase 事实文档；本地回归见 `docs/commands.md`
 
 当前架构不使用 Tecan SubAgent 或业务状态机；Tecan HTTP workflow 为 `DK`。**不要**把 `backend/build/` 当源码。若某项需求确实需要跨 run 暂停/恢复，先在架构文档定义唯一状态归属与查询合同，再编码。
