@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from pydantic import ValidationError
 
 from skills.philips_wgq_inbound_recognition.schema import PhilipsWgqRecognitionResult
+from skills.philips_wgq_inbound_recognition.scripts import tools as master_data_tools
 from skills.philips_wgq_inbound_recognition.scripts.tools import (
     lookup_philips_wgq_master_data,
     normalize_product_id,
@@ -25,6 +26,7 @@ def run() -> None:
     _check_result_contract()
     assert normalize_product_id("109890-000-85103") == PRODUCT_ID
     assert normalize_product_id(989000085103.0) == PRODUCT_ID
+    _check_bundled_oracle_client_fallback()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         artifacts = (Path(tmp) / "artifacts").resolve()
         tracking = artifacts / "uploads" / "tracking.xlsx"
@@ -162,6 +164,17 @@ def _check_tracking_and_oracle() -> None:
         "库存数量",
     }
     assert forbidden.isdisjoint(item)
+
+
+def _check_bundled_oracle_client_fallback() -> None:
+    bundled = "C:/repo/backend/.oracle/instantclient/instantclient_19_31"
+    with (
+        patch.object(master_data_tools, "_ORACLE_CLIENT_INITIALIZED", False),
+        patch.object(master_data_tools, "_bundled_oracle_client_dir", return_value=bundled),
+        patch("oracledb.init_oracle_client") as init_client,
+    ):
+        master_data_tools._init_oracle_client(None)
+    init_client.assert_called_once_with(lib_dir=bundled)
 
 
 def _check_strict_tracking_no_fallback() -> None:

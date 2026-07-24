@@ -17,7 +17,7 @@
 - Tecan 使用 `workflow=DK` 和 `finalize_tecan_overseas_recognition` 最终工具；没有 extractor SubAgent、Excel 模板或生成器。
 - 两渠道都将唯一、干净的业务 JSON 写入 `run.result`。header 各自独立，`items[]` 共享 `channel_contract.OrderItem` 完整 24 字段，不输出 `shipment`。
 - run 的业务 outcome 为 `success` / `partial_success` / `input_problems`；业务问题是 `succeeded` run，执行异常才是 `failed`。
-- WGQ / DK 用 **denylist** 排除对方业务工具，保留共享 MinerU 与 XLSX 检查器；禁止业务-only allowlist。
+- WGQ 用 **denylist** 排除 Tecan finalizer；DK 当前空 denylist，保留共享 12NC lookup 与 finalizer；两者均保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。
 
 ## 运行时主要部件
 
@@ -30,7 +30,7 @@
 | `runtime/tools.py` | 5 工具静态目录 |
 | `integrations/` | MinerU HTTP、artifact 路径与 JSON 落盘（无业务 schema） |
 | `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引（best-effort，不阻塞 run） |
-| `skills/` | 下划线命名的渠道 Skill 包（`SKILL.md` / references / schema / scripts 同目录）、共享 `channel_contract`；Philips Oracle 主数据在 Skill 工具内 |
+| `skills/` | 下划线命名的渠道 Skill 包（`SKILL.md` / references / schema / scripts 同目录）、共享 `channel_contract`；WGQ / DK 共用 Oracle 主数据在 Skill 工具内 |
 
 权威源码仅 `api.py` + `runtime/` + `integrations/` + `skills/` + `tests/` + `pyproject.toml`。**不要**把 `backend/build/`、`dist/`、`*.egg-info` 当源码。新增 Skill 须同步 `pyproject.toml` package-data 与静态工具注册。
 

@@ -38,7 +38,7 @@ backend/
 │   │   ├── schema.py               # OrderHeader、RecognitionData、result
 │   │   └── scripts/
 │   │       ├── __init__.py
-│   │       └── tools.py            # lookup_philips_wgq_master_data（Tracking + Oracle）
+│   │       └── tools.py            # lookup_philips_wgq_master_data（共享 12NC；WGQ Tracking + Oracle）
 │   └── tecan_import/               # 可 import 包，也是 /skills/ 资源目录
 │       ├── __init__.py
 │       ├── SKILL.md
@@ -118,7 +118,7 @@ backend/
 | `integrations/mineru.py` | MinerU 提交/轮询/下载；ZIP 解压 |
 | `skills/channel_contract.py` | 渠道共用 24 字段 item 与 outcome 语义 |
 | `skills/philips_wgq_inbound_recognition/schema.py` | `WAG_WORKFLOW`（值为 `WGQ`）、`PhilipsWgqRecognitionResult` |
-| `skills/philips_wgq_inbound_recognition/scripts/tools.py` | Tracking + Oracle 主数据 |
+| `skills/philips_wgq_inbound_recognition/scripts/tools.py` | 共享 12NC 主数据（WGQ Tracking + Oracle） |
 | `skills/tecan_import/schema.py` | `DK_WORKFLOW`、`TecanOverseasRecognitionResult` |
 | `skills/tecan_import/scripts/tools.py` | XLSX 检查 + finalizer（无 Excel 生成） |
 | `pyproject.toml` | `dsagents` 发行、`package-data` 打包各 Skill 包内 `SKILL.md` / references |
@@ -198,7 +198,7 @@ runtime.tools
 
 skills.* tools
   → integrations.artifacts
-  （Philips 可选 oracledb / openpyxl；Tecan openpyxl）
+  （共享 lookup 可选 oracledb；Philips / Tecan 均用 openpyxl）
 ```
 
 `typing.Protocol` **只**用于 `Brain` / `BrainFactory`。工具不用 Protocol；ledger / resources 用具体类。
@@ -220,7 +220,7 @@ setuptools 布局（`pyproject.toml`）：
 | `backend/data/` | 运行时 SQLite 与 artifacts |
 | `backend/log/` | OMS 与其它运行日志 |
 | `backend/.env` | 密钥与连接串；分析文档不读取其内容 |
-| `backend/.oracle/` | 本地 Oracle Instant Client 二进制（若存在） |
+| `backend/.oracle/` | 随仓库分发的 Windows Oracle Instant Client 二进制；供 thick mode 默认回退 |
 | `backend/.venv/` | 虚拟环境（若存在） |
 
 权威源码入口：`backend/` 顶层 `api.py` + `runtime/` + `integrations/` + `skills/` + `tests/` + `pyproject.toml`。

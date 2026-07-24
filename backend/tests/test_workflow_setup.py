@@ -40,6 +40,7 @@ def run() -> None:
     assert "original_waybill_number" in philips
     assert "input_problems" in tecan
     assert "不生成 Excel" in tecan
+    assert "lookup_philips_wgq_master_data" in tecan
     assert "name: philips_wgq_inbound_recognition" in philips
     assert "name: tecan_import" in tecan
     freight_forwarders = (
@@ -124,6 +125,7 @@ def run() -> None:
     assert {tool.__name__ for tool in dk_kwargs["tools"]} == {
         "parse_documents",
         "extract_archives",
+        "lookup_philips_wgq_master_data",
         "inspect_supply_chain_workbooks",
         "finalize_tecan_overseas_recognition",
     }

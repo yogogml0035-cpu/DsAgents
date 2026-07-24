@@ -34,7 +34,7 @@
 |-----------|------|
 | `MINIMAX_MODEL` / `MINIMAX_API_KEY` / `MINIMAX_BASE_URL` | Brain 默认模型（`runtime/agent.py` `load_dotenv`） |
 | `MINERU_BASE_URL` / `MINERU_BACKEND` / `MINERU_EFFORT` / `MINERU_TIMEOUT_SECONDS` | MinerU HTTP 客户端 |
-| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | Philips 主数据 thick mode；缺失优雅降级 |
+| `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` / `ORACLE_CLIENT_LIB_DIR` / `ORACLE_TIMEOUT_SECONDS` | WGQ / DK 共享 12NC 主数据；Windows 随仓库 Instant Client 为 thick mode 默认回退，缺失优雅降级 |
 | `DSAGENTS_*` | 真实集成测试开关与路径（见 `TESTING.md`） |
 
 - 新文件优先 `from __future__ import annotations`。
@@ -83,7 +83,7 @@ def default_tool_catalog() -> ToolCatalog:
     ))
 ```
 
-- 当前静态 **5** 个工具：MinerU 2、Philips 主数据 1、共享 XLSX 检查 1、Tecan finalizer 1。
+- 当前静态 **5** 个工具：MinerU 2、共享 12NC 主数据 1、共享 XLSX 检查 1、Tecan finalizer 1。
 - 新增工具：在 Skill 包 `scripts/tools.py` 实现 → `default_tool_catalog` 追加一行 import + 注册；**禁止**目录扫描或动态 loader。
 - 业务工具只接受本轮消息中的显式 artifact 路径，禁止搜索“最近文件”或历史任务。
 
@@ -182,9 +182,9 @@ WGQ / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他�
 
 ```python
 _WAG_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
-_DK_EXCLUDED_TOOLS = frozenset({"lookup_philips_wgq_master_data"})
-# 保留 parse_documents / extract_archives / inspect_supply_chain_workbooks
-# WGQ 另保留 lookup_philips_wgq_master_data；DK 另保留 finalize_tecan_overseas_recognition
+_DK_EXCLUDED_TOOLS = frozenset()
+# 两渠道均保留 parse_documents / extract_archives /
+# lookup_philips_wgq_master_data / inspect_supply_chain_workbooks；DK 另保留 finalizer
 ```
 
 - **禁止**业务-only allowlist（避免共享 MinerU / XLSX 工具从模型工具表消失，导致 `/memories/AGENTS.md` ZIP 指引失效）。
@@ -255,6 +255,7 @@ Harness / ledger 对外事件类型仅：
 业务裁决原则：
 
 - 票据事实优先于主数据；主数据仅唯一非语义标识匹配的标准化/补齐，不覆盖本票数量、金额、重量、编号或运输事实。
+- WGQ / DK 均将确认的唯一 12NC 批量传给 `lookup_philips_wgq_master_data`；WGQ 可传唯一 Tracking，DK 不传 Tracking，只使用共享 Oracle。
 - 发票行按上传顺序与原行顺序；同 12NC 默认不合并；同票多发票/运单字段按材料顺序英文逗号连接。
 
 ### Philips vs Tecan 终态路径

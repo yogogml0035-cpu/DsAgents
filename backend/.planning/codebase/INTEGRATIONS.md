@@ -10,7 +10,7 @@
 |------|------|----------|----------|
 | MiniMax（Anthropic 兼容 LLM） | HTTPS | `runtime.agent.DeepAgentsBrainFactory` | 模型/流异常 → run `failed` |
 | MinerU 文档解析 | HTTPS + multipart | `integrations.mineru.parse_documents` | 工具异常 / 超时；可投影 custom 状态 |
-| Oracle 主数据（可选） | Oracle Net | `lookup_philips_wgq_master_data` | 配置缺失/查询失败 → `problems` + null 字段 |
+| Oracle 主数据（可选） | Oracle Net | `lookup_philips_wgq_master_data`（WGQ / DK） | 配置缺失/查询失败 → `problems` + null 字段 |
 | SQLite ×3 | 本地文件 | `runtime.resources` / `runtime.runs` | 进程本地；ledger 为外部权威投影 |
 | Artifacts 磁盘 | 本地文件系统 | `integrations.artifacts` + upload API | 路径校验；虚拟 `/artifacts/` |
 | OMS JSONL | 本地 append | `runtime.oms_log` | best-effort；**不**阻塞已创建 run |
@@ -157,14 +157,14 @@
 | 文件 | `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py` |
 | 驱动 | `import oracledb`（延迟导入） |
 | 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)` |
-| Thick | `ORACLE_CLIENT_LIB_DIR` 存在时 `init_oracle_client(lib_dir=...)` 一次 |
+| Thick | 优先 `ORACLE_CLIENT_LIB_DIR`；Windows 未设置时使用随仓库 `backend/.oracle/instantclient/instantclient_19_31`，再 `init_oracle_client(lib_dir=...)` 一次 |
 | 查询 | 按 `product_id`（12NC）查 `od.chda` 等，补齐中文品名/规格/原产国/HS/单位等 **稳定字段** |
 | 优先级 | Tracking XLSX 合格行优先；Oracle **只填仍为 null 的 ORACLE_FIELDS** |
 | 不覆盖 | 数量、价格、金额、运单号等本票事实 |
 
 **环境变量**：`ORACLE_DSN`、`ORACLE_USERNAME`、`ORACLE_PASSWORD`、`ORACLE_CLIENT_LIB_DIR`、`ORACLE_TIMEOUT_SECONDS`（默认 30）。
 
-**降级**：任一配置缺失 → 不连库，返回 problem「Oracle 配置缺失」；异常 → problem「Oracle 查询失败」；未命中 → 字段级 problem。**不**阻塞 Philips 已确认结果的提交路径。
+**降级**：任一配置缺失 → 不连库，返回 problem「Oracle 配置缺失」；异常 → problem「Oracle 查询失败」；未命中 → 字段级 problem。**不**阻塞 WGQ / DK 已确认结果的提交路径。
 
 ---
 
@@ -189,7 +189,7 @@
 | `parse_documents` | 上传/本地文档 | downloads JSON 或 ZIP |
 | `extract_archives` | ZIP artifact | `downloads/<zip-stem>/` 展开 |
 | `inspect_supply_chain_workbooks` | `.xlsx` | `tecan_workbook_*.json` |
-| `lookup_philips_wgq_master_data` | Tracking `.xlsx` | 不写 artifact（返回 dict） |
+| `lookup_philips_wgq_master_data` | WGQ 可读 Tracking `.xlsx`；DK 无 artifact 输入 | 不写 artifact（返回 dict） |
 | `finalize_tecan_overseas_recognition` | 无 | 返回 JSON 字符串（由 harness 投影 `run.result`） |
 
 ---
@@ -281,7 +281,8 @@
 | HTTP 触发 | `POST /runs` body `workflow: "DK"`；通用 run 的明确 Skill 请求仍可使用 finalizer |
 | Skill 资源 | `/skills/tecan_import/SKILL.md` + `references/` |
 | 终态 | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → harness 捕获 ToolMessage → `run.result` |
-| 工具 denylist | 去掉 `lookup_philips_wgq_master_data`，保留共享工具与 finalizer |
+| 主数据 | 确认唯一 12NC 后调用 `lookup_philips_wgq_master_data`（不传 Tracking），只补稳定字段 |
+| 工具 denylist | 当前为空；保留共享工具、共享 12NC lookup 与 finalizer |
 | XLSX | `inspect_supply_chain_workbooks` 只读转 JSON；**不**写 Excel 模板 |
 
 两渠道 `items[]` 共用完整 24 字段合同；未知 `null`；无 `shipment`/Excel 噪声进最终 JSON。`input_problems` 仍为 run `succeeded`（业务 outcome，非传输失败）。

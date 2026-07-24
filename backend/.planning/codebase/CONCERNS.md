@@ -42,7 +42,7 @@
 ### workflow 工具收窄依赖手写 denylist
 
 - **位置**：`runtime/agent.py` `_WAG_EXCLUDED_TOOLS` / `_DK_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
-- **事实**：WGQ 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、Philips 主数据与 XLSX 检查器；DK 排除 `lookup_philips_wgq_master_data`，保留共享工具与 Tecan finalizer。生产 `subagents=[]`。
+- **事实**：WGQ 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、12NC 主数据与 XLSX 检查器；DK 当前 denylist 为空，保留共享工具、12NC 主数据与 Tecan finalizer。生产 `subagents=[]`。
 - **债**：新增跨业务工具时必须同步 denylist；若误改成业务-only allowlist，会破坏 `/memories/AGENTS.md` 中 ZIP/`extract_archives` 指引。
 - **验证**：`python -m tests.test_workflow_setup`。
 
@@ -74,11 +74,11 @@
 - **位置**：`skills/philips_wgq_inbound_recognition/scripts/tools.py` 的 `_oracle_data`、`_init_oracle_client`。
 - **行为**：
   - 缺 `ORACLE_DSN` / `ORACLE_USERNAME` / `ORACLE_PASSWORD` → 返回空映射 + `problems`（配置缺失），不抛到 HTTP。
-  - 若设置 `ORACLE_CLIENT_LIB_DIR`，进程内调用 `oracledb.init_oracle_client(lib_dir=...)`；成功后 `_ORACLE_CLIENT_INITIALIZED = True`；未设置则走 thin 默认路径。
+  - 优先使用 `ORACLE_CLIENT_LIB_DIR`；Windows 未设置时自动使用随仓库 `backend/.oracle/instantclient/instantclient_19_31`，再进程内调用 `oracledb.init_oracle_client(lib_dir=...)`；成功后 `_ORACLE_CLIENT_INITIALIZED = True`；客户端不存在才走 thin 默认路径。
   - 连接/查询/初始化任意 `Exception` → 空映射 + `problems`（查询失败），**不**使 lookup 工具本身崩溃。
   - `ORACLE_TIMEOUT_SECONDS` 默认 `"30"`（`tcp_connect_timeout` + `call_timeout`）。
 - **风险**：thick 库路径错误时 lookup 静默降级为 problems，业务字段靠 Tracking/模型补全，易出现「静默缺主数据」的 `partial_success` / 大量 null。`init` 失败时标志位不置位，后续会重试 init。
-- **部署**：仅在需要 thick 的环境提供 `ORACLE_CLIENT_LIB_DIR`；不要把连接串写进仓库或文档。
+- **部署**：Windows checkout 可直接使用随仓库客户端；其它平台或要覆盖版本时设置 `ORACLE_CLIENT_LIB_DIR`；不要把连接串写进仓库或文档。
 
 ### MinerU 外部 HTTP 与长阻塞工具调用
 

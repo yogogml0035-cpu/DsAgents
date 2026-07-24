@@ -10,7 +10,7 @@
 |------|------|
 | **Python** `>=3.11,<4.0` | 全部产品与测试代码；当前环境常见 3.12 |
 | Markdown | Skill 资源：`skills/*/SKILL.md`、两个渠道的 `references/*.md` |
-| SQL | Philips Oracle 查询字符串（`skills/philips_wgq_inbound_recognition/scripts/tools.py` 内 `_ORACLE_SQL`） |
+| SQL | WGQ / DK 共享 Oracle 查询字符串（`skills/philips_wgq_inbound_recognition/scripts/tools.py` 内 `_ORACLE_SQL`） |
 | JSON / JSONL | run ledger 投影、artifacts、OMS 索引行 |
 
 无 TypeScript/前端；发行包为纯 Python wheel（`dsagents`）。
@@ -70,7 +70,7 @@ uv run uvicorn api:app --host 0.0.0.0 --port 8500
 | `langgraph` | `>=1.2.7` | **1.2.7** | stream、RunControl、GraphDrained |
 | `langgraph-checkpoint-sqlite` | `>=3.1.0` | **3.1.0** | SqliteSaver / SqliteStore |
 | `openpyxl` | `>=3.1,<4` | **3.1.5** | 只读 XLSX（Tracking / 供应链 workbook） |
-| `oracledb` | `>=3,<4` | **3.4.2** | Philips 可选主数据补齐 |
+| `oracledb` | `>=3,<4` | **3.4.2** | WGQ / DK 共享的可选主数据补齐 |
 | `python-dotenv` | `>=1.2.2` | **1.2.2** | 本地 `.env` |
 | `requests` | `>=2.34.2` | **2.34.2** | MinerU HTTP |
 | `httpx2` | `>=2.5.0` | **2.5.0** | 声明依赖；**源码未直接 import**（预留/传递） |
@@ -157,7 +157,7 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 
 1. `parse_documents` — MinerU（`integrations/mineru.py`）
 2. `extract_archives` — 本地 ZIP 解压到 artifacts
-3. `lookup_philips_wgq_master_data` — Tracking XLSX + 可选 Oracle
+3. `lookup_philips_wgq_master_data` — WGQ Tracking XLSX + WGQ / DK 共享 Oracle
 4. `inspect_supply_chain_workbooks` — openpyxl 只读 → JSON artifact
 5. `finalize_tecan_overseas_recognition` — Tecan 终态 schema 校验
 
@@ -166,7 +166,7 @@ Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）
 | workflow | 排除 |
 |----------|------|
 | `WGQ` | `finalize_tecan_overseas_recognition` |
-| `DK` | `lookup_philips_wgq_master_data` |
+| `DK` | 无（保留共享 12NC lookup 与 Tecan finalizer） |
 
 ### 文档解析
 
@@ -219,14 +219,14 @@ Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）
 | `MINERU_TIMEOUT_SECONDS` | 必需 | 请求与轮询超时（秒，int） |
 | `MINERU_EFFORT` | 可选 | 空字符串则传 `""` |
 
-**Oracle（`skills/philips_wgq_inbound_recognition/scripts/tools.py`）**
+**Oracle（`skills/philips_wgq_inbound_recognition/scripts/tools.py`；WGQ / DK 共享）**
 
 | 变量 | 必需性 | 用途 |
 |------|--------|------|
 | `ORACLE_DSN` | 三者齐备才连库 | 连接串 |
 | `ORACLE_USERNAME` | 同上 | 用户 |
 | `ORACLE_PASSWORD` | 同上 | 密码 |
-| `ORACLE_CLIENT_LIB_DIR` | 可选 | thick mode `init_oracle_client(lib_dir=...)` |
+| `ORACLE_CLIENT_LIB_DIR` | 可选 | 覆盖 Windows 随仓库 Instant Client 的 thick mode 路径 |
 | `ORACLE_TIMEOUT_SECONDS` | 可选，默认 `30` | 连接/调用超时 |
 
 缺 Oracle 配置时返回 `problems`，不抛死。
@@ -277,7 +277,7 @@ python -m tests.test_tecan_import
 | Python | `>=3.11,<4.0` |
 | 磁盘 | 可写 `backend/data/`、`backend/log/` |
 | 网络 | 出站访问 MiniMax（或兼容端点）与 MinerU；Oracle 按部署网络 |
-| **Oracle thick（可选）** | 需本机 Instant Client 目录 + 环境变量 `ORACLE_CLIENT_LIB_DIR`；缺失时不 init thick，配置不全则软降级为 `problems` |
+| **Oracle thick（可选）** | Windows checkout 自带 `backend/.oracle/instantclient/instantclient_19_31` 并自动使用；`ORACLE_CLIENT_LIB_DIR` 可覆盖，缺客户端或配置不全则软降级为 `problems` |
 | 多 worker | 不支持跨进程 session 锁与 cancel 协调；**单 worker** 部署假设 |
 | 包管理 | 生产同步必须 `uv sync` + `uv.lock` |
 

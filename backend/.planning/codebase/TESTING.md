@@ -54,7 +54,7 @@ python -m tests.test_tecan_import
 | `tests.test_harness` | stream 归一化（7 类事件）、cancel/`GraphDrained`、`NoProgress`、ToolTelemetry、MemoryMiddleware、**StructuredOutputRecovery**（重试封顶、`jump_to: "end"`、空壳 skeleton / 非空壳耗尽无 structured_response）、Philips/Tecan 结果投影 | `FakeBrainFactory`、`create_agent` 小图、`patch` env；临时 resources |
 | `tests.test_api` | 四 HTTP 端点、`WGQ` / `DK` workflow-session 422、session 单飞 409、轮询 `result`/events/usage 计价、cancel 404/409/202、启动 `fail_incomplete_runs`、OMS `run_created` JSONL best-effort | `TestClient` + 注入 `FakeBrainFactory` 的 `harness_factory`；`patch` OMS 路径 |
 | `tests.test_workflow_setup` | Skill.md / 货代版式参考关键句；WGQ / DK **denylist** 后工具名集合；`subagents=[]`；WGQ `ToolStrategy`、DK finalizer 路径、无 workflow 无 `response_format`；middleware 装配（Recovery 首位 / `structured_schema=None` 无 Recovery / Memory 源路径）；`/skills/` 挂载 | `patch create_deep_agent`；临时 `AgentResources` |
-| `tests.test_philips_wgq_inbound_recognition` | Philips schema 合同（24 字段 items、日期、outcome）；`normalize_product_id`；Tracking XLSX；Oracle 路径 mock 与降级 | `openpyxl` 夹具；`patch` artifacts 根与 Oracle 连接 |
+| `tests.test_philips_wgq_inbound_recognition` | Philips schema 合同（24 字段 items、日期、outcome）；`normalize_product_id`；Tracking XLSX；共享 Oracle 路径、Windows bundled client 回退 mock 与降级 | `openpyxl` 夹具；`patch` artifacts 根与 Oracle 连接 |
 | `tests.test_tecan_import` | `inspect_supply_chain_workbooks` 只读与 JSON artifact；`finalize_tecan_overseas_recognition` 终态；24 字段、空白→`null`、数值格式、outcome/`input_problems` | 临时 uploads；`patch artifacts_root` |
 
 ### 3.2 共享支持（非独立门禁）
@@ -102,7 +102,7 @@ python -m tests.test_minimax_cache_baseline
 | 工具注册 / WGQ-DK denylist / Skill 装配 | `test_workflow_setup` + `test_tools` |
 | ledger / 事件 / 时区 | `test_run_ledger` |
 | HTTP / cancel / OMS 写点 | `test_api` |
-| Philips schema / Tracking / Oracle 工具 | `test_philips_wgq_inbound_recognition` |
+| Philips schema / Tracking / 共享 12NC Oracle 工具 | `test_philips_wgq_inbound_recognition` |
 | Tecan finalizer / XLSX | `test_tecan_import` |
 | 渠道 JSON 合同共享层 | Philips + Tecan 两脚本 |
 
@@ -156,7 +156,7 @@ python -m tests.test_minimax_cache_baseline
 - `input_problems`：完整 `data.header` + 已证实 items（可 `[]`）+ 至少一条 `{source, location, issue, action}`；run 仍可 `succeeded`。
 - Philips：ToolStrategy / `structured_response` 路径（harness + schema 脚本）。
 - Tecan：`finalize_tecan_overseas_recognition` 投影（harness 事件链 + tecan 脚本）。
-- `test_workflow_setup` 锁定 denylist：WGQ 工具集**含**共享 MinerU + XLSX + lookup，**不含** Tecan finalizer；DK 工具集保留共享 MinerU + XLSX + finalizer，**不含** Philips lookup。
+- `test_workflow_setup` 锁定 denylist：WGQ 工具集**含**共享 MinerU + XLSX + 12NC lookup，**不含** Tecan finalizer；DK 工具集保留共享 MinerU + XLSX + 12NC lookup + finalizer。
 - SKILL.md 行数 ≤100；Philips 关键业务句与 Tecan「不生成 Excel」等由 `test_workflow_setup` 字符串断言。
 
 ## 8. StructuredOutputRecovery 测试要点（`test_harness`）
@@ -183,7 +183,7 @@ python -m tests.test_minimax_cache_baseline
 ## 10. 残余空白（测试不保证的）
 
 - 模型对复杂多票 PDF/XLSX 的角色识别与同票归集质量。
-- Oracle thick mode / `ORACLE_CLIENT_LIB_DIR` 在真实库上的连通性（本地只测降级与 mock）。
+- Windows 随仓库 Instant Client 默认回退与 `ORACLE_CLIENT_LIB_DIR` 覆盖在真实库上的连通性（本地只测 mock）。
 - MinerU 服务端正确性与计费侧最终账单（API usage 仅为趋势估算）。
 - 生产并发与多进程部署下的 session 锁（当前锁为**进程内**）。
 - 未覆盖的未来 Skill / 新事件类型（新增须扩测试与文档）。

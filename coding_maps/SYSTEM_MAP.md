@@ -66,8 +66,8 @@ flowchart LR
 | artifacts | `backend/integrations/artifacts.py` | 虚拟路径、上传命名、JSON 读写 |
 | MinerU | `backend/integrations/mineru.py` | `parse_documents` / `extract_archives` |
 | 业务合同 | `backend/skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
-| Philips（WGQ） | `backend/skills/philips_wgq_inbound_recognition/` | workflow、Skill、schema、Tracking/Oracle lookup |
-| Tecan（DK） | `backend/skills/tecan_import/` | workflow、Skill/references、XLSX inspection、finalizer |
+| Philips（WGQ） | `backend/skills/philips_wgq_inbound_recognition/` | workflow、Skill、schema、Tracking / 共享 Oracle lookup |
+| Tecan（DK） | `backend/skills/tecan_import/` | workflow、Skill/references、共享 Oracle lookup、XLSX inspection、finalizer |
 
 依赖方向（单向）：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具 = callable + `ToolCatalog`；资源与 ledger = 具体类。
 
@@ -165,6 +165,7 @@ WGQ workflow
 DK workflow
   → /skills/tecan_import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
+  → 唯一 12NC 时 lookup_philips_wgq_master_data（不传 Tracking）
   → 同票归集与字段裁决
   → finalize_tecan_overseas_recognition → run.result
 ```
@@ -216,11 +217,11 @@ DeepAgentsBrainFactory
 |------|------|------|
 | `parse_documents` | MinerU | 解析 PDF 等 → downloads JSON/ZIP |
 | `extract_archives` | 本地 | ZIP artifact 解压 |
-| `lookup_philips_wgq_master_data` | Philips | Tracking XLSX + 可选 Oracle 唯一补齐 |
+| `lookup_philips_wgq_master_data` | Philips scripts（WGQ / DK 共享） | WGQ Tracking XLSX + Oracle 唯一补齐 |
 | `inspect_supply_chain_workbooks` | Tecan 包（共享） | 只读 XLSX → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan | Pydantic 校验并返回终态 JSON 字符串 |
 
-WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `lookup_philips_wgq_master_data`。均保留共享 MinerU / XLSX。**禁止**业务-only allowlist（保护 `/memories/AGENTS.md` 中 ZIP 指引）。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
+WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 当前为空，保留共享 `lookup_philips_wgq_master_data` 与 finalizer。均保留共享 MinerU / XLSX。**禁止**业务-only allowlist（保护 `/memories/AGENTS.md` 中 ZIP 指引）。Tecan 不输出 Excel；`openpyxl` 只读用户材料。
 
 ---
 
@@ -307,7 +308,7 @@ WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `looku
 |------|------|----------|
 | MiniMax（Anthropic 兼容） | `DeepAgentsBrainFactory`；`MINIMAX_*` | 模型/流异常 → run `failed` |
 | MinerU | `integrations/mineru.py`；`MINERU_*` | 工具异常/超时；可投影 progress |
-| Oracle（可选） | Philips lookup；`ORACLE_*` + 可选 `ORACLE_CLIENT_LIB_DIR` | problems + null 字段，不拖垮已证实结果 |
+| Oracle（可选） | WGQ / DK 共享 lookup；`ORACLE_*` + Windows 随仓库 client / 可选 `ORACLE_CLIENT_LIB_DIR` | problems + null 字段，不拖垮已证实结果 |
 | OMS JSONL | `runtime/oms_log.py` → `backend/log/oms_log.log` | best-effort，`except: pass` |
 
 - OMS 在 HTTP `create_run` **成功之后**写 `event=run_created` 行（`run_id`、`session_id`、`workflow`、artifact 文件列表）；**不是** `run_events`、**无**查询 API、**不含** prompt/thinking/`run.result`。
@@ -373,7 +374,7 @@ WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `looku
 
 1. [INTEGRATIONS](../backend/.planning/codebase/INTEGRATIONS.md)
 2. [STACK](../backend/.planning/codebase/STACK.md) 环境变量表
-3. `backend/integrations/mineru.py`、`artifacts.py`、Philips Oracle 工具
+3. `backend/integrations/mineru.py`、`artifacts.py`、共享 Oracle 工具
 4. 风险：[CONCERNS](../backend/.planning/codebase/CONCERNS.md)
 
 ### 6.6 领域流程（渠道供应链）
@@ -423,7 +424,7 @@ WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 排除 `looku
 - daemon 线程 + 启动 `fail_incomplete_runs`：崩溃 run 不自动续跑
 - `artifacts_root()` 与 API 注入 `ResourceConfig` 可能脱节（自定义 data_dir 时）
 - MinerU `allow_local=True` 与 ZIP 解压路径净化（ZipSlip）见 [CONCERNS](../backend/.planning/codebase/CONCERNS.md)
-- Oracle thick 依赖 `ORACLE_CLIENT_LIB_DIR`；缺失时优雅降级为 problems/null
+- Windows checkout 的 `backend/.oracle/instantclient/instantclient_19_31` 为 Oracle thick 默认路径；可用 `ORACLE_CLIENT_LIB_DIR` 覆盖，缺客户端或配置时优雅降级为 problems/null
 
 完整列表见 [CONCERNS](../backend/.planning/codebase/CONCERNS.md)。
 

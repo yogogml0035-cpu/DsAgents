@@ -9,7 +9,6 @@
 data/
 backend/data/
 backend/instantclient/
-backend/.oracle/
 __pycache__/
 *.pyc
 

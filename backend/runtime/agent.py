@@ -64,6 +64,8 @@ WAG_WORKFLOW_PROMPT = (
 DK_WORKFLOW_PROMPT = (
     "API 已选择 workflow=DK（帝肯境外供应链识别）。"
     "本 run 必须加载并遵循 `/skills/tecan_import/SKILL.md`。"
+    "确认唯一 12NC 后必须调用 lookup_philips_wgq_master_data 查询共享 Oracle 主数据；"
+    "DK 不传 tracking_artifact，且只用稳定字段补齐空值。"
     "最终必须调用 finalize_tecan_overseas_recognition；其返回值是唯一业务结果。"
     "自然语言摘要不能替代业务结果。"
 )
@@ -76,7 +78,9 @@ _WAG_EXCLUDED_TOOLS = frozenset(
     }
 )
 
-_DK_EXCLUDED_TOOLS = frozenset({"lookup_philips_wgq_master_data"})
+# The legacy-named 12NC lookup is shared by WGQ and DK. DK has no other
+# channel-only tool to exclude while retaining its required finalizer.
+_DK_EXCLUDED_TOOLS = frozenset()
 
 SKILLS_SOURCE = "/skills/"
 
