@@ -21,7 +21,7 @@
 
 ## 工具与 Skill
 
-- 每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；包内含 `SKILL.md` / 按需 references（挂载 `/skills/`）、schema 和 scripts；新增时同步 `pyproject.toml` package-data。
+- 每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；包内含 `SKILL.md` / references、schema 和 scripts；运行时以同一目录的连字符 `/skills/<kebab-case-name>/` 别名挂载，且须与 frontmatter `name` 一致；新增时同步 `pyproject.toml` package-data。
 - 工具在对应 import 包的 `scripts/tools.py` 定义，在 `runtime/tools.py` 静态注册；当前恰 5 个，不做扫描/动态 loader。
 - WGQ workflow 缩窄工具表必须用 denylist 排除 Tecan finalizer，同时保留共享 `parse_documents`、`extract_archives`、`inspect_supply_chain_workbooks` 和 12NC lookup；DK 当前用空 denylist，保留共享工具、`lookup_philips_wgq_master_data` 与 Tecan finalizer；禁止业务-only allowlist。
 - DK 终态通过 `finalize_tecan_overseas_recognition` 校验并投影到 `run.result`，不生成 Excel。XLSX inspection 只读并写中间 JSON artifact。

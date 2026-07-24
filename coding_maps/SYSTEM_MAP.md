@@ -155,7 +155,7 @@ with AgentResources(...) as resources:
 
 ```text
 WGQ workflow
-  → /skills/philips_wgq_inbound_recognition/SKILL.md
+  → /skills/philips-wgq-inbound-recognition/SKILL.md
   → references/freight-forwarders.md（DHL / DSV / FedEx / UPS / 康捷空）
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 Tracking 时 lookup_philips_wgq_master_data
@@ -163,7 +163,7 @@ WGQ workflow
   → PhilipsWgqRecognitionResult → run.result
 
 DK workflow
-  → /skills/tecan_import/SKILL.md + references/
+  → /skills/tecan-import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 12NC 时 lookup_philips_wgq_master_data（不传 Tracking）
   → 同票归集与字段裁决
@@ -324,7 +324,7 @@ WGQ **denylist** 排除 `finalize_tecan_overseas_recognition`；DK 当前为空�
 | Protocol 仅 Brain | 工具 / 资源 / ledger 不用 Protocol |
 | 工具静态注册 | `default_tool_catalog()` 五行；禁止目录扫描 |
 | workflow 收窄 = denylist | 禁止业务-only allowlist |
-| Skill 单目录 | 下划线可 import 包内含 `SKILL.md`/references、schema、scripts；更新 package-data |
+| Skill 单目录 | 下划线可 import 包内含 `SKILL.md`/references、schema、scripts；运行时以连字符 `/skills/` 别名暴露；更新 package-data |
 | 终态只写 `run.result` | 不从 `reply`/thinking/候选/Excel 推断 OMS 数据 |
 | 同票单一 run | 不新增消息/任务状态表或业务 middleware |
 | 横切 vs 业务校验 | Philips recovery 用 middleware；Tecan 用 finalizer 工具 |

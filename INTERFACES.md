@@ -131,12 +131,12 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 | `finalize_tecan_overseas_recognition` | Tecan 终态 schema 校验并返回 JSON 字符串 |
 
 - WGQ 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；执行层从 `updates` 读取并再次 Pydantic 校验。
-- DK 由 `/skills/tecan_import/SKILL.md` 引导；Agent 必须调用 finalizer，执行层**只**读取该名字的 ToolMessage 并写 `run.result`。
+- DK 由 `/skills/tecan-import/SKILL.md` 引导；Agent 必须调用 finalizer，执行层**只**读取该名字的 ToolMessage 并写 `run.result`。
 - DK 对确认的唯一 12NC 必须批量调用 `lookup_philips_wgq_master_data`（不传 `tracking_artifact`）；只以返回稳定字段补齐空值。
 - 不设业务 SubAgent、业务任务状态表或全局 Tecan middleware。
 - WGQ 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 当前空 denylist，保留共享 `lookup_philips_wgq_master_data` 与 finalizer；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
 - 工具在 `runtime/tools.py` **静态**注册；不自动扫描目录。
-- Skill 单目录：下划线命名的可 import 包内同时存放资源与代码；`package-data` 必须打包 `SKILL.md` / references。
+- Skill 单目录：下划线命名的可 import 包内同时存放资源与代码；运行时将其映射为同名连字符 `/skills/` 别名；`package-data` 必须打包 `SKILL.md` / references。
 
 ### StructuredOutputRecovery（Philips 专用）
 

@@ -64,9 +64,10 @@ python -m tests.test_real_philips_wgq_inbound_recognition
 python -m tests.test_real_philips_wgq_ups
 ```
 
-MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）：
+MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）。默认验证本机 `http://127.0.0.1:8500`，可设置 `DSAGENTS_API_BASE_URL`（兼容 `DSAGENTS_BASE_URL`）指向其他目标；脚本会打印该地址，任一 run 非 `succeeded` 时失败并带出终态原始事件：
 
 ```powershell
+$env:DSAGENTS_API_BASE_URL="http://127.0.0.1:8500"
 python -m tests.test_minimax_cache_baseline
 ```
 

@@ -1,6 +1,6 @@
 # TESTING — backend 测试体系事实
 
-> Analysis Date: 2026-07-22。测试是可直接执行的 assert 脚本，**不使用 pytest 收集器**。以 `backend/tests/` 源码为准。
+> Analysis Date: 2026-07-24。测试是可直接执行的 assert 脚本，**不使用 pytest 收集器**。以 `backend/tests/` 源码为准。
 
 ## 1. 运行方式
 
@@ -72,7 +72,7 @@ python -m tests.test_tecan_import
 | `tests.test_real_multi_pdf_run` | `DSAGENTS_RUN_REAL_MULTI_PDF_TEST=1`；`--pdf-dir` / `DSAGENTS_PDF_DIR` 等 | 已启动 HTTP + MinerU + 模型 |
 | `tests.test_real_philips_wgq_inbound_recognition` | `DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST=1`；样例根 `DSAGENTS_PHILIPS_WGQ_SAMPLE_ROOT` | 多承运商样例 + Tracking + 模型/MinerU；Oracle 按部署 |
 | `tests.test_real_philips_wgq_ups` | 直接 `-m`（脚本内路径/env）；可选 `DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR` | UPS 双 PDF 验收；流式打印事件 |
-| `tests.test_minimax_cache_baseline` | 无门禁开关；`DSAGENTS_BASE_URL` 指向 live 服务 | 真实 MiniMax；同 session 两轮观察 cache_read；**非**发布门禁 |
+| `tests.test_minimax_cache_baseline` | 无门禁开关；`DSAGENTS_API_BASE_URL`（兼容 `DSAGENTS_BASE_URL`）指向 live 服务 | 真实 MiniMax；同 session 两轮观察 cache_read；打印实际目标地址，任一 run 非 `succeeded` 时以终态原始事件失败；**非**发布门禁 |
 
 未设置 opt-in 开关时，真实脚本打印 skip 说明后 `return`（不失败）。
 

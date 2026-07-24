@@ -208,12 +208,12 @@ Harness / ledger 对外事件类型仅：
 
 ## 11. Skill 单目录约定
 
-每个业务 Skill 只保留一个下划线命名、可 import 的包，并在 `pyproject.toml` `[tool.setuptools.package-data]` 按包打包资源：
+每个业务 Skill 只保留一个下划线命名、可 import 的包，并在 `pyproject.toml` `[tool.setuptools.package-data]` 按包打包资源；运行时以同一目录的连字符别名满足 Agent Skills `name` 与目录一致的要求：
 
 | 路径模式 | 内容 |
 |----------|------|
 | `skills/<snake_case_name>/` | `SKILL.md`（建议 ≤100 行）、按需 `references/*.md`、`schema.py`、`scripts/tools.py`、`__init__.py` |
-| 虚拟挂载 | `/skills/<snake_case_name>/`（**不用**连字符目录名） |
+| 虚拟挂载 | `/skills/<kebab-case-name>/`（必须与 `SKILL.md` 的 `name` 一致） |
 
 当前 Skill：
 
@@ -321,7 +321,7 @@ Harness / ledger 对外事件类型仅：
 - [ ] 新工具已静态注册，且 WGQ / DK denylist 仍只排除其他业务工具
 - [ ] 业务终态只进 `run.result`；`input_problems` 仍 `succeeded`
 - [ ] 事件类型落在 7 类之内
-- [ ] Skill 单目录 + `package-data`；虚拟路径用下划线名
+- [ ] Skill 单目录 + `package-data`；虚拟路径用连字符名
 - [ ] `StructuredOutputRecovery` 的 `can_jump_to` 含 `end`，耗尽显式 `jump_to: "end"`
 - [ ] 无 SSE / session API / 生产业务 SubAgent
 - [ ] 对应 `python -m tests.*` 已跑通

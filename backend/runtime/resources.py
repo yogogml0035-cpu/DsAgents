@@ -89,7 +89,24 @@ class AgentResources:
 
         persistent = StoreBackend(store=self.store, namespace=lambda _rt: ("dsagents",))
         disk = FilesystemBackend(root_dir=self.config.artifacts_dir.resolve(), virtual_mode=True)
-        skills = FilesystemBackend(root_dir=self.config.skills_dir.resolve(), virtual_mode=True)
+        # Agent Skills requires a hyphenated directory matching each frontmatter name;
+        # source packages keep underscores for Python imports.
+        skills = CompositeBackend(
+            default=FilesystemBackend(
+                root_dir=self.config.skills_dir / ".agent-skills-unmapped",
+                virtual_mode=True,
+            ),
+            routes={
+                "/philips-wgq-inbound-recognition/": FilesystemBackend(
+                    root_dir=self.config.skills_dir / "philips_wgq_inbound_recognition",
+                    virtual_mode=True,
+                ),
+                "/tecan-import/": FilesystemBackend(
+                    root_dir=self.config.skills_dir / "tecan_import",
+                    virtual_mode=True,
+                ),
+            },
+        )
         self.backend = CompositeBackend(
             default=StateBackend(),
             routes={

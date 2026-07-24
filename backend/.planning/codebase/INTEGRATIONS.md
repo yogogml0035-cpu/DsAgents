@@ -266,7 +266,7 @@
 | 项 | 事实 |
 |----|------|
 | HTTP 触发 | `POST /runs` body `workflow: "WGQ"` |
-| Skill 资源 | `/skills/philips_wgq_inbound_recognition/SKILL.md` |
+| Skill 资源 | `/skills/philips-wgq-inbound-recognition/SKILL.md` |
 | 货代版式 | `references/freight-forwarders.md`（DHL、DSV、FedEx、UPS、康捷空） |
 | 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philips_wgq_inbound_recognition`） |
 | 投影 | ToolStrategy `structured_response` → `run.result` |
@@ -279,7 +279,7 @@
 | 项 | 事实 |
 |----|------|
 | HTTP 触发 | `POST /runs` body `workflow: "DK"`；通用 run 的明确 Skill 请求仍可使用 finalizer |
-| Skill 资源 | `/skills/tecan_import/SKILL.md` + `references/` |
+| Skill 资源 | `/skills/tecan-import/SKILL.md` + `references/` |
 | 终态 | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → harness 捕获 ToolMessage → `run.result` |
 | 主数据 | 确认唯一 12NC 后调用 `lookup_philips_wgq_master_data`（不传 Tracking），只补稳定字段 |
 | 工具 denylist | 当前为空；保留共享工具、共享 12NC lookup 与 finalizer |

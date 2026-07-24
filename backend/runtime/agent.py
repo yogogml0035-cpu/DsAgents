@@ -46,7 +46,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 WAG_WORKFLOW_PROMPT = (
     "API 已选择 workflow=WGQ（飞利浦外高桥进境识别）。"
-    "本 run 必须加载并遵循 `/skills/philips_wgq_inbound_recognition/SKILL.md`，"
+    "本 run 必须加载并遵循 `/skills/philips-wgq-inbound-recognition/SKILL.md`，"
     "并按其引用读取货代版式说明。"
     "最终结果必须通过 PhilipsWgqRecognitionResult 结构化工具提交。"
     "禁止提交 data: {}，也不得省略 header/items。"
@@ -63,7 +63,7 @@ WAG_WORKFLOW_PROMPT = (
 
 DK_WORKFLOW_PROMPT = (
     "API 已选择 workflow=DK（帝肯境外供应链识别）。"
-    "本 run 必须加载并遵循 `/skills/tecan_import/SKILL.md`。"
+    "本 run 必须加载并遵循 `/skills/tecan-import/SKILL.md`。"
     "确认唯一 12NC 后必须调用 lookup_philips_wgq_master_data 查询共享 Oracle 主数据；"
     "DK 不传 tracking_artifact，且只用稳定字段补齐空值。"
     "最终必须调用 finalize_tecan_overseas_recognition；其返回值是唯一业务结果。"

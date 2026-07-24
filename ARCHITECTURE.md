@@ -83,14 +83,14 @@ flowchart LR
 
 ```text
 WGQ workflow
-  → /skills/philips_wgq_inbound_recognition/SKILL.md
+  → /skills/philips-wgq-inbound-recognition/SKILL.md
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 Tracking 时 lookup_philips_wgq_master_data
   → denylist 排除 Tecan finalizer
   → PhilipsWgqRecognitionResult → run.result
 
 DK workflow
-  → /skills/tecan_import/SKILL.md + references/
+  → /skills/tecan-import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 12NC 时 lookup_philips_wgq_master_data（不传 Tracking）
   → finalize_tecan_overseas_recognition → run.result
@@ -120,7 +120,7 @@ middleware 只保留横切运行时能力：
 - HTTP workflow：`WGQ` 使用 `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery，`DK` 使用 Tecan finalizer；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
 - `DK` 只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`，缺 finalizer 终态即失败。
 - WGQ 用 **denylist** 排除 Tecan finalizer；DK 当前以空 denylist 保留共享 12NC lookup 与 finalizer；两者均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
-- Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
+- Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；运行时以同一目录的连字符 `/skills/` 别名供 Agent Skills 加载；新增须同步 `package-data`。Tecan 不携带 Excel 模板或生成器。
 - Agent 虚拟 FS：`/artifacts/`、`/skills/`（写拒绝）、`/memories/`、`/large_tool_results/` + 默认 `StateBackend`。
 
 ## 存储、可观测性与运维

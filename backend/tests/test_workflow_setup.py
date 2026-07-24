@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from deepagents.middleware.filesystem import FilesystemPermission
 from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.skills import SkillsMiddleware
 from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain.agents.structured_output import ToolStrategy
 from langchain.chat_models import init_chat_model
@@ -41,8 +42,8 @@ def run() -> None:
     assert "input_problems" in tecan
     assert "不生成 Excel" in tecan
     assert "lookup_philips_wgq_master_data" in tecan
-    assert "name: philips_wgq_inbound_recognition" in philips
-    assert "name: tecan_import" in tecan
+    assert "name: philips-wgq-inbound-recognition" in philips
+    assert "name: tecan-import" in tecan
     freight_forwarders = (
         skills_root / "philips_wgq_inbound_recognition" / "references" / "freight-forwarders.md"
     ).read_text(encoding="utf-8")
@@ -50,8 +51,8 @@ def run() -> None:
     assert "普通 PDF 抽取请求不够" in DEFAULT_SYSTEM_PROMPT
     assert WAG_WORKFLOW == "WGQ"
     assert DK_WORKFLOW == "DK"
-    assert "philips_wgq_inbound_recognition/SKILL.md" in WAG_WORKFLOW_PROMPT
-    assert "tecan_import/SKILL.md" in DK_WORKFLOW_PROMPT
+    assert "philips-wgq-inbound-recognition/SKILL.md" in WAG_WORKFLOW_PROMPT
+    assert "tecan-import/SKILL.md" in DK_WORKFLOW_PROMPT
 
     default_middleware = runtime_middlewares()
     assert isinstance(default_middleware[0], StructuredOutputRecovery)
@@ -143,10 +144,32 @@ def run() -> None:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         with AgentResources(ResourceConfig(data_dir=Path(tmp) / "data")) as mounted:
             paths = {entry["path"].rstrip("/") for entry in mounted.backend.ls("/skills/").entries}
-            assert "/skills/philips_wgq_inbound_recognition" in paths
-            assert "/skills/tecan_import" in paths
-            assert "/skills/philips-wgq-inbound-recognition" not in paths
-            assert "/skills/tecan-import" not in paths
+            assert paths == {
+                "/skills/philips-wgq-inbound-recognition",
+                "/skills/tecan-import",
+            }
+            assert mounted.backend.read(
+                "/skills/philips-wgq-inbound-recognition/references/freight-forwarders.md"
+            ).error is None
+            assert mounted.backend.read("/skills/tecan-import/references/fields.md").error is None
+            with patch("deepagents.middleware.skills.logger.warning") as warning:
+                loaded_skills = SkillsMiddleware(
+                    backend=mounted.backend,
+                    sources=[SKILLS_SOURCE],
+                    system_prompt=None,
+                ).before_agent({}, None, {})
+            assert not warning.called
+            assert loaded_skills is not None
+            assert {
+                (skill["name"], skill["path"])
+                for skill in loaded_skills["skills_metadata"]
+            } == {
+                (
+                    "philips-wgq-inbound-recognition",
+                    "/skills/philips-wgq-inbound-recognition/SKILL.md",
+                ),
+                ("tecan-import", "/skills/tecan-import/SKILL.md"),
+            }
 
     final = AIMessage(
         content=[{"type": "thinking", "thinking": "plan"}, {"type": "text", "text": "done"}],

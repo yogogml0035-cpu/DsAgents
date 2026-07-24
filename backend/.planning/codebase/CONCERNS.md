@@ -59,14 +59,6 @@
 - **债**：新增 Skill 漏改 catalog 或 package-data 时，运行时无工具或 wheel 缺资源文件。
 - **方向**：新增时同步 `tools.py`、`pyproject.toml`、denylist、对应 `tests`。
 
-### 下划线 Skill 名触发 DeepAgents 兼容性日志
-
-- **位置**：`skills/philips_wgq_inbound_recognition/`、`skills/tecan_import/`；DeepAgents `SkillsMiddleware`。
-- **事实**：当前 DeepAgents Agent Skills 校验更偏好连字符名；下划线目录和 frontmatter `name` 仍会被加载，但可能记录兼容性 warning。
-- **债**：产品命名要求保留下划线；消除日志依赖上游或改目录（与 package-data / import 路径强耦合）。
-
----
-
 ## Known risks
 
 ### Oracle thick mode / `ORACLE_CLIENT_LIB_DIR` 降级
@@ -208,7 +200,7 @@
 ### Skill package-data 与 import 路径
 
 - **位置**：`pyproject.toml` package-data；Skill 为下划线可 import 包。
-- **脆弱点**：wheel 安装缺 `SKILL.md` / references 时 Agent 读不到手册但 catalog 工具仍在；目录重命名会同时打断 import、denylist 名、Skills 挂载。
+- **脆弱点**：wheel 安装缺 `SKILL.md` / references 时 Agent 读不到手册但 catalog 工具仍在；源码目录改名还须同步静态连字符挂载别名。
 
 ### cancel 竞态：queued vs 已进入 `execute_run`
 

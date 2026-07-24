@@ -127,12 +127,12 @@ backend/
 
 ### Skill 单目录（硬约束）
 
-每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；Agent 资源和运行时代码放在同一目录：
+每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；Agent 资源和运行时代码放在同一目录。运行时将同一目录映射为 Agent Skills 规范要求的连字符虚拟目录：
 
-| 目录 | 挂载 / 导入 | 内容 |
+| 源码目录 | 虚拟挂载 / 导入 | 内容 |
 |------|-------------|------|
-| `skills/philips_wgq_inbound_recognition/` | `/skills/` / `from skills.philips_wgq_inbound_recognition import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
-| `skills/tecan_import/` | `/skills/` / `from skills.tecan_import import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
+| `skills/philips_wgq_inbound_recognition/` | `/skills/philips-wgq-inbound-recognition/` / `from skills.philips_wgq_inbound_recognition import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
+| `skills/tecan_import/` | `/skills/tecan-import/` / `from skills.tecan_import import ...` | `SKILL.md`、`references/`、`schema.py`、`scripts/tools.py` |
 
 `pyproject.toml` `[tool.setuptools.package-data]` 必须按包列出 `SKILL.md` 与 `references/*.md`，否则 wheel 中 Agent 读不到资源：
 

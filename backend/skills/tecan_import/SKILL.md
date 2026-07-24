@@ -1,5 +1,5 @@
 ---
-name: tecan_import
+name: tecan-import
 description: 仅用于 API workflow=DK 或用户明确要求 Tecan/帝肯境外供应链订单 JSON 抽取；从本轮 PDF/XLSX 同票材料归集为 OMS 可消费的终态 JSON，不生成 Excel。
 ---
 

@@ -138,7 +138,7 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 | `/memories/` | `StoreBackend` → `SqliteStore` | `data/dsagents_store.db`，namespace `("dsagents",)` |
 | `/artifacts/` | `FilesystemBackend` | `data/artifacts/` |
 | `/large_tool_results/` | 同上磁盘 backend | 大工具结果落盘 |
-| `/skills/` | `FilesystemBackend` | `backend/skills/`（源码树） |
+| `/skills/` | 嵌套 `CompositeBackend` | 下划线源码包以连字符 Agent Skills 别名暴露 |
 
 启动时若缺失则写入 `/memories/AGENTS.md` 基线手册（`RUNTIME_AGENTS_BASELINE`）。`FilesystemPermission` deny write `/skills/**`。
 

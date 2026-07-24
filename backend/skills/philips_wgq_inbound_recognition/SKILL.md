@@ -1,5 +1,5 @@
 ---
-name: philips_wgq_inbound_recognition
+name: philips-wgq-inbound-recognition
 description: 仅用于 API workflow=WGQ 的飞利浦外高桥同票 PDF/XLSX 订单 JSON 抽取；不生成 Excel，也不用于普通文件阅读。
 ---
 

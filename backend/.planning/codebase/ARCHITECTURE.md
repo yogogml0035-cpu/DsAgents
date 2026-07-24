@@ -250,7 +250,7 @@ running → cancelling → cancelled
 | `/memories/` | `StoreBackend` → `dsagents_store.db` |
 | `/artifacts/` | `FilesystemBackend` → `data/artifacts/` |
 | `/large_tool_results/` | 同上磁盘 |
-| `/skills/` | `FilesystemBackend` → `backend/skills/`（只读权限拒绝写） |
+| `/skills/` | 嵌套 `CompositeBackend`：下划线源码包映射为 Agent Skills 连字符别名（只读权限拒绝写） |
 
 首次启动若 `/memories/AGENTS.md` 缺失则写入 baseline 手册（ZIP/`parse_documents` 使用约定）。
 
@@ -282,14 +282,14 @@ running → cancelling → cancelled
 `WGQ`（常量 `WAG_WORKFLOW = "WGQ"`，飞利浦外高桥）：
 
 1. API 收窄 `workflow` 字面量
-2. Brain 加载 `/skills/philips_wgq_inbound_recognition/SKILL.md` 提示
+2. Brain 加载 `/skills/philips-wgq-inbound-recognition/SKILL.md` 提示
 3. `ToolStrategy(PhilipsWgqRecognitionResult)` + `StructuredOutputRecovery`
 4. 工具 denylist 去掉 Tecan finalizer
 5. harness 强制 `structured_response` → `run.result`
 
 `DK`（常量 `DK_WORKFLOW = "DK"`，帝肯境外供应链）：
 
-1. Brain 加载 `/skills/tecan_import/SKILL.md`
+1. Brain 加载 `/skills/tecan-import/SKILL.md`
 2. `structured_schema=None`（无 ToolStrategy / Recovery）
 3. 空 denylist 保留共享 MinerU / XLSX / 12NC 主数据查询与 Tecan finalizer
 4. 对确认的唯一 12NC 批量调用 `lookup_philips_wgq_master_data`（不传 Tracking）补齐稳定字段
