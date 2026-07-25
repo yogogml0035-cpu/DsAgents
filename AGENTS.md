@@ -43,12 +43,12 @@ python -m tests.test_tecan_import
 
 - **run-first**：run 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照；`session_id` 只作 LangGraph `thread_id` 与进程内单飞锁。
 - HTTP 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`（无 SSE / session API）。程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`。
-- HTTP workflow 仅 `WGQ`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。两者均将最终业务 JSON 写入 `run.result`（`input_problems` 时 run 仍 `succeeded`）；`WGQ` 需 structured response，`DK` 需 Tecan finalizer。工具静态 **5** 个；生产不配置业务 SubAgent。
-- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具：WGQ 排除 Tecan finalizer；DK 保留共享 12NC 主数据查询与其 finalizer（当前无其它业务工具可排除）；两者均保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
+- HTTP workflow 仅 `WGQ`（飞利浦外高桥）与 `DK`（帝肯境外供应链）。两者均以各自 schema 的 `ToolStrategy` 产生 `structured_response`，经共享 runtime finalizer 写入 `run.result`（`input_problems` 时 run 仍 `succeeded`）；工具静态 **5** 个；生产不配置业务 SubAgent。
+- workflow 收窄 `tools` 必须用 **denylist** 排除**其他业务**工具：WGQ / DK 均排除 Tecan finalizer，均保留共享 MinerU、12NC 主数据查询与 XLSX 检查器；Tecan finalizer 仅供无 workflow 的明确 Tecan 请求兼容，禁止业务-only allowlist。验证：`python -m tests.test_workflow_setup`。
 - **Skill 单目录**：每个业务 Skill 用一个下划线命名、可 import 的 Python 包；包内同时包含 `SKILL.md` / 按需 references、schema 与 scripts。运行时以同一目录的**连字符**虚拟路径 `/skills/<kebab-case>/` 挂载（须与 `SKILL.md` frontmatter `name` 一致）。新增须更新 `package-data` 与 skills 路由。Tecan 不携带 Excel 模板或生成器。
 - `typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具用 callable + `ToolCatalog`；资源与 ledger 用具体类。
 - 事件固定 **7** 类；业务问题统一 `input_problems`；不要重新引入 session API、SSE 或旧顶层辅助模块。
-- **`StructuredOutputRecovery`**（WGQ 专用）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。DK/普通 run 使用 `structured_schema=None`；DK 以 finalizer 工具校验终态。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
+- **`StructuredOutputRecovery`**（workflow 共用）：`can_jump_to` 必须含 `"end"`；耗尽时显式 `jump_to: "end"`，禁止只返回 `None`。WGQ / DK 传入各自 schema；空 data 壳耗尽时生成当前 schema 的完整 all-null `input_problems` + runtime problem；普通 run 使用 `structured_schema=None`。验证：`python -m tests.test_harness`。完整算法见 [docs/conventions.md](docs/conventions.md)。
 - **渠道终态合同**：Philips / Tecan header 各自独立，`items[]` 共用完整 24 字段；未知值为 `null`，不输出 `shipment`、Excel、候选噪声或审计细节。同票归集在单一 run 完成，不新增消息/任务状态表或业务 middleware。
 - OMS 旁路索引 best-effort、不阻塞已创建 run（非 `run_events`、无查询 API）；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS）。
 - 部署按**单进程**假设：`session_id` 锁与 cancel 仅进程内有效，不要假设多 worker 互斥。

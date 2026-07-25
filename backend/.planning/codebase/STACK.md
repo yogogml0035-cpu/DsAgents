@@ -1,6 +1,6 @@
 # STACK — backend 技术栈事实
 
-> Analysis Date: 2026-07-24
+> Analysis Date: 2026-07-25
 > last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > 范围：`backend/` 权威源码（`api.py`、`runtime/`、`integrations/`、`skills/`、`tests/`、`pyproject.toml`、`uv.lock`）。
 > **不**把 setuptools 构建产物（历史 `backend/build/`、`dist/`、`*.egg-info`）当源码；忽略 `data/`、`log/`、`__pycache__/`、`.venv/`。
@@ -120,10 +120,10 @@ DeepAgents 传递依赖可含 `langchain-google-genai`；**本仓库未接线**�
 | 执行 | `runtime.execution.HarnessRuntime` | stream → 7 类事件投影 |
 | 取消 | `langgraph.runtime.RunControl` / `GraphDrained` | 协作 drain，非强杀 |
 | 模型 | `langchain.chat_models.init_chat_model` | `anthropic:{MINIMAX_MODEL}` + `base_url`/`api_key` + `thinking={"type":"adaptive"}` |
-| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult)` | 仅 WGQ workflow |
+| 结构化输出 | `ToolStrategy(PhilipsWgqRecognitionResult / TecanOverseasRecognitionResult)` | WGQ / DK 各自 schema；普通 run 无 response format |
 | Harness profile | `register_harness_profile("anthropic", ...)` | `GeneralPurposeSubagentProfile(enabled=False)` |
 | Skills 挂载 | `skills=[SKILLS_SOURCE]` → `"/skills/"` | 资源目录只读 deny write |
-| Middleware | `runtime.middleware` | ToolTelemetry、NoProgress、Memory、Philips recovery 等 |
+| Middleware | `runtime.middleware` | ToolTelemetry、NoProgress、Memory、workflow 共用的 structured recovery 等 |
 | Checkpointer | `langgraph.checkpoint.sqlite.SqliteSaver` | 图状态按 `thread_id` |
 | Store | `langgraph.store.sqlite.SqliteStore` | `/memories/` 跨 run |
 
@@ -161,14 +161,14 @@ Skill 路由：`/philips-wgq-inbound-recognition/` → `skills/philips_wgq_inbou
 2. `extract_archives` — 本地 ZIP 解压到 artifacts
 3. `lookup_philips_wgq_master_data` — WGQ Tracking XLSX + WGQ / DK 共享 Oracle
 4. `inspect_supply_chain_workbooks` — openpyxl 只读 → JSON artifact
-5. `finalize_tecan_overseas_recognition` — Tecan 终态 schema 校验
+5. `finalize_tecan_overseas_recognition` — 普通 Tecan 请求的兼容终态 schema 校验
 
 Workflow **denylist**（排除其他业务工具，保留共享 MinerU / XLSX）：
 
 | workflow | 排除 |
 |----------|------|
 | `WGQ` | `finalize_tecan_overseas_recognition` |
-| `DK` | 无（保留共享 12NC lookup 与 Tecan finalizer） |
+| `DK` | `finalize_tecan_overseas_recognition` |
 
 ### 文档解析
 
@@ -288,6 +288,6 @@ python -m tests.test_tecan_import
 ## 架构边界摘要（栈视角）
 
 - **run-first**：`runs` 投影 + append-only `run_events`；`session_id` 仅作 LangGraph `thread_id` 与进程内单飞。
-- **渠道终态**：Philips（WGQ）→ `ToolStrategy` → `run.result`；Tecan（DK）→ finalizer 工具消息 → `run.result`。
+- **渠道终态**：WGQ / DK 各自 `ToolStrategy` → `structured_response` → 共享 runtime finalizer → `run.result`；普通显式 Tecan 请求仍可经 finalizer 工具投影。
 - **OMS**：`runtime.oms_log` 旁路 JSONL，best-effort，不阻塞 HTTP 200 queued。
 - **权威源码树**：`api.py` + `runtime/` + `integrations/` + `skills/`；忽略 `build/` 历史产物。

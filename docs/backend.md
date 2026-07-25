@@ -13,11 +13,11 @@
 ## 当前能力
 
 - PDF/XLSX 同票材料由 Agent 动态识别角色、归集、抽取和裁决；PDF 使用 MinerU，XLSX 只读为 JSON artifact。
-- Philips 使用 `workflow=WGQ` 和 Pydantic structured response；`StructuredOutputRecovery` 的 `can_jump_to` 须含 `"end"`，耗尽显式 `jump_to: "end"`。
-- Tecan 使用 `workflow=DK` 和 `finalize_tecan_overseas_recognition` 最终工具；没有 extractor SubAgent、Excel 模板或生成器。
+- Philips / Tecan 分别使用 `workflow=WGQ` / `workflow=DK`、各自 Pydantic `ToolStrategy` 和共享 `StructuredOutputRecovery`；其 `can_jump_to` 须含 `"end"`，耗尽显式 `jump_to: "end"`。
+- 两渠道均经共享 runtime finalizer 将 schema 验证并规范化后的 JSON 写到 `run.result`；Tecan finalizer 只供无 workflow 的明确请求。没有 extractor SubAgent、Excel 模板或生成器。
 - 两渠道都将唯一、干净的业务 JSON 写入 `run.result`。header 各自独立，`items[]` 共享 `channel_contract.OrderItem` 完整 24 字段，不输出 `shipment`。
 - run 的业务 outcome 为 `success` / `partial_success` / `input_problems`；业务问题是 `succeeded` run，执行异常才是 `failed`。
-- WGQ 用 **denylist** 排除 Tecan finalizer；DK 当前空 denylist，保留共享 12NC lookup 与 finalizer；两者均保留共享 MinerU 与 XLSX 检查器，禁止业务-only allowlist。
+- WGQ / DK 均用同一 **denylist** 排除 Tecan finalizer，且均保留共享 12NC lookup、MinerU 与 XLSX 检查器；禁止业务-only allowlist。
 
 ## 运行时主要部件
 
@@ -26,7 +26,7 @@
 | `runtime/runs.py` | SQLite run ledger 与 append-only events |
 | `runtime/resources.py` | artifacts、checkpointer、store、memory 资源 |
 | `runtime/execution.py` | 执行、stream 归一化、结果捕获、cancel |
-| `runtime/middleware.py` | Philips recovery、tool telemetry、loop guard、compatibility |
+| `runtime/middleware.py` | workflow recovery、tool telemetry、loop guard、compatibility |
 | `runtime/tools.py` | 5 工具静态目录 |
 | `integrations/` | MinerU HTTP、artifact 路径与 JSON 落盘（无业务 schema） |
 | `runtime/oms_log.py` | HTTP create_run 成功后的 OMS `run_created` JSONL 旁路索引（best-effort，不阻塞 run） |

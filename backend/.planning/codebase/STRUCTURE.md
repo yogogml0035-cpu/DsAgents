@@ -1,7 +1,7 @@
 # STRUCTURE — backend（dsagents）
 
 > last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
-> Analysis Date: 2026-07-24。以下是权威源码布局；`backend/build/`、`backend/dist/`、`dsagents.egg-info/` 不是源码，不读也不提交。本分析不读取 `.env` 内容。
+> Analysis Date: 2026-07-25。以下是权威源码布局；`backend/build/`、`backend/dist/`、`dsagents.egg-info/` 不是源码，不读也不提交。本分析不读取 `.env` 内容。
 
 ## 目录树
 
@@ -111,8 +111,8 @@ backend/
 |------|------|
 | `api.py` | `POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`；session 单飞；usage 聚合计价；`create_app` / `app` |
 | `runtime/__init__.py` | 稳定导出：`AgentResources`、`ResourceConfig`、`HarnessRuntime`、`create_harness`、`RunEvent`、`RunSnapshot`、`SqliteRunLedger` |
-| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；WGQ `ToolStrategy`；WGQ/DK 系统提示与 denylist |
-| `runtime/execution.py` | `HarnessRuntime`：归一化消息、stream → 七类事件、Philips structured_response、Tecan finalizer 捕获、协作 cancel |
+| `runtime/agent.py` | `Brain` / `BrainFactory` Protocol；`DeepAgentsBrainFactory`；WGQ/DK 各自的 `ToolStrategy`、共享流程提示与同一 denylist |
+| `runtime/execution.py` | `HarnessRuntime`：归一化消息、stream → 七类事件、workflow `structured_response` 的共享终态投影、普通 Tecan finalizer 兼容投影、协作 cancel |
 | `runtime/middleware.py` | `StructuredOutputRecovery`、`ToolTelemetry`、`NoProgressMiddleware`、`StructuredOutputCompatibility`、`runtime_middlewares` |
 | `runtime/tools.py` | 五工具静态注册唯一入口（`default_tool_catalog`） |
 | `runtime/resources.py` | 三 SQLite 路径、`CompositeBackend` 路由、`/memories/AGENTS.md` baseline |
@@ -121,12 +121,12 @@ backend/
 | `runtime/oms_log.py` | best-effort `run_created` JSONL（`log/oms_log.log`） |
 | `integrations/artifacts.py` | 虚拟路径、`clean_filename` / `make_timestamped_name`、`write_json_artifact` |
 | `integrations/mineru.py` | MinerU 提交/轮询/下载；ZIP 解压；`parse_documents` / `extract_archives` |
-| `skills/channel_contract.py` | 渠道共用 24 字段 item 与 outcome 语义 |
+| `skills/channel_contract.py` | 渠道共用 24 字段 item、outcome 语义与 `finalize_channel_result` 规范化 |
 | `skills/philips_wgq_inbound_recognition/schema.py` | `WAG_WORKFLOW`（值为 `WGQ`）、`OrderHeader`、`PhilipsWgqRecognitionResult` |
 | `skills/philips_wgq_inbound_recognition/scripts/tools.py` | 共享 12NC 主数据（WGQ Tracking + Oracle） |
 | `skills/philips_wgq_inbound_recognition/SKILL.md` | Philips 流程提示（Agent Skills 资源） |
 | `skills/tecan_import/schema.py` | `DK_WORKFLOW`、`TecanHeader`、`TecanOverseasRecognitionResult` |
-| `skills/tecan_import/scripts/tools.py` | XLSX 检查 + finalizer（无 Excel 生成） |
+| `skills/tecan_import/scripts/tools.py` | XLSX 检查 + 仅普通 Tecan run 使用的 finalizer（复用共享规范化；无 Excel 生成） |
 | `skills/tecan_import/SKILL.md` | Tecan 流程提示 |
 | `pyproject.toml` | `dsagents` 发行、`package-data` 打包各 Skill 包内 `SKILL.md` / references |
 | `tests/test_support.py` | 测试夹具与公共辅助 |
@@ -266,7 +266,8 @@ skills.* tools
 | 共享终态 JSON 语义 | `skills/channel_contract.py` |
 | 渠道专属 header / 证据规则 | 该渠道 `schema.py` / `SKILL.md` / `references/` |
 | 跨模型/工具横切行为 | 评估后放 `runtime/middleware.py` |
-| 单一业务终态校验 | 优先做成工具（如 Tecan finalizer），不新增 middleware state |
+| workflow 终态投影 | `runtime/execution.py` 读取 `structured_response` 后调用共享 `finalize_channel_result`，不新增 middleware state |
+| 普通 Tecan 终态校验 | 保留 `finalize_tecan_overseas_recognition` 工具，并复用共享规范化 |
 | 外部 HTTP / 文件 I/O 工具 | `integrations/` 或 Skill `scripts/tools.py` |
 | 新 HTTP 能力 | 默认不加端点；无 SSE / session API / 业务状态表 / 任务队列 |
 

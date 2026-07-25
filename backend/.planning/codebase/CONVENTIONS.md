@@ -1,7 +1,7 @@
 # CONVENTIONS — backend 编码与质量约定
 
 > last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
-> Analysis Date: 2026-07-24。以 `backend/` 权威源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。禁止读 `.env` 值。
+> Analysis Date: 2026-07-25。以 `backend/` 权威源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。禁止读 `.env` 值。
 
 ## 1. 源码布局与模块边界
 
@@ -136,9 +136,8 @@ def default_tool_catalog() -> ToolCatalog:
 
 | 场景 | 层 | 行为 |
 |------|----|------|
-| 业务 `input_problems` | 渠道 schema / finalizer | 合法 `run.result`，status **`succeeded`** |
-| 缺 Philips `structured_response` | Harness（WGQ） | `ValueError` → status `failed` |
-| DK 缺 Tecan finalizer 终态 | Harness（DK） | `ValueError` → status `failed` |
+| 业务 `input_problems` | 渠道 schema | 合法 `run.result`，status **`succeeded`** |
+| workflow 缺 `structured_response` | Harness（WGQ / DK） | `ValueError("structured_response missing for <workflow>")` → status `failed` |
 | `NoProgressLoop`（同 tool+args 连续 `NO_PROGRESS_WINDOW=3`） | middleware → Harness | status `failed`，error 文本携带原因 |
 | 其它 Exception | Harness | status `failed`，`error` 文本 + raw repr |
 | `GraphDrained`（cancel） | Harness | status `cancelled` |
@@ -188,14 +187,13 @@ def default_tool_catalog() -> ToolCatalog:
 WGQ / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他业务**工具：
 
 ```python
-_WAG_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
-_DK_EXCLUDED_TOOLS = frozenset()
-# 两渠道均保留 parse_documents / extract_archives /
-# lookup_philips_wgq_master_data / inspect_supply_chain_workbooks；DK 另保留 finalizer
+_WORKFLOW_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
+# WGQ / DK 都保留 parse_documents / extract_archives /
+# lookup_philips_wgq_master_data / inspect_supply_chain_workbooks
 ```
 
 - **禁止**业务-only allowlist（避免共享 MinerU / XLSX 工具从模型工具表消失，导致 `/memories/AGENTS.md` ZIP 指引失效）。
-- 当前无其它业务工具可排除时，DK denylist 为空集合仍须走 denylist 路径，不得改写成 allowlist。
+- Tecan finalizer 仍在静态目录中，但只供无 workflow 的明确 Tecan 请求；两个 workflow 都从工具表排除它。
 - 验证：`python -m tests.test_workflow_setup`（工具名集合断言）。
 
 ## 10. 事件模型（固定 7 类）
@@ -228,7 +226,7 @@ Harness / ledger 对外事件类型仅：
 | 包 | workflow | 终态路径 |
 |----|----------|----------|
 | `philips_wgq_inbound_recognition` | `WGQ` | `ToolStrategy(PhilipsWgqRecognitionResult)` + `structured_response` |
-| `tecan_import` | `DK` | `finalize_tecan_overseas_recognition` 工具返回值 |
+| `tecan_import` | `DK` | `ToolStrategy(TecanOverseasRecognitionResult)` + `structured_response` |
 
 - 不做 Skill 目录自动发现；`skills: [SKILLS_SOURCE]` 固定 `/skills/`。
 - 新增 Skill：新建包 → 更新 `package-data` → 静态注册工具 → 更新 denylist（若跨业务互斥）→ 同步 codebase 文档与测试。
@@ -268,9 +266,8 @@ Harness / ledger 对外事件类型仅：
 
 ### Philips vs Tecan 终态路径
 
-- **WGQ**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing for WGQ`）。
-- **DK**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；缺失则 run `failed`；无 `response_format` / 无 Philips recovery。
-- 普通 run：`structured_schema=None`，不强制按 Philips schema 恢复；若仍调用 Tecan finalizer 可投影 result。
+- **WGQ / DK**：各自 `ToolStrategy(schema)` 将结果写入 stream `updates` 的 `structured_response`；Harness 用 `finalize_channel_result(schema, response)` 再校验并 `model_dump(mode="json")` 到 `run.result`；缺失则 `structured_response missing for <workflow>` 失败。
+- 普通 run：`structured_schema=None`，不强制结构化终态；若调用 Tecan finalizer，Harness 仍从指定 ToolMessage 读取并复用 `finalize_channel_result` 投影 result。
 
 ## 13. Middleware 与 StructuredOutputRecovery 规则
 
@@ -284,8 +281,8 @@ Harness / ledger 对外事件类型仅：
   4. `StructuredOutputCompatibility`（ToolStrategy 请求关闭 thinking）
   5. 可选 `MemoryMiddleware`（主 Agent 挂 `/memories/AGENTS.md`）
 
-- Harness 对 WGQ 传 `structured_schema=PhilipsWgqRecognitionResult`；DK / 普通 run 传 `None`。
-- `DeepAgentsBrainFactory` 在 WGQ 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
+- Harness 对 WGQ / DK 分别传 `PhilipsWgqRecognitionResult` / `TecanOverseasRecognitionResult`；普通 run 传 `None`。
+- `DeepAgentsBrainFactory` 只消费已装配的 middleware；不再维护 workflow 专属补装分支。
 
 ### StructuredOutputRecovery（硬约束）
 
@@ -293,13 +290,13 @@ Harness / ledger 对外事件类型仅：
 - **`@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`**。
 - 失败重试：`jump_to: "model"`，默认 `max_retries=2`（`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`；约 `1 + max_retries` 次模型调用量级）。
 - 耗尽时必须 **`jump_to: "end"`**，**禁止**只返回 `None`（否则 ToolStrategy 可能无限 model→model）。
-- 空 data 壳（`success`/`partial_success` 且 `data:{}` 或缺 header/items）：
+- 空 data 壳（`data:{}`、缺 header/items，或 success/partial_success 的空 items）：
   - 优先同回合 `tool_call_id` 匹配 AI 文本合法 JSON 恢复；
-  - 否则 `EMPTY_DATA_SHELL_HINT` + 可选 `PHILIPS_MINIMAL_DATA_SKELETON` 纠错；
-  - 空壳耗尽 → all-null nested data + `partial_success` + runtime problem（可 `succeeded`）；
+  - 否则以完整 header / items 规则纠错；
+  - 空壳耗尽 → 当前 schema 的 all-null nested data + `input_problems` + runtime problem（可 `succeeded`）；
   - **其它**失败耗尽 → 无 `structured_response`（可 `failed`）。
-- `input_problems` **不**视为 empty-data shell。
-- Philips schema 对 runtime recovery skeleton 有 validator 豁免路径（`_is_runtime_recovery_skeleton`）。
+- `input_problems` 若仍缺完整 data 形状，同样视为 empty-data shell。
+- 不保留 Philips 专属 skeleton validator 豁免。
 - 验证：`python -m tests.test_harness`。
 
 ## 14. 时间戳约定

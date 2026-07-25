@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
 from integrations.artifacts import read_json_artifact
+from skills.channel_contract import finalize_channel_result
 from skills.tecan_import.schema import TecanOverseasRecognitionResult
 from skills.tecan_import.scripts.tools import (
     finalize_tecan_overseas_recognition,
@@ -43,6 +44,7 @@ def run() -> None:
     assert finalized["data"]["items"][0]["quantity"] == "2"
     assert finalized["data"]["items"][0]["currency"] == "USD"
     assert len(finalized["data"]["items"][0]) == 24
+    assert finalized == finalize_channel_result(TecanOverseasRecognitionResult, payload)
     finalizer_schema = StructuredTool.from_function(finalize_tecan_overseas_recognition).args_schema.model_json_schema()
     assert finalizer_schema["properties"]["result"]["$ref"].endswith("TecanOverseasRecognitionResult")
     assert "OrderItem" in finalizer_schema["$defs"]

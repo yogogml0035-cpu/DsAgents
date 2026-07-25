@@ -17,18 +17,9 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
-from runtime.middleware import (
-    NO_PROGRESS_WINDOW,
-    NoProgressLoop,
-    NoProgressMiddleware,
-    StructuredOutputCompatibility,
-    StructuredOutputRecovery,
-    ToolTelemetry,
-    philips_structured_output_error_message,
-)
 from runtime.observability import MAIN_AGENT_NAME
 from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
-from skills.tecan_import import DK_WORKFLOW
+from skills.tecan_import import DK_WORKFLOW, TecanOverseasRecognitionResult
 
 
 BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
@@ -44,43 +35,32 @@ DEFAULT_SYSTEM_PROMPT = (
     "大体积输出写入 `/artifacts/`。"
 )
 
+CHANNEL_WORKFLOW_PROMPT = (
+    "这是渠道供应链工作流：只处理本轮显式 artifact。"
+    "将可支持 PDF 一次调用 parse_documents，将全部 XLSX 一次调用 inspect_supply_chain_workbooks；"
+    "parse_documents 返回 archive_path 时，调用 extract_archives 后读取解压文本或 Markdown。"
+    "按内容识别材料并归集唯一票次；多票或核心事实无法确认时使用 input_problems。"
+    "仅对唯一确认的 12NC 调用 lookup_philips_wgq_master_data 补齐稳定空值，不覆盖本票事实。"
+    "相同 12NC 默认不合并；发票和运单按材料与原行顺序归集。"
+    "最终必须通过本 workflow 配置的结构化 schema 提交结果；run.result 是唯一业务 JSON，文本只作摘要。"
+)
+
 WAG_WORKFLOW_PROMPT = (
     "API 已选择 workflow=WGQ（飞利浦外高桥进境识别）。"
     "本 run 必须加载并遵循 `/skills/philips-wgq-inbound-recognition/SKILL.md`，"
     "并按其引用读取货代版式说明。"
-    "最终结果必须通过 PhilipsWgqRecognitionResult 结构化工具提交。"
-    "禁止提交 data: {}，也不得省略 header/items。"
-    "outcome 为 success 或 partial_success 时，data 必须包含完整嵌套对象："
-    "header（全部固定英文字段）、"
-    "items（非空数组，每项为完整商品对象）；未知值填 null。"
-    "outcome 为 input_problems 时，data 仍须包含完整 header 与 items（可为空数组），且 problems 至少一条。"
-    "若 schema 工具校验失败，须用完整嵌套结构重新提交，禁止重复提交空 data 壳。"
-    "正常路径只调用 PhilipsWgqRecognitionResult 提交业务结果；不要在助手文本重复完整业务 JSON，"
-    "避免文本与 tool 参数分叉。仅在无法形成有效工具调用时，才输出恰好一个符合 schema 的完整 ```json```"
-    "作为后备；该 JSON 不能替代 tool 参数。禁止只改 problems 却留下 data:{}。"
-    "自然语言摘要不能替代业务结果。"
+    "最终使用 PhilipsWgqRecognitionResult schema。只将唯一确认的 Tracking 传给主数据查询。"
 )
 
 DK_WORKFLOW_PROMPT = (
     "API 已选择 workflow=DK（帝肯境外供应链识别）。"
     "本 run 必须加载并遵循 `/skills/tecan-import/SKILL.md`。"
-    "确认唯一 12NC 后必须调用 lookup_philips_wgq_master_data 查询共享 Oracle 主数据；"
-    "DK 不传 tracking_artifact，且只用稳定字段补齐空值。"
-    "最终必须调用 finalize_tecan_overseas_recognition；其返回值是唯一业务结果。"
-    "自然语言摘要不能替代业务结果。"
+    "DK 不传 tracking_artifact；最终使用 TecanOverseasRecognitionResult schema，不调用 Tecan finalizer。"
 )
 
-# Workflow denylist only removes the other channel's business tool; shared
-# MinerU tools stay available so /memories/AGENTS.md ZIP guidance remains valid.
-_WAG_EXCLUDED_TOOLS = frozenset(
-    {
-        "finalize_tecan_overseas_recognition",
-    }
-)
-
-# The legacy-named 12NC lookup is shared by WGQ and DK. DK has no other
-# channel-only tool to exclude while retaining its required finalizer.
-_DK_EXCLUDED_TOOLS = frozenset()
+# Both workflow tool tables retain shared document and master-data tools while
+# excluding the non-workflow Tecan finalizer.
+_WORKFLOW_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
 
 SKILLS_SOURCE = "/skills/"
 
@@ -88,17 +68,12 @@ __all__ = [
     "BACKEND_ENV_PATH",
     "Brain",
     "BrainFactory",
+    "CHANNEL_WORKFLOW_PROMPT",
     "DEFAULT_SYSTEM_PROMPT",
     "DeepAgentsBrainFactory",
     "MAIN_AGENT_NAME",
-    "NO_PROGRESS_WINDOW",
-    "NoProgressLoop",
-    "NoProgressMiddleware",
     "DK_WORKFLOW_PROMPT",
     "SKILLS_SOURCE",
-    "StructuredOutputCompatibility",
-    "StructuredOutputRecovery",
-    "ToolTelemetry",
     "WAG_WORKFLOW_PROMPT",
 ]
 
@@ -154,25 +129,11 @@ class DeepAgentsBrainFactory:
         tools: Sequence[Any],
         workflow: str | None = None,
     ) -> Brain:
-        configured_middleware = list(middleware)
-        if workflow == WAG_WORKFLOW:
-            if not any(
-                isinstance(item, StructuredOutputCompatibility)
-                for item in configured_middleware
-            ):
-                configured_middleware.append(StructuredOutputCompatibility())
-            if not any(
-                isinstance(item, StructuredOutputRecovery)
-                for item in configured_middleware
-            ):
-                # Recovery first so after_model runs last among after_* hooks.
-                configured_middleware.insert(0, StructuredOutputRecovery())
-
         kwargs: dict[str, Any] = {
             "model": self.model,
             "tools": tools,
             "system_prompt": self.system_prompt,
-            "middleware": configured_middleware,
+            "middleware": list(middleware),
             "backend": resources.backend,
             "checkpointer": resources.checkpointer,
             "store": resources.store,
@@ -187,22 +148,17 @@ class DeepAgentsBrainFactory:
             ],
             "name": MAIN_AGENT_NAME,
         }
-        if workflow == WAG_WORKFLOW:
-            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{WAG_WORKFLOW_PROMPT}"
-            kwargs["response_format"] = _WAG_RESPONSE_FORMAT
-            # Keep shared MinerU tools (parse_documents / extract_archives) so the
-            # runtime handbook ZIP path stays valid; only strip Tecan business tools.
+        workflow_config = _WORKFLOW_CONFIGS.get(workflow)
+        if workflow_config is not None:
+            workflow_prompt, response_format = workflow_config
+            kwargs["system_prompt"] = (
+                f"{self.system_prompt}\n\n{CHANNEL_WORKFLOW_PROMPT}\n\n{workflow_prompt}"
+            )
+            kwargs["response_format"] = response_format
             kwargs["tools"] = [
                 tool
                 for tool in tools
-                if getattr(tool, "__name__", "") not in _WAG_EXCLUDED_TOOLS
-            ]
-        elif workflow == DK_WORKFLOW:
-            kwargs["system_prompt"] = f"{self.system_prompt}\n\n{DK_WORKFLOW_PROMPT}"
-            kwargs["tools"] = [
-                tool
-                for tool in tools
-                if getattr(tool, "__name__", "") not in _DK_EXCLUDED_TOOLS
+                if getattr(tool, "__name__", "") not in _WORKFLOW_EXCLUDED_TOOLS
             ]
         return create_deep_agent(**kwargs)
 
@@ -210,5 +166,14 @@ class DeepAgentsBrainFactory:
 _WAG_RESPONSE_FORMAT = ToolStrategy(
     PhilipsWgqRecognitionResult,
     tool_message_content="已记录飞利浦外高桥识别结果。",
-    handle_errors=philips_structured_output_error_message,
 )
+
+_DK_RESPONSE_FORMAT = ToolStrategy(
+    TecanOverseasRecognitionResult,
+    tool_message_content="已记录帝肯境外供应链识别结果。",
+)
+
+_WORKFLOW_CONFIGS = {
+    WAG_WORKFLOW: (WAG_WORKFLOW_PROMPT, _WAG_RESPONSE_FORMAT),
+    DK_WORKFLOW: (DK_WORKFLOW_PROMPT, _DK_RESPONSE_FORMAT),
+}

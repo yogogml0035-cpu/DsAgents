@@ -64,12 +64,12 @@ running → cancelling → cancelled
 
 | 路径 | 触发 | 投影到 `run.result` | 缺结果时 |
 |------|------|---------------------|----------|
-| WGQ（Philips） | `workflow=WGQ` | `ToolStrategy` → `structured_response` → `PhilipsWgqRecognitionResult` | run **`failed`** |
-| DK（Tecan） | `workflow=DK` | `finalize_tecan_overseas_recognition` ToolMessage → `TecanOverseasRecognitionResult` | run **`failed`** |
-| 通用 Tecan 请求 | 无 workflow + 明确 Skill 请求 | 同一 finalizer 路径 | 可 `succeeded` 且 `result=null` |
+| WGQ（Philips） | `workflow=WGQ` | `ToolStrategy(PhilipsWgqRecognitionResult)` → `structured_response` → 共享 runtime finalizer → `run.result` | run **`failed`** |
+| DK（Tecan） | `workflow=DK` | `ToolStrategy(TecanOverseasRecognitionResult)` → `structured_response` → 共享 runtime finalizer → `run.result` | run **`failed`** |
+| 通用 Tecan 请求 | 无 workflow + 明确 Skill 请求 | Tecan finalizer ToolMessage → 共享 runtime finalizer | 可 `succeeded` 且 `result=null` |
 | 普通阅读 | 无 workflow、无 finalizer | 可为 `null` | 仍 `succeeded` |
 
-合法业务 JSON（含 `input_problems`）→ run **`succeeded`**。运行时异常 / `NoProgressLoop` / Philips 缺失 structured_response → **`failed`**。用户 cancel + `GraphDrained` → **`cancelled`**。
+合法业务 JSON（含 `input_problems`）→ run **`succeeded`**。运行时异常 / `NoProgressLoop` / workflow 缺失 structured_response → **`failed`**。用户 cancel + `GraphDrained` → **`cancelled`**。
 
 ## 渠道最终 JSON
 
@@ -104,11 +104,11 @@ Philips header 含 `om`/`so`/`salesperson`/`etd` 等、无 `invoice_date`；Teca
 | `success` | 无未解决业务字段缺失；已解决冲突或无关材料不降级 | `succeeded` |
 | `partial_success` | 核心商品事实已确认，补充字段为 `null` 且列入 problems | `succeeded` |
 | `input_problems` | 票次或核心事实不能确认；只带已证实字段和复核线索 | `succeeded` |
-| WGQ structured response 缺失/非法、DK finalizer 缺失、工具或运行时异常 | 无有效业务终态 | `failed` |
+| WGQ / DK structured_response 缺失/非法、工具或运行时异常 | 无有效业务终态 | `failed` |
 
 共享校验（`validate_channel_outcome`）会将「有缺失却声明 `success`」归正为 `partial_success`（并补 problem），将「字段已完整却声明 `partial_success`」归正为 `success`。
 
-Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runtime fallback；它是防止图循环的**技术兜底**，不是业务 Skill 的正常裁决模板。其它解析/校验失败耗尽 → 无 `structured_response` → harness `failed`。
+任一 workflow 的空 data 壳 Recovery 耗尽会生成当前 schema 的 all-null `input_problems` 和 runtime problem；它是防止图循环的**技术兜底**，不是业务 Skill 的正常裁决模板。其它解析/校验失败耗尽 → 无 `structured_response` → harness `failed`。
 
 ## 渠道材料边界
 
@@ -130,20 +130,20 @@ Philips 空 data 壳的 Recovery 耗尽会生成 all-null `partial_success` runt
 | `inspect_supply_chain_workbooks` | 共享 XLSX 只读检查 → JSON artifact |
 | `finalize_tecan_overseas_recognition` | Tecan 终态 schema 校验并返回 JSON 字符串 |
 
-- WGQ 使用 `ToolStrategy(PhilipsWgqRecognitionResult)`；执行层从 `updates` 读取并再次 Pydantic 校验。
-- DK 由 `/skills/tecan-import/SKILL.md` 引导；Agent 必须调用 finalizer，执行层**只**读取该名字的 ToolMessage 并写 `run.result`。
+- WGQ / DK 分别使用自己的 `ToolStrategy(schema)`；执行层从 `updates` 读取 `structured_response`，经共享 runtime finalizer 再次 Pydantic 校验并规范化写入 `run.result`。
+- DK 由 `/skills/tecan-import/SKILL.md` 引导；Tecan finalizer 只保留给无 workflow 的明确 Tecan 请求兼容，并复用同一 finalizer。
 - DK 对确认的唯一 12NC 必须批量调用 `lookup_philips_wgq_master_data`（不传 `tracking_artifact`）；只以返回稳定字段补齐空值。
 - 不设业务 SubAgent、业务任务状态表或全局 Tecan middleware。
-- WGQ 工具表采用 **denylist**，排除 `finalize_tecan_overseas_recognition`；DK 当前空 denylist，保留共享 `lookup_philips_wgq_master_data` 与 finalizer；均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- WGQ / DK 工具表均采用同一 **denylist**，排除 `finalize_tecan_overseas_recognition`；均保留共享 MinerU、12NC lookup 与 XLSX 工具，**禁止**业务-only allowlist。
 - 工具在 `runtime/tools.py` **静态**注册；不自动扫描目录。
 - Skill 单目录：下划线命名的可 import 包内同时存放资源与代码；运行时将其映射为同名连字符 `/skills/` 别名；`package-data` 必须打包 `SKILL.md` / references。
 
-### StructuredOutputRecovery（Philips 专用）
+### StructuredOutputRecovery（workflow 共用）
 
-- 仅 WGQ 的 `structured_schema` 非空；DK / 普通 run 为 `None`。
+- WGQ / DK 分别传各自 schema；普通 run 的 `structured_schema=None`。
 - `after_model` + `jump_to`；`can_jump_to` 必须含 `"model"` 与 **`"end"`**。
 - 耗尽必须显式 `jump_to: "end"`，禁止只返回 `None`。
-- 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton 纠错；空壳耗尽 → all-null + `partial_success`（技术兜底）。
+- 空 data 壳：同回合 `tool_call_id` 恢复或 schema 纠错；空壳耗尽 → 当前 schema 的 all-null `input_problems` + runtime problem（技术兜底）。
 
 ## 存储、artifact、provider 与 OMS
 

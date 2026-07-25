@@ -14,21 +14,25 @@ from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
 
 from runtime.agent import (
+    CHANNEL_WORKFLOW_PROMPT,
     DK_WORKFLOW_PROMPT,
     DEFAULT_SYSTEM_PROMPT,
     MAIN_AGENT_NAME,
     SKILLS_SOURCE,
     DeepAgentsBrainFactory,
-    StructuredOutputCompatibility,
-    StructuredOutputRecovery,
     WAG_WORKFLOW_PROMPT,
 )
 from runtime.execution import _update_events
-from runtime.middleware import RUNTIME_MEMORY_SYSTEM_PROMPT, runtime_middlewares
+from runtime.middleware import (
+    RUNTIME_MEMORY_SYSTEM_PROMPT,
+    StructuredOutputCompatibility,
+    StructuredOutputRecovery,
+    runtime_middlewares,
+)
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import default_tool_catalog
-from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
-from skills.tecan_import import DK_WORKFLOW
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import import DK_WORKFLOW, TecanOverseasRecognitionResult
 
 
 def run() -> None:
@@ -37,11 +41,11 @@ def run() -> None:
     tecan = (skills_root / "tecan_import" / "SKILL.md").read_text(encoding="utf-8")
     assert len(philips.splitlines()) <= 100
     assert len(tecan.splitlines()) <= 100
-    assert "相同 12NC 默认不合并" in philips
+    assert "唯一确认的 Tracking" in philips
     assert "original_waybill_number" in philips
-    assert "input_problems" in tecan
+    assert "DK 不传 `tracking_artifact`" in tecan
     assert "不生成 Excel" in tecan
-    assert "lookup_philips_wgq_master_data" in tecan
+    assert "finalize_tecan_overseas_recognition" in tecan
     assert "name: philips-wgq-inbound-recognition" in philips
     assert "name: tecan-import" in tecan
     freight_forwarders = (
@@ -53,11 +57,16 @@ def run() -> None:
     assert DK_WORKFLOW == "DK"
     assert "philips-wgq-inbound-recognition/SKILL.md" in WAG_WORKFLOW_PROMPT
     assert "tecan-import/SKILL.md" in DK_WORKFLOW_PROMPT
+    assert "相同 12NC 默认不合并" in CHANNEL_WORKFLOW_PROMPT
+    assert "input_problems" in CHANNEL_WORKFLOW_PROMPT
 
-    default_middleware = runtime_middlewares()
-    assert isinstance(default_middleware[0], StructuredOutputRecovery)
-    assert len(default_middleware) == 4
-    assert not any(isinstance(item, StructuredOutputRecovery) for item in runtime_middlewares(structured_schema=None))
+    assert not any(isinstance(item, StructuredOutputRecovery) for item in runtime_middlewares())
+    wgq_middleware = runtime_middlewares(structured_schema=PhilipsWgqRecognitionResult)
+    dk_middleware = runtime_middlewares(structured_schema=TecanOverseasRecognitionResult)
+    assert isinstance(wgq_middleware[0], StructuredOutputRecovery)
+    assert isinstance(dk_middleware[0], StructuredOutputRecovery)
+    assert wgq_middleware[0].schema is PhilipsWgqRecognitionResult
+    assert dk_middleware[0].schema is TecanOverseasRecognitionResult
     main_middleware = runtime_middlewares(memory_backend=object())
     memory_items = [item for item in main_middleware if isinstance(item, MemoryMiddleware)]
     assert len(memory_items) == 1
@@ -78,7 +87,7 @@ def run() -> None:
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         assert DeepAgentsBrainFactory(model=model).create(
             resources=resources,
-            middleware=[],
+            middleware=wgq_middleware,
             tools=catalog_tools,
             workflow=WAG_WORKFLOW,
         ) is sentinel
@@ -96,9 +105,11 @@ def run() -> None:
         "inspect_supply_chain_workbooks",
     }
     assert isinstance(kwargs["response_format"], ToolStrategy)
+    assert kwargs["response_format"].schema is PhilipsWgqRecognitionResult
     assert WAG_WORKFLOW_PROMPT in kwargs["system_prompt"]
     assert "shipment" not in kwargs["system_prompt"]
-    assert "data: {}" in kwargs["system_prompt"]
+    assert CHANNEL_WORKFLOW_PROMPT in kwargs["system_prompt"]
+    assert "PhilipsWgqRecognitionResult schema" in kwargs["system_prompt"]
     compatibility = next(item for item in kwargs["middleware"] if isinstance(item, StructuredOutputCompatibility))
     seen_requests = []
 
@@ -116,25 +127,27 @@ def run() -> None:
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         DeepAgentsBrainFactory(model="anthropic:test").create(
             resources=resources,
-            middleware=runtime_middlewares(structured_schema=None),
+            middleware=dk_middleware,
             tools=catalog_tools,
             workflow=DK_WORKFLOW,
         )
     dk_kwargs = create.call_args.kwargs
     assert DK_WORKFLOW_PROMPT in dk_kwargs["system_prompt"]
-    assert "response_format" not in dk_kwargs
+    assert isinstance(dk_kwargs["response_format"], ToolStrategy)
+    assert dk_kwargs["response_format"].schema is TecanOverseasRecognitionResult
     assert {tool.__name__ for tool in dk_kwargs["tools"]} == {
         "parse_documents",
         "extract_archives",
         "lookup_philips_wgq_master_data",
         "inspect_supply_chain_workbooks",
-        "finalize_tecan_overseas_recognition",
     }
+    assert CHANNEL_WORKFLOW_PROMPT in dk_kwargs["system_prompt"]
+    assert "不调用 Tecan finalizer" in dk_kwargs["system_prompt"]
 
     with patch("runtime.agent.create_deep_agent", return_value=sentinel) as create:
         DeepAgentsBrainFactory(model="anthropic:test").create(
             resources=resources,
-            middleware=runtime_middlewares(structured_schema=None),
+            middleware=runtime_middlewares(),
             tools=catalog_tools,
             workflow=None,
         )

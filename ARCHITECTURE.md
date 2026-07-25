@@ -1,6 +1,6 @@
 # DsAgents 系统架构
 
-> 本轮刷新：2026-07-24。对齐 `backend/.planning/codebase/`（Analysis Date: 2026-07-24，`last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c`）。本文只定义系统边界与稳定决策；实现细节以 codebase 事实文档为准。调用链与按任务阅读见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
+> 本轮刷新：2026-07-25。对齐 `backend/.planning/codebase/`（Analysis Date: 2026-07-25，`last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c`）。本文只定义系统边界与稳定决策；实现细节以 codebase 事实文档为准。调用链与按任务阅读见 [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md)。
 
 ## 系统定位
 
@@ -44,7 +44,7 @@ flowchart LR
 | 集成 | `backend/integrations/` | `/artifacts` 路径、MinerU HTTP、JSON artifact 读写 |
 | 业务 Skill | `backend/skills/` | 共享渠道合同、Philips/Tecan 下划线 Skill 包、主数据 / XLSX / finalizer |
 | 本地门禁 | `backend/tests/` | 可执行 assert 脚本（`python -m tests.*`，**非 pytest**） |
-| 实现事实 | `backend/.planning/codebase/` | 架构/结构/栈/集成/约定/测试/风险（Analysis Date: 2026-07-24） |
+| 实现事实 | `backend/.planning/codebase/` | 架构/结构/栈/集成/约定/测试/风险（Analysis Date: 2026-07-25） |
 
 依赖单向：`api → runtime → integrations / skills`。Skill 工具可依赖 `integrations.artifacts`，不反向调用 HTTP。`typing.Protocol` **只**用于 `Brain` / `BrainFactory`；工具为 callable + `ToolCatalog`；资源与 ledger 为具体类。
 
@@ -74,16 +74,16 @@ backend/
 | 区域 | 入口 | 当前职责 |
 |------|------|----------|
 | 执行 | `runtime/execution.py` | `HarnessRuntime.execute_run`、stream→七类 events、结果投影、协作 cancel |
-| Agent | `runtime/agent.py` | `Brain`/`BrainFactory`、`DeepAgentsBrainFactory`、WGQ ToolStrategy、denylist |
-| Middleware | `runtime/middleware.py` | Philips recovery、telemetry、loop 检测、thinking 兼容、memory |
+| Agent | `runtime/agent.py` | `Brain`/`BrainFactory`、`DeepAgentsBrainFactory`、WGQ/DK ToolStrategy、共享 denylist |
+| Middleware | `runtime/middleware.py` | workflow recovery、telemetry、loop 检测、thinking 兼容、memory |
 | 工具目录 | `runtime/tools.py` | 静态 **5** 工具 `ToolCatalog` |
 | 资源 / 三库 | `runtime/resources.py` | `AgentResources`、`CompositeBackend`、路径锚定 `backend/` |
 | ledger | `runtime/runs.py` | runs 投影 + append-only events |
 | 可观测抽取 | `runtime/observability.py` | 纯函数 chunk 抽取；`MAIN_AGENT_NAME = "dsagents-main"` |
 | OMS 旁路 | `runtime/oms_log.py` | `run_created` JSONL best-effort |
-| 合同 | `skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome |
+| 合同 | `skills/channel_contract.py` | 共享 24 字段 `OrderItem`、problems、outcome、终态规范化 |
 | Philips（WGQ） | `skills/philips_wgq_inbound_recognition/` | Skill 资源 + schema + Tracking / 共享 Oracle lookup；货代版式 `references/freight-forwarders.md` |
-| Tecan（DK） | `skills/tecan_import/` | Skill 资源 + XLSX inspection + finalizer（无 Excel）；共享 12NC lookup |
+| Tecan（DK） | `skills/tecan_import/` | Skill 资源 + XLSX inspection + 无 workflow 兼容 finalizer（无 Excel）；共享 12NC lookup |
 
 ## 渠道供应链业务设计
 
@@ -112,13 +112,14 @@ WGQ workflow
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 Tracking 时 lookup_philips_wgq_master_data
   → denylist 排除 Tecan finalizer
-  → PhilipsWgqRecognitionResult → run.result
+  → ToolStrategy(PhilipsWgqRecognitionResult) → structured_response → runtime finalizer → run.result
 
 DK workflow
   → /skills/tecan-import/SKILL.md + references/
   → parse_documents / inspect_supply_chain_workbooks
   → 唯一 12NC 时 lookup_philips_wgq_master_data（不传 Tracking）
-  → finalize_tecan_overseas_recognition → run.result
+  → denylist 排除 Tecan finalizer
+  → ToolStrategy(TecanOverseasRecognitionResult) → structured_response → runtime finalizer → run.result
 ```
 
 ## Agent、状态与 middleware 决策
@@ -131,27 +132,27 @@ middleware 只保留横切运行时能力：
 
 | 能力 | 方式 | 原因 |
 |------|------|------|
-| Philips 结构化输出恢复 | class-based `after_model`（`StructuredOutputRecovery`） | 需读同回合消息、更新状态并通过 `jump_to` 重试/结束；`can_jump_to` 必须含 `"end"` |
+| workflow 结构化输出恢复 | class-based `after_model`（`StructuredOutputRecovery`） | 需读同回合消息、更新状态并通过 `jump_to` 重试/结束；`can_jump_to` 必须含 `"end"` |
 | Tool 观测 / 无进展检测 / ToolStrategy thinking 兼容 | runtime middleware | 跨业务、跨模型的执行问题 |
 | Memory | `MemoryMiddleware`（主 Agent 有 memory 时） | 加载 `/memories/AGENTS.md` |
-| Tecan 最终 JSON | 专用 finalizer 工具 | 业务合同校验，不污染普通请求或全局 graph state |
+| workflow 最终 JSON | Harness runtime finalizer | 对 `structured_response` 再校验和 JSON 规范化，不污染 graph state |
+| 普通 Tecan 最终 JSON | 专用 finalizer 工具 | 兼容明确的无 workflow 请求，复用相同规范化 |
 
-主 Agent 有 memory 时约 **5** 个 middleware（Recovery 仅 WGQ）；DK/普通 run 使用 `structured_schema=None`，不按 Philips schema 恢复。生产 `subagents=[]`，并关闭默认 general-purpose subagent。
+主 Agent 有 memory 时约 **5** 个 middleware（两个 workflow 都有 Recovery）；普通 run 使用 `structured_schema=None`。生产 `subagents=[]`，并关闭默认 general-purpose subagent。
 
-**StructuredOutputRecovery 硬约束**（WGQ 专用）：
+**StructuredOutputRecovery 硬约束**（workflow 共用）：
 
 - `can_jump_to` 必须含 `"model"` 与 **`"end"`**
 - 耗尽必须显式 `jump_to: "end"`，禁止只返回 `None`
-- 空 data 壳：同回合 `tool_call_id` 恢复或 skeleton；空壳耗尽 → all-null + `partial_success`（**技术兜底**，非业务模板）
+- 空 data 壳：同回合 `tool_call_id` 恢复或完整形状纠错；空壳耗尽 → 当前 schema 的 all-null + `input_problems`（**技术兜底**，非业务模板）
 - 其它失败耗尽 → 无 `structured_response` → harness `failed`
 
 ## 运行时装配
 
 - `DeepAgentsBrainFactory` 关闭默认 general-purpose subagent，并传递 `subagents=[]`。
 - 固定工具 **5** 个：`parse_documents`、`extract_archives`、`lookup_philips_wgq_master_data`（WGQ / DK 共享 12NC 主数据）、`inspect_supply_chain_workbooks`、`finalize_tecan_overseas_recognition`（静态注册，无自动扫描）。
-- HTTP workflow：`WGQ` 使用 `ToolStrategy(PhilipsWgqRecognitionResult)` + Recovery，`DK` 使用 Tecan finalizer；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
-- `DK` 只信任 `finalize_tecan_overseas_recognition` ToolMessage → `run.result`，缺 finalizer 终态即失败。
-- WGQ 用 **denylist** 排除 Tecan finalizer；DK 当前以空 denylist 保留共享 12NC lookup 与 finalizer；两者均保留共享 MinerU / XLSX 工具，**禁止**业务-only allowlist。
+- HTTP workflow：WGQ / DK 分别使用自己的 `ToolStrategy(schema)` + Recovery，经共享 runtime finalizer 写入 `run.result`；workflow 与客户端 `session_id` 互斥（服务端强制新 session）。
+- 两个 workflow 都以 **denylist** 排除 Tecan finalizer，且均保留共享 12NC lookup、MinerU / XLSX 工具；Tecan finalizer 只用于无 workflow 的明确请求，**禁止**业务-only allowlist。
 - Skill **单目录**：下划线命名的可 import Python 包内同时放 `SKILL.md` / references、schema 与 scripts；运行时以同一目录的连字符 `/skills/` 别名供 Agent Skills 加载；新增须同步 `package-data` 与 skills 路由。Tecan 不携带 Excel 模板或生成器。
 - Agent 虚拟 FS：`/artifacts/`、`/skills/`（写拒绝）、`/memories/`、`/large_tool_results/` + 默认 `StateBackend`。
 
@@ -169,7 +170,7 @@ middleware 只保留横切运行时能力：
 | 目标 | 阅读顺序 |
 |------|----------|
 | 系统边界与决策 | 本文 → [INTERFACES.md](INTERFACES.md) → [coding_maps/SYSTEM_MAP.md](coding_maps/SYSTEM_MAP.md) |
-| 实现细节 | [backend/.planning/codebase/](backend/.planning/codebase/)（Analysis Date: 2026-07-24） |
+| 实现细节 | [backend/.planning/codebase/](backend/.planning/codebase/)（Analysis Date: 2026-07-25） |
 | 全局硬约束 | [AGENTS.md](AGENTS.md) → [docs/conventions.md](docs/conventions.md) |
 | 渠道业务合同 | [docs/channel-supply-chain-json-prd.md](docs/channel-supply-chain-json-prd.md) |
 | 按任务入口 | [docs/reading-order.md](docs/reading-order.md) 或 SYSTEM_MAP §6–§7 |

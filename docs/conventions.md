@@ -23,15 +23,15 @@
 
 - 每个业务 Skill 只保留一个下划线命名、可 import 的 Python 包；包内含 `SKILL.md` / references、schema 和 scripts；运行时以同一目录的连字符 `/skills/<kebab-case-name>/` 别名挂载，且须与 frontmatter `name` 一致；新增时同步 `pyproject.toml` package-data。
 - 工具在对应 import 包的 `scripts/tools.py` 定义，在 `runtime/tools.py` 静态注册；当前恰 5 个，不做扫描/动态 loader。
-- WGQ workflow 缩窄工具表必须用 denylist 排除 Tecan finalizer，同时保留共享 `parse_documents`、`extract_archives`、`inspect_supply_chain_workbooks` 和 12NC lookup；DK 当前用空 denylist，保留共享工具、`lookup_philips_wgq_master_data` 与 Tecan finalizer；禁止业务-only allowlist。
-- DK 终态通过 `finalize_tecan_overseas_recognition` 校验并投影到 `run.result`，不生成 Excel。XLSX inspection 只读并写中间 JSON artifact。
+- WGQ / DK workflow 缩窄工具表必须用同一 denylist 排除 Tecan finalizer，同时保留共享 `parse_documents`、`extract_archives`、`inspect_supply_chain_workbooks` 和 12NC lookup；Tecan finalizer 只供无 workflow 的明确 Tecan 请求兼容；禁止业务-only allowlist。
+- 两个 workflow 均以各自 schema 的 `ToolStrategy` 产生 `structured_response`，再由共享 runtime finalizer 校验并规范化写入 `run.result`；XLSX inspection 只读并写中间 JSON artifact。
 
 ## middleware 约定
 
 - 运行时 middleware 集中于 `runtime/middleware.py`。跨模型/工具的观测、循环检测、兼容性放这里；业务字段裁决和渠道 outcome 不放全局 middleware。
-- `StructuredOutputRecovery` 是 WGQ 专用 class-based `after_model` hook。它必须保留 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，不能只返回 `None`。
-- 空 data 壳只可凭同回合 `ToolMessage.tool_call_id` 匹配同一 AIMessage；合法文本 JSON 才能恢复。空壳耗尽保留 all-null `partial_success` + runtime problem 技术 fallback，其他未恢复的 Philips structured response 使 run 失败。
-- DK/普通 run 用 `runtime_middlewares(structured_schema=None)`，不按 Philips schema 做文本恢复。Tecan finalizer 是更窄的业务校验边界。
+- `StructuredOutputRecovery` 是 workflow 共用的 class-based `after_model` hook。它必须保留 `can_jump_to` 含 `"end"`，耗尽时显式 `jump_to: "end"`，不能只返回 `None`。
+- 空 data 壳只可凭同回合 `ToolMessage.tool_call_id` 匹配同一 AIMessage；合法文本 JSON 才能恢复。空壳耗尽返回当前 schema 的完整 all-null `input_problems` + runtime problem；其它未恢复的 workflow `structured_response` 使 run 失败。
+- WGQ / DK 分别把自己的 schema 传入 `runtime_middlewares`；普通 run 用 `structured_schema=None`。Tecan finalizer 只保留为普通请求兼容边界。
 - LangChain middleware 顺序：`before_*` 正序、`after_*` 逆序、`wrap_*` 外层先入后出；需最后处理 response 的 recovery 放在列表最前。
 
 ## HTTP、事件与存储

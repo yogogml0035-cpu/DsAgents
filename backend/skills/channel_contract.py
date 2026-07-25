@@ -143,6 +143,11 @@ class RecognitionProblem(ContractModel):
         return normalized
 
 
+def finalize_channel_result(schema: type[BaseModel], response: Any) -> dict[str, Any]:
+    """Validate a channel response and normalize it for ``run.result``."""
+    return schema.model_validate(response).model_dump(mode="json")
+
+
 def validate_channel_outcome(result: Any) -> Any:
     """Apply the shared terminal semantics without inventing business values."""
     if result.outcome != "input_problems" and not result.data.items:

@@ -1,7 +1,7 @@
 # ARCHITECTURE — backend（dsagents）
 
 > last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
-> Analysis Date: 2026-07-24。事实来源是 `backend/api.py`、`runtime/`、`integrations/`、`skills/`、`tests/` 与 `pyproject.toml`；不以历史构建产物（`backend/build/`、`backend/dist/`、`dsagents.egg-info/`）为权威源。本分析不读取 `.env` 内容。
+> Analysis Date: 2026-07-25。事实来源是 `backend/api.py`、`runtime/`、`integrations/`、`skills/`、`tests/` 与 `pyproject.toml`；不以历史构建产物（`backend/build/`、`backend/dist/`、`dsagents.egg-info/`）为权威源。本分析不读取 `.env` 内容。
 
 ## Pattern Overview
 
@@ -15,7 +15,7 @@ DsAgents 是**单子项目** Agent 运行时底座：产品代码在 `backend/`�
 | **轮询 HTTP** | 仅四端点；无 SSE、无 session CRUD API |
 | **可注入 Brain** | `Brain` / `BrainFactory` 为唯一 `typing.Protocol`；默认 `DeepAgentsBrainFactory` |
 | **静态工具表** | 五工具经 `ToolCatalog` 静态注册；workflow 用 **denylist** 收窄 |
-| **渠道终态 JSON** | Philips ToolStrategy / Tecan finalizer → `run.result`；业务问题走 `input_problems`，run 仍 `succeeded` |
+| **渠道终态 JSON** | WGQ / DK 各自 `ToolStrategy` → `structured_response` → 共享 runtime finalizer → `run.result`；业务问题走 `input_problems`，run 仍 `succeeded` |
 | **DeepAgents / LangGraph** | `create_deep_agent` 装配图；`checkpointer` + `store` + `CompositeBackend`；stream 投影到 ledger |
 
 不存在的边界（刻意不做）：
@@ -135,13 +135,12 @@ with AgentResources(ResourceConfig()) as resources:
 |-------------|----------|
 | `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（主 Agent 文本；subagent 文本过滤） |
 | `custom` | `tool_progress`（`parse_documents` / `extract_archives` 进度）或 `tool_execution`（`ToolTelemetry` 等） |
-| `updates` | `tool_execution`（tool_calls）、`assistant_message`；同时捕获 `structured_response` 与 Tecan finalizer ToolMessage |
+| `updates` | `tool_execution`（tool_calls）、`assistant_message`；workflow 捕获 `structured_response`，普通 Tecan run 才兼容捕获 finalizer ToolMessage |
 
 终态业务结果：
 
-- **WGQ**：必须从 `updates` 得到 `structured_response`，再 `PhilipsWgqRecognitionResult.model_validate` → `run.result`；缺失则 `failed`
-- **DK**：必须接受名为 `finalize_tecan_overseas_recognition` 的 ToolMessage JSON → `TecanOverseasRecognitionResult` → `run.result`；缺失则 `failed`
-- **通用 Tecan 请求**（`workflow=None` 但调用 finalizer）：同样投影结果
+- **WGQ / DK**：必须从 `updates` 得到各自 schema 的 `structured_response`；`finalize_channel_result` 再校验并 `model_dump(mode="json")` → `run.result`；缺失则以 `structured_response missing for <workflow>` 失败
+- **通用 Tecan 请求**（`workflow=None` 但调用 finalizer）：读取指定 ToolMessage，复用 `finalize_channel_result` 投影结果
 - **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
 
 `artifact` 内容块在进入 Brain 前归一为带路径提示的 `text`（`ARTIFACT_REFERENCE_HINT`）。
@@ -188,8 +187,7 @@ with AgentResources(ResourceConfig()) as resources:
 | 条件 | run status | `run.result` | 备注 |
 |------|------------|--------------|------|
 | 合法 Philips/Tecan 终态 JSON（含 `input_problems`） | `succeeded` | 完整业务 JSON | 业务问题 ≠ 执行失败 |
-| Philips 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
-| DK 未调用 Tecan finalizer | `failed` | `null` | workflow 终态缺失 |
+| WGQ / DK 缺失/非法 structured_response | `failed` | `null` | Recovery 耗尽或未产出 |
 | 未调用 Tecan finalizer 的通用 run | `succeeded` | `null` | 普通阅读合法 |
 | `NoProgressLoop` | `failed` | `null` | 同工具死循环 |
 | 其它模型/工具/运行时异常 | `failed` | `null` | `_ensure_failed_run` 兜底 |
@@ -249,8 +247,8 @@ HTTP 后台线程异常由 `_ensure_failed_run` 兜底（已终态则不覆盖�
   - 模型：`init_chat_model(anthropic:{MINIMAX_MODEL}, ...)`，`thinking={"type": "adaptive"}`；env 自 `backend/.env`（`load_dotenv`，文档不记录密钥值）
   - `create_deep_agent`：`subagents=[]`，`skills=["/skills/"]`，`/skills/**` 写拒绝（`FilesystemPermission` deny write）
   - harness profile `anthropic`：关闭 general-purpose subagent（`GeneralPurposeSubagentProfile(enabled=False)`）
-  - `WGQ`：追加 `WAG_WORKFLOW_PROMPT`、`response_format=ToolStrategy(PhilipsWgqRecognitionResult)`、工具 denylist、注入 `StructuredOutputRecovery` / `StructuredOutputCompatibility`（若尚未在 middleware 中）
-  - `DK`：追加 `DK_WORKFLOW_PROMPT`、`structured_schema=None`（无 ToolStrategy），以 finalizer 终态校验
+  - `WGQ` / `DK`：追加共享渠道流程提示与各自 Skill 提示，设置对应 `ToolStrategy`，并以同一 denylist 移除 Tecan finalizer
+  - middleware 由 `HarnessRuntime` 按 workflow schema 装配；factory 不补装或维护渠道专属 middleware
 
 ### HarnessRuntime（`runtime/execution.py`）
 
@@ -275,10 +273,9 @@ HTTP 后台线程异常由 `_ensure_failed_run` 兜底（已终态则不覆盖�
 | `extract_archives` | `integrations.mineru` | 解压 ZIP artifact |
 | `lookup_philips_wgq_master_data` | Philips scripts（两渠道共享） | WGQ Tracking XLSX + 共享 Oracle 补齐 12NC 主数据 |
 | `inspect_supply_chain_workbooks` | Tecan scripts（共享） | XLSX → 可读 JSON artifact |
-| `finalize_tecan_overseas_recognition` | Tecan scripts | 校验并返回 Tecan 终态 JSON 字符串 |
+| `finalize_tecan_overseas_recognition` | Tecan scripts | 仅普通 Tecan run 的兼容终态校验，复用共享规范化并返回 JSON 字符串 |
 
-**WGQ denylist**（`_WAG_EXCLUDED_TOOLS`）：`finalize_tecan_overseas_recognition`
-**DK denylist**（`_DK_EXCLUDED_TOOLS`）：当前为空
+**workflow denylist**（`_WORKFLOW_EXCLUDED_TOOLS`）：WGQ / DK 都移除 `finalize_tecan_overseas_recognition`。
 
 两者均保留共享 MinerU 与 XLSX 检查器；禁止业务-only allowlist（否则 `/memories/AGENTS.md` 的 ZIP 指引失效）。
 
@@ -286,22 +283,22 @@ HTTP 后台线程异常由 `_ensure_failed_run` 兜底（已终态则不覆盖�
 
 | Skill 包 | workflow | 终态路径 |
 |----------|----------|----------|
-| `skills.philips_wgq_inbound_recognition` | `WAG_WORKFLOW = "WGQ"` | ToolStrategy + `PhilipsWgqRecognitionResult` → `run.result` |
-| `skills.tecan_import` | `DK_WORKFLOW = "DK"` | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → `run.result` |
+| `skills.philips_wgq_inbound_recognition` | `WAG_WORKFLOW = "WGQ"` | `ToolStrategy(PhilipsWgqRecognitionResult)` → `run.result` |
+| `skills.tecan_import` | `DK_WORKFLOW = "DK"` | `ToolStrategy(TecanOverseasRecognitionResult)` → `run.result`；普通显式 Tecan 请求保留 finalizer |
 
-共享：`skills/channel_contract.py`（`OrderItem` 24 字段、`RecognitionProblem`、`validate_channel_outcome`）。
+共享：`skills/channel_contract.py`（`OrderItem` 24 字段、`RecognitionProblem`、`validate_channel_outcome`、`finalize_channel_result`）。
 
-### StructuredOutputRecovery（WGQ 专用）
+### StructuredOutputRecovery（workflow 共用）
 
 位置：`runtime/middleware.py`。
 
 - hook：`after_model`，`can_jump_to` 必须含 **`"model"` 与 `"end"`**
 - 从助手 fenced/raw JSON 恢复 `structured_response`；校验失败则 `jump_to: "model"` 纠错（默认最多 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES=2` 次）
-- 空 `data: {}` 壳：按同回合 `tool_call_id` 配对恢复或 skeleton 纠错
+- 空 `data` 壳：按同回合 `tool_call_id` 配对恢复或提示完整 header / items
 - **耗尽时必须显式 `jump_to: "end"`**，禁止只返回 `None`（否则 ToolStrategy 可能无限重入 model）
-- 空壳耗尽 → all-null `data` + `partial_success` + runtime problem
+- 空壳耗尽 → 当前 schema 的完整 all-null `data` + `input_problems` + runtime problem
 - 其它失败耗尽 → 无 `structured_response` → harness `failed`
-- 普通 / Tecan run：`structured_schema=None`，不走此路径；Tecan 由 finalizer 工具校验
+- WGQ / DK 将各自 schema 传入该 middleware；普通 run 的 `structured_schema=None`，不走此路径
 
 ### middleware 栈（`runtime_middlewares`）
 
@@ -309,7 +306,7 @@ HTTP 后台线程异常由 `_ensure_failed_run` 兜底（已终态则不覆盖�
 
 | 顺序 | Middleware | 条件 |
 |------|------------|------|
-| 1 | `StructuredOutputRecovery` | 仅 `structured_schema` 非空（Philips / WGQ） |
+| 1 | `StructuredOutputRecovery` | workflow 传入 schema 时（WGQ / DK） |
 | 2 | `ToolTelemetry` | 始终 |
 | 3 | `NoProgressMiddleware` | 始终；同工具同参连续 `NO_PROGRESS_WINDOW=3` 次 → `NoProgressLoop` |
 | 4 | `StructuredOutputCompatibility` | 始终；ToolStrategy 请求关闭 thinking |
@@ -338,16 +335,16 @@ HTTP 后台线程异常由 `_ensure_failed_run` 兜底（已终态则不覆盖�
 1. API 收窄 `workflow` 字面量
 2. Brain 加载 `/skills/philips-wgq-inbound-recognition/SKILL.md` 提示
 3. `ToolStrategy(PhilipsWgqRecognitionResult)` + `StructuredOutputRecovery`
-4. 工具 denylist 去掉 Tecan finalizer
-5. harness 强制 `structured_response` → `run.result`
+4. 共享 workflow denylist 去掉 Tecan finalizer
+5. harness 强制 `structured_response` → 共享 runtime finalizer → `run.result`
 
 ### DK（帝肯境外供应链）
 
 1. Brain 加载 `/skills/tecan-import/SKILL.md`
-2. `structured_schema=None`（无 ToolStrategy / Recovery）
-3. 空 denylist 保留共享 MinerU / XLSX / 12NC 主数据查询与 Tecan finalizer
+2. `ToolStrategy(TecanOverseasRecognitionResult)` + `StructuredOutputRecovery`
+3. 同一 denylist 移除 Tecan finalizer，保留共享 MinerU / XLSX / 12NC 主数据查询
 4. 对确认的唯一 12NC 批量调用 `lookup_philips_wgq_master_data`（不传 Tracking）补齐稳定字段
-5. harness 强制 `finalize_tecan_overseas_recognition` 的已校验结果 → `run.result`
+5. harness 强制 `structured_response` → 共享 runtime finalizer → `run.result`
 
 ## Entry Points
 
@@ -386,7 +383,7 @@ python -m tests.test_tecan_import
 | `SqliteRunLedger` | 具体类 | `runtime/runs.py` | runs / run_events 持久化 |
 | `RunSnapshot` / `RunEvent` | dataclass | `runtime/runs.py` | 投影与事件值对象 |
 | `ToolCatalog` | dataclass | `runtime/tools.py` | 有序 callable 元组 |
-| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WGQ 结构化输出恢复 |
+| `StructuredOutputRecovery` | middleware | `runtime/middleware.py` | WGQ / DK 结构化输出恢复 |
 | `ContractModel` | Pydantic | `skills/channel_contract.py` | `extra="forbid"` 基类 |
 | `PhilipsWgqRecognitionResult` | schema | Philips | ToolStrategy + run.result |
-| `TecanOverseasRecognitionResult` | schema | Tecan | finalizer 校验 + run.result |
+| `TecanOverseasRecognitionResult` | schema | Tecan | ToolStrategy + run.result |

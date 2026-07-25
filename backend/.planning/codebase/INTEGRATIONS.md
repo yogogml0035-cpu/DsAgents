@@ -1,6 +1,6 @@
 # INTEGRATIONS — backend 外部集成事实
 
-> Analysis Date: 2026-07-24
+> Analysis Date: 2026-07-25
 > last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > 范围：`backend/` 源码中的出站/入站边界。
 > **不**记录密钥、`.env` 值或私有连接串；仅环境变量**名**与行为。
@@ -51,7 +51,7 @@
 | 文件 | `backend/runtime/agent.py`（`BACKEND_ENV_PATH = backend/.env`） |
 | 依赖链 | `langchain-anthropic` → `anthropic` SDK；经 `httpx` 出站 |
 | 注入点 | 可向 `DeepAgentsBrainFactory(model=...)` 注入假模型（测试） |
-| 运行时用途 | 主 Agent 推理、工具调用、WGQ `ToolStrategy` 结构化提交、DK finalizer 终态 |
+| 运行时用途 | 主 Agent 推理、工具调用、WGQ / DK `ToolStrategy` 结构化提交 |
 | 用量标签 | `runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"` 写入每条 `model_usage` |
 | API 估价 | `api._usage_summary` 对可计价模型（`MiniMax-M3`）按档估算 CNY；未知模型则金额为 null |
 
@@ -191,7 +191,7 @@
 | `extract_archives` | ZIP artifact | `downloads/<zip-stem>/` 展开 |
 | `inspect_supply_chain_workbooks` | `.xlsx` | `tecan_workbook_*.json` |
 | `lookup_philips_wgq_master_data` | WGQ 可读 Tracking `.xlsx`；DK 无 artifact 输入 | 不写 artifact（返回 dict） |
-| `finalize_tecan_overseas_recognition` | 无 | 返回 JSON 字符串（由 harness 投影 `run.result`） |
+| `finalize_tecan_overseas_recognition` | 无 | 仅普通 Tecan 请求返回 JSON 字符串（由 harness 兼容投影 `run.result`） |
 
 ---
 
@@ -270,10 +270,10 @@
 | Skill 资源 | `/skills/philips-wgq-inbound-recognition/SKILL.md` |
 | 货代版式 | `references/freight-forwarders.md`（DHL、DSV、FedEx、UPS、康捷空） |
 | 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philips_wgq_inbound_recognition`） |
-| 投影 | ToolStrategy `structured_response` → `run.result` |
+| 投影 | ToolStrategy `structured_response` → 共享 `finalize_channel_result` → `run.result` |
 | 主数据 | Tracking XLSX + 可选 Oracle |
 | 工具 denylist | 去掉 `finalize_tecan_overseas_recognition` |
-| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（WGQ 专用；`can_jump_to` 须含 `"end"`） |
+| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（workflow 共用；`can_jump_to` 须含 `"end"`） |
 
 ### Tecan 境外
 
@@ -281,9 +281,9 @@
 |----|------|
 | HTTP 触发 | `POST /runs` body `workflow: "DK"`；通用 run 的明确 Skill 请求仍可使用 finalizer |
 | Skill 资源 | `/skills/tecan-import/SKILL.md` + `references/` |
-| 终态 | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → harness 捕获 ToolMessage → `run.result` |
+| 终态 | `ToolStrategy(TecanOverseasRecognitionResult)` → `structured_response` → 共享 `finalize_channel_result` → `run.result` |
 | 主数据 | 确认唯一 12NC 后调用 `lookup_philips_wgq_master_data`（不传 Tracking），只补稳定字段 |
-| 工具 denylist | 当前为空；保留共享工具、共享 12NC lookup 与 finalizer |
+| 工具 denylist | 去掉 `finalize_tecan_overseas_recognition`；保留共享工具与共享 12NC lookup |
 | XLSX | `inspect_supply_chain_workbooks` 只读转 JSON；**不**写 Excel 模板 |
 
 两渠道 `items[]` 共用完整 24 字段合同；未知 `null`；无 `shipment`/Excel 噪声进最终 JSON。`input_problems` 仍为 run `succeeded`（业务 outcome，非传输失败）。

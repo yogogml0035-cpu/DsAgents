@@ -1,6 +1,6 @@
 # CONCERNS — backend 技术债、风险与脆弱点
 
-> Analysis Date: 2026-07-24。`last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c`。
+> Analysis Date: 2026-07-25。`last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c`。
 > 仅记录源码可证的边界与失败模式；不记录密钥、`.env` 值或连接串。
 > 范围：`backend/` 产品源码（`api.py`、`runtime/`、`integrations/`、`skills/`、`tests/`、`pyproject.toml`）；忽略 `build/`、`data/`、`log/`、`.venv`、发行产物。本分析不读取 `.env`。
 
@@ -43,8 +43,8 @@
 
 ### workflow 工具收窄依赖手写 denylist
 
-- **位置**：`runtime/agent.py` `_WAG_EXCLUDED_TOOLS` / `_DK_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
-- **事实**：WGQ 排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、12NC 主数据与 XLSX 检查器；DK 当前 denylist 为空，保留共享工具、12NC 主数据与 Tecan finalizer。生产 `subagents=[]`。
+- **位置**：`runtime/agent.py` `_WORKFLOW_EXCLUDED_TOOLS`；`runtime/tools.py` `default_tool_catalog()`。
+- **事实**：WGQ / DK 都排除 `finalize_tecan_overseas_recognition`，保留共享 MinerU、12NC 主数据与 XLSX 检查器；Tecan finalizer 只保留给无 workflow 的明确请求。生产 `subagents=[]`。
 - **债**：新增跨业务工具时必须同步 denylist；若误改成业务-only allowlist，会破坏 `/memories/AGENTS.md` 中 ZIP/`extract_archives` 指引。
 - **验证**：`python -m tests.test_workflow_setup`。
 
@@ -85,21 +85,21 @@
   - 工具调用占用 Agent 图一步，长时间阻塞该 run 的 stream 线程；cancel 为协作式 drain，**不能**中止已发出的 `requests` 轮询。
 - **验证**：本地 fake 于 `python -m tests.test_tools`；真机需 opt-in 实样脚本。
 
-### Philips `StructuredOutputRecovery` 耗尽路径
+### workflow `StructuredOutputRecovery` 耗尽路径
 
-- **位置**：`runtime/middleware.py` `StructuredOutputRecovery`；装配于 `runtime_middlewares(structured_schema=...)` 与 `DeepAgentsBrainFactory`（WGQ 时补装）。
+- **位置**：`runtime/middleware.py` `StructuredOutputRecovery`；由 `HarnessRuntime` 以 WGQ / DK 对应 schema 装配。
 - **关键约束**（改坏会卡死或假成功）：
   1. `@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`。
   2. 重试耗尽（默认 `DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES = 2`）时必须 `jump_to: "end"`，禁止只返回 `None`（注释明确：ToolStrategy 无 tools 时 model↔model 无限循环）。
-  3. 空 `data` 壳：同回合 `ToolMessage.tool_call_id` 绑定恢复；耗尽 → all-null skeleton + `partial_success` + runtime problem（**不编造业务值**）。
-  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对 WGQ 抛 `structured_response missing for WGQ` → run `failed`。
-  5. DK / 普通 run：`structured_schema=None`，不装 recovery；DK 终态靠 `finalize_tecan_overseas_recognition`。
-- **风险**：把 empty-shell fallback 当成业务「正常 partial」模板；或把 recovery 泛化到 Tecan。
+  3. 空 `data` 壳：同回合 `ToolMessage.tool_call_id` 绑定恢复；耗尽 → 当前 schema 的 all-null data + `input_problems` + runtime problem（**不编造业务值**）。
+  4. 其它解析/校验失败耗尽 → 无 `structured_response`；`HarnessRuntime` 对任一 workflow 抛 `structured_response missing for <workflow>` → run `failed`。
+  5. 普通 run：`structured_schema=None`，不装 recovery；Tecan finalizer 只作普通请求兼容投影。
+- **风险**：把 empty-shell fallback 当成业务正常终态模板。
 - **验证**：`python -m tests.test_harness`。
 
 ### 通用 / 非 workflow 路径可不产出业务 `result`
 
-- **位置**：`runtime/execution.py`：WGQ 强制 `structured_response`；DK 强制 Tecan finalizer；否则可 `result=None` 仍 `succeeded`。
+- **位置**：`runtime/execution.py`：WGQ / DK 都强制 `structured_response`；普通 run 否则可 `result=None` 仍 `succeeded`。
 - **风险**：客户端若只认 HTTP 200/`succeeded` 而不检查 `result`，会把「闲聊式成功」当业务完成。
 
 ### OMS 索引 best-effort、可静默丢失
@@ -204,8 +204,8 @@
 
 ### 渠道共享 `OrderItem` 24 字段合同
 
-- **位置**：`skills/channel_contract.py` 及 Philips/Tecan schema、recovery `PHILIPS_MINIMAL_DATA_SKELETON`、`tests/test_*`。
-- **脆弱点**：增删字段需同步两渠道、recovery skeleton、Skill 文案与全部 schema 测试；数值/日期规范化规则变更会同时影响两侧 outcome。未知值必须 `null`；不输出 `shipment`、Excel、候选噪声。
+- **位置**：`skills/channel_contract.py` 及 Philips/Tecan schema、recovery `_empty_shell_fallback_result`、`tests/test_*`。
+- **脆弱点**：增删字段需同步两渠道、recovery fallback、Skill 文案与全部 schema 测试；数值/日期规范化规则变更会同时影响两侧 outcome。未知值必须 `null`；不输出 `shipment`、Excel、候选噪声。
 
 ### Skill package-data 与 import 路径
 
@@ -314,8 +314,8 @@ python -m tests.test_tecan_import
 | 单进程会话锁 + 协作 cancel | 简单正确于单实例；多实例需外置锁与 cancel 总线；cancel 非强杀 |
 | 无 SSE | 实现简单；客户端承担轮询与退避 |
 | OMS 旁路 best-effort | 不阻塞业务；索引不可作为唯一审计源 |
-| DK 强制 finalizer / 通用路径灵活 | workflow 保证 `result`；非 workflow 靠 Skill 纪律与客户端校验 |
-| 空壳 all-null technical fallback | 保证 Philips 可返回合法 JSON；不得当业务 partial 模板 |
+| 双 ToolStrategy / 通用路径灵活 | workflow 保证 `result`；非 workflow 靠 Skill 纪律与客户端校验 |
+| 空壳 all-null technical fallback | 保证两渠道 workflow 可返回合法 `input_problems`；不得当业务模板 |
 | denylist 而非 allowlist | 保护共享 MinerU 工具与 handbook；新增业务工具必须显式排除 |
 | 静态 ToolCatalog | 可审计、无扫描惊喜；扩展靠手工注册 |
 | Windows 随仓 Instant Client | 降低 thick 部署摩擦；非 Windows / 无 `oci.dll` 时走 thin 或显式 `ORACLE_CLIENT_LIB_DIR` |
