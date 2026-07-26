@@ -133,7 +133,7 @@ with AgentResources(ResourceConfig()) as resources:
 
 | stream kind | 产出事件 |
 |-------------|----------|
-| `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（主 Agent 文本；subagent 文本过滤） |
+| `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（仅主 Agent 文本；subagent 与 ToolMessage 内容过滤） |
 | `custom` | `tool_progress`（`parse_documents` / `extract_archives` 进度）或 `tool_execution`（`ToolTelemetry` 等） |
 | `updates` | `tool_execution`（tool_calls）、`assistant_message`；workflow 捕获 `structured_response`，普通 Tecan run 才兼容捕获 finalizer ToolMessage |
 
@@ -144,6 +144,8 @@ with AgentResources(ResourceConfig()) as resources:
 - **普通阅读 run**：`result` 可为 `null`，run 仍 `succeeded`
 
 `artifact` 内容块在进入 Brain 前归一为带路径提示的 `text`（`ARTIFACT_REFERENCE_HINT`）。
+
+WGQ / DK 的客户端文本固定为终态摘要 `渠道识别完成，结果已写入 run.result。`；其主 Agent 计划、过程性文本、`assistant_message` 与 schema 工具草稿不投影为事件，业务数据只读 `run.result`。`ToolTelemetry` 完成事件只记录耗时，不复制工具返回内容。
 
 ## 七类事件与 run-first 模型
 
@@ -164,7 +166,7 @@ with AgentResources(ResourceConfig()) as resources:
 | `tool_execution` | `ToolTelemetry` custom + updates tool_calls | 工具开始/完成/错误或调用意图 |
 | `tool_progress` | MinerU 工具 `get_stream_writer` | 解析/解压进度 |
 | `thinking` | messages 流 thinking 块 | 模型思考增量 |
-| `text_delta` | messages 流文本 | 主 Agent 流式文本 |
+| `text_delta` | messages 流文本 | 仅主 Agent 流式文本；不泄漏工具返回或 ToolStrategy 校验错误 |
 | `assistant_message` | updates 终态助手消息 | 完整助手文本（可附 thinking） |
 | `model_usage` | messages `usage_metadata` | 单次模型调用 token；API 层聚合并可选计价 |
 

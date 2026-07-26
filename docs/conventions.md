@@ -37,7 +37,7 @@
 ## HTTP、事件与存储
 
 - HTTP 固定四端点，禁止重引入 SSE、session CRUD 或旧顶层辅助模块。
-- 事件固定 7 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。
+- 事件固定 7 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`；`thinking` / `text_delta` 只投影主 Agent 消息，ToolTelemetry 不复制工具返回内容。WGQ / DK 不投影中间文本或 schema 工具草稿，终态 `reply` 固定为完成摘要，业务数据只读 `run.result`。
 - OMS 旁路索引在 HTTP `create_run` 成功后 best-effort 写 JSONL；非 `run_events`、无查询 API、失败不阻塞 run。
 - SQLite 的 run/checkpoint/store 三库分离；时间戳统一 UTC+8 本地 `YYYY-MM-DD HH:MM:SS`。
 

@@ -27,7 +27,7 @@ load_dotenv(BACKEND_ENV_PATH)
 
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你是文档处理智能体。当用户给出本地 `/artifacts/` 路径时："
+    "你是文档处理智能体。不要发送无关的评论。你需要花更多时间思考；不需要输出你的思考内容和报告进度。当用户给出本地 `/artifacts/` 路径时："
     "图片或媒体用 `read_file` 查看；需要结构化抽取的文档用 `parse_documents`。"
     "已加载的业务 Skill 对材料类型另有约束时，以该 Skill 为准。"
     "仅当用户明确要求对应业务结果时才使用业务 Skill；仅文件名或普通 PDF 抽取请求不够。"
@@ -42,7 +42,7 @@ CHANNEL_WORKFLOW_PROMPT = (
     "按内容识别材料并归集唯一票次；多票或核心事实无法确认时使用 input_problems。"
     "仅对唯一确认的 12NC 调用 lookup_philips_wgq_master_data 补齐稳定空值，不覆盖本票事实。"
     "相同 12NC 默认不合并；发票和运单按材料与原行顺序归集。"
-    "最终必须通过本 workflow 配置的结构化 schema 提交结果；run.result 是唯一业务 JSON，文本只作摘要。"
+    "最终必须通过本 workflow 配置的结构化 schema 提交结果；run.result 是唯一业务 JSON；不输出待办、计划、Skill/参考文件内容、规则复述、字段分析、查询/校验重试或 JSON 草稿，文本只保留一句完成摘要。"
 )
 
 WAG_WORKFLOW_PROMPT = (

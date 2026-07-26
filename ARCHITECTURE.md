@@ -24,7 +24,7 @@ flowchart LR
 ## 稳定系统边界
 
 - HTTP 仅四端点：`POST /upload`、`POST /runs`、`GET /runs/{run_id}`、`POST /runs/{run_id}/cancel`。调用方轮询；**无** SSE、session CRUD、下载路由、Webhook 或 OMS 自动保存 API。
-- **run-first**：`run` 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照。最终业务 JSON 只读 `run.result`，不解析 `reply`、thinking 或工具候选文本。
+- **run-first**：`run` 是唯一执行与查询单位；`run_events` append-only，`runs` 为投影快照。最终业务 JSON 只读 `run.result`，不解析 `reply`、thinking 或工具候选文本；WGQ / DK 的中间模型文本与 schema 草稿不对客户端投影，终态只给完成摘要。
 - `session_id` 只作 LangGraph `thread_id` 与进程内同 session 单飞锁；不承担业务状态、归档或查询接口。
 - 三层状态归属清晰、互不替代：
   - run ledger → 对外执行终态与可观测投影
@@ -159,7 +159,7 @@ middleware 只保留横切运行时能力：
 ## 存储、可观测性与运维
 
 - 三 SQLite 物理分离：`dsagents_runs.db`（ledger）、`dsagents_checkpoints.db`、`dsagents_store.db`；无自动 schema migration；连接不共享；路径由 `ResourceConfig` 锚定 `backend/`（与 CWD 无关）。
-- 事件固定 **7** 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。大 payload 可外置到 `data/internal/run-events/`（默认阈值 256KiB）。
+- 事件固定 **7** 类：`status`、`tool_execution`、`tool_progress`、`thinking`、`text_delta`、`assistant_message`、`model_usage`。`thinking` / `text_delta` 仅来自主 Agent，不泄漏 ToolMessage 工具返回或 schema 校验错误；大 payload 可外置到 `data/internal/run-events/`（默认阈值 256KiB）。
 - OMS JSONL 索引只在 HTTP `create_run` 成功后 best-effort 追加（`backend/log/oms_log.log`），不是 event、无查询接口、不阻塞 run、不含 `run.result`。程序内 `execute_run` **不**写 OMS。
 - ledger 与 OMS 时间均使用 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`。
 - 出站：MiniMax（Anthropic 兼容 LLM）、MinerU HTTP、WGQ / DK 共用的可选 Oracle 主数据。Windows checkout 随仓库提供 Instant Client（`backend/.oracle/instantclient/instantclient_19_31`），并在未设置 `ORACLE_CLIENT_LIB_DIR` 时自动用于 thick mode；缺客户端或连接配置时优雅降级为 problems/null，不丢弃已证实单据事实。

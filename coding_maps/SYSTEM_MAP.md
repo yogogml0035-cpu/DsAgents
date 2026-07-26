@@ -136,9 +136,11 @@ with AgentResources(...) as resources:
 
 | stream kind | 产出 |
 |-------------|------|
-| `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（主 Agent；subagent 文本过滤） |
+| `messages` | `model_usage`（含 subagent）、`thinking`、`text_delta`（仅主 Agent；subagent 与 ToolMessage 文本过滤） |
 | `custom` | `tool_progress`（MinerU/解压）或 `tool_execution`（ToolTelemetry 等） |
 | `updates` | `tool_execution`（tool_calls）、`assistant_message`；捕获 workflow `structured_response` 与普通 Tecan finalizer ToolMessage |
+
+WGQ / DK 共用 `workflow_schema` 分支：不投影中间 `thinking` / `text_delta` / `assistant_message` 或 schema 工具草稿，终态 `reply` 固定为完成摘要；业务 JSON 只读 `run.result`。`ToolTelemetry` 完成事件不复制工具返回内容。
 
 `artifact` 内容块在进入 Brain 前归一为带路径提示的文本。生产 `subagents=[]`；FakeBrain 可模拟 subagent 元数据以锻炼过滤，**不**表示生产有业务 SubAgent。
 

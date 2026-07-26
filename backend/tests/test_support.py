@@ -9,8 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
-from skills.tecan_import import DK_WORKFLOW
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import import DK_WORKFLOW, TecanOverseasRecognitionResult
 from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
@@ -112,6 +112,47 @@ class FakeBrain:
                     ]
                 }
             },
+        }
+        workflow_schema = {
+            WAG_WORKFLOW: PhilipsWgqRecognitionResult,
+            DK_WORKFLOW: TecanOverseasRecognitionResult,
+        }.get(self.workflow)
+        if workflow_schema is not None:
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="",
+                                id=f"assistant-schema-{thread_id}-{len(history)}",
+                                tool_calls=[
+                                    {
+                                        "id": f"schema-{thread_id}-{len(history)}",
+                                        "name": workflow_schema.__name__,
+                                        "args": _recognition_result(text)
+                                        if self.workflow == WAG_WORKFLOW
+                                        else _tecan_recognition_result(text),
+                                    }
+                                ],
+                            )
+                        ]
+                    }
+                },
+            }
+        # A messages-mode tool result must not be projected as assistant text.
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                ToolMessage(
+                    content="tool result must stay private",
+                    tool_call_id=tool_call["id"],
+                    name=tool_call["name"],
+                ),
+                {"langgraph_node": "tools"},
+            ),
         }
         if finalizer_call:
             yield {

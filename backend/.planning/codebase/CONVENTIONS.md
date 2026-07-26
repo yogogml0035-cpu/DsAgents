@@ -167,8 +167,9 @@ def default_tool_catalog() -> ToolCatalog:
 ## 8. 日志与可观测性
 
 - **主路径不是 stdlib logging**：对外可观测性是 **7 类 run 事件**（§10）+ GET 轮询。
-- `runtime/observability.py`：纯函数，从 langgraph stream chunk 提取 thinking / text_delta / model_usage / assistant_message；**无 I/O、不改 run 状态**。
-- `ToolTelemetry`：`wrap_tool_call` → `get_stream_writer()` custom payload → Harness 映射为 `tool_execution`。
+- `runtime/observability.py`：纯函数，从 langgraph stream chunk 提取 thinking / text_delta / model_usage / assistant_message；`messages` 流仅 assistant chunk 可投影文本，ToolMessage 内容不泄漏；**无 I/O、不改 run 状态**。
+- WGQ / DK：共享 Harness 不投影中间 `thinking` / `text_delta` / `assistant_message`，终态 `reply` 固定为完成摘要；客户端只从 `run.result` 读取业务 JSON。
+- `ToolTelemetry`：`wrap_tool_call` → `get_stream_writer()` custom payload → Harness 映射为 `tool_execution`；完成事件只含名称、scope 与耗时，不复制工具返回内容。WGQ / DK 另不投影 ToolStrategy schema 草稿。
 - MinerU 工具：custom 进度 → `tool_progress`（仅 `parse_documents` / `extract_archives`）。
 - **model_usage**：在 subagent 文本过滤**之前**提取，subagent 文本不外泄但 **usage 仍记账**；模型名常量 `MAIN_AGENT_MODEL`（当前 `MiniMax-M3`）。
 - API usage 计价：趋势估算（`api.py` 中 `_PRICING_TIERS`），最终账单以供应商为准。

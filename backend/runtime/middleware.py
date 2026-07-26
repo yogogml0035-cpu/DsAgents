@@ -138,7 +138,6 @@ class ToolTelemetry(AgentMiddleware):
                 "agent_name": agent_name,
                 "status": "completed",
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
-                "result": str(result)[:200],
             },
         )
         return result

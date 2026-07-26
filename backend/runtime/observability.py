@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import AIMessage, AIMessageChunk
+
 MAIN_AGENT_NAME = "dsagents-main"
 # Stage 1 records usage for MiniMax-M3 only; this constant is the model name
 # written on every model_usage event. All model calls go through the same model.
@@ -26,6 +28,26 @@ def chunk_agent(data: Any) -> tuple[str, str]:
 
 def is_subagent_message(data: Any) -> bool:
     return chunk_agent(data)[0] == "subagent"
+
+
+def is_assistant_message(data: Any) -> bool:
+    """Whether a messages-mode chunk belongs to an assistant response."""
+    message = data[0] if isinstance(data, tuple) and data else data
+    if isinstance(message, (AIMessage, AIMessageChunk)):
+        return True
+    if isinstance(message, dict):
+        return (message.get("role") or message.get("type")) in {
+            "assistant",
+            "ai",
+            "AIMessage",
+            "AIMessageChunk",
+        }
+    return (getattr(message, "role", None) or getattr(message, "type", None)) in {
+        "assistant",
+        "ai",
+        "AIMessage",
+        "AIMessageChunk",
+    }
 
 
 def model_usage(data: Any) -> dict[str, Any] | None:

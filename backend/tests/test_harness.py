@@ -34,6 +34,7 @@ from runtime.middleware import (
 )
 from runtime.observability import (
     assistant_message_payload,
+    is_assistant_message,
     is_subagent_message,
     model_usage,
     thinking_delta,
@@ -58,6 +59,8 @@ def run() -> None:
     assert BACKEND_ENV_PATH == Path(__file__).resolve().parents[1] / ".env"
     assert is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
     assert not is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
+    assert is_assistant_message((AIMessageChunk(content="shown"), {}))
+    assert not is_assistant_message((ToolMessage(content="hidden", tool_call_id="tool-1"), {}))
     assert thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
     _check_model_usage_helper()
     assert assistant_message_payload(
@@ -553,7 +556,7 @@ def _check_tool_telemetry_middleware() -> None:
     assert emitted[0]["agent_name"] == "agent"
     assert emitted[0]["args"] == {"value": 1}
     assert "duration_ms" in emitted[1]
-    assert "result" in emitted[1]
+    assert "result" not in emitted[1]
 
     emitted = []
     with patch("runtime.middleware.get_stream_writer", return_value=emitted.append):
@@ -776,6 +779,9 @@ def _check_harness(tmp: str) -> None:
         assert "subagent secret" not in "".join(
             event.payload["content"] for event in raw_events if event.event_type == "text_delta"
         )
+        assert "tool result must stay private" not in "".join(
+            event.payload["content"] for event in raw_events if event.event_type == "text_delta"
+        )
         agg = resources.runs.aggregate_model_usage("run-h1")
         assert agg["model_calls"] == 2
         assert agg["input_tokens"] == 1000 + 200
@@ -838,7 +844,18 @@ def _check_harness(tmp: str) -> None:
         assert workflow_snapshot.status == "succeeded"
         assert workflow_snapshot.workflow == WAG_WORKFLOW
         assert workflow_snapshot.result["data"]["header"]["original_waybill_number"] == "9198153694"
+        assert workflow_snapshot.reply == "渠道识别完成，结果已写入 run.result。"
         assert workflow_events[-1].payload["result"] == workflow_snapshot.result
+        assert "tool result must stay private" not in workflow_snapshot.reply
+        assert not any(
+            event.event_type in {"thinking", "text_delta", "assistant_message"}
+            for event in workflow_events
+        )
+        assert PhilipsWgqRecognitionResult.__name__ not in [
+            event.payload["name"]
+            for event in workflow_events
+            if event.event_type == "tool_execution"
+        ]
 
         input_problem_messages = [user_message(text_block("input problems"))]
         resources.runs.create_run(
@@ -895,6 +912,17 @@ def _check_harness(tmp: str) -> None:
         dk_snapshot = resources.runs.get_run("run-dk-workflow")
         assert dk_snapshot.status == "succeeded"
         assert dk_snapshot.result["data"]["header"]["po"] == "PO123"
+        assert dk_snapshot.reply == "渠道识别完成，结果已写入 run.result。"
+        assert "tool result must stay private" not in dk_snapshot.reply
+        assert not any(
+            event.event_type in {"thinking", "text_delta", "assistant_message"}
+            for event in resources.runs.get_run_events("run-dk-workflow")
+        )
+        assert TecanOverseasRecognitionResult.__name__ not in [
+            event.payload["name"]
+            for event in resources.runs.get_run_events("run-dk-workflow")
+            if event.event_type == "tool_execution"
+        ]
         assert FINALIZE_TECAN_RESULT_TOOL not in [
             event.payload["name"]
             for event in resources.runs.get_run_events("run-dk-workflow")

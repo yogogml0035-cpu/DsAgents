@@ -51,14 +51,16 @@ running → cancelling → cancelled
 | 类型 | 含义 |
 |------|------|
 | `status` | queued/running/succeeded/failed/cancelling/cancelled 投影；终态可带 `reply` / `error` / `result` |
-| `tool_execution` | 工具调用观测（开始/完成/错误或 tool_calls 意图） |
+| `tool_execution` | 工具调用观测（开始/完成/错误或 tool_calls 意图；不复制工具返回内容） |
 | `tool_progress` | MinerU / 解压进度 |
 | `thinking` | 主 Agent thinking delta |
-| `text_delta` | 主 Agent 文本 delta（subagent 文本过滤） |
+| `text_delta` | 主 Agent 文本 delta（subagent 与 ToolMessage 文本过滤） |
 | `assistant_message` | 最终助手消息摘要 |
 | `model_usage` | 单次模型调用 token 观测；API 层可聚合并可选 MiniMax-M3 CNY 估价 |
 
 `run_events` append-only；`runs` 只保存投影。超过 `max_inline_bytes`（默认 256KiB / 262144）的大 payload 落盘到 `data/internal/run-events/`。`latest_content_event` 排除 `status` 与 `model_usage`。`session_id` 不是对外状态资源。
+
+WGQ / DK 不返回中间 `thinking`、`text_delta`、`assistant_message` 或 schema 工具草稿；终态 `run.reply` 为完成摘要，业务 JSON 只从顶层 `result` 读取。
 
 ### 终态业务结果路径
 
