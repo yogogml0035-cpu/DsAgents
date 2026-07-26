@@ -504,7 +504,7 @@ def _check_workflow_api(tmp: str) -> None:
 
         dk_request = {
             "workflow": DK_WORKFLOW,
-            "messages": [user_message(text_block("tecan final"))],
+            "messages": [user_message(text_block("workflow success"))],
         }
         assert client.post("/runs", json={**dk_request, "session_id": "reused"}).status_code == 422
         dk = client.post("/runs", json=dk_request)
@@ -512,14 +512,26 @@ def _check_workflow_api(tmp: str) -> None:
         dk_run = wait_for_run(client, dk.json()["run_id"], "succeeded")
         assert dk_run["workflow"] == DK_WORKFLOW
         assert dk_run["result"]["data"]["header"]["po"] == "PO123"
+        dk_detail = client.get(f"/runs/{dk.json()['run_id']}").json()
+        assert all(
+            event["payload"].get("name") != "finalize_tecan_overseas_recognition"
+            for event in dk_detail["events"]
+            if event["type"] == "tool_execution"
+        )
+
+        dk_problem = client.post(
+            "/runs",
+            json={"workflow": DK_WORKFLOW, "messages": [user_message(text_block("input problems"))]},
+        ).json()
+        assert wait_for_run(client, dk_problem["run_id"], "succeeded")["result"]["outcome"] == "input_problems"
 
         missing_dk = client.post(
             "/runs",
-            json={"workflow": DK_WORKFLOW, "messages": [user_message(text_block("workflow success"))]},
+            json={"workflow": DK_WORKFLOW, "messages": [user_message(text_block("missing structured"))]},
         )
         assert missing_dk.status_code == 200
         failed_dk = wait_for_run(client, missing_dk.json()["run_id"], "failed")
-        assert "Tecan finalizer result missing" in failed_dk["error"]
+        assert "structured_response missing for DK" in failed_dk["error"]
 
 
 def _check_startup_recovery(tmp: str) -> None:

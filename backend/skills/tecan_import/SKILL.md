@@ -1,26 +1,21 @@
 ---
-name: tecan_import
+name: tecan-import
 description: 仅用于 API workflow=DK 或用户明确要求 Tecan/帝肯境外供应链订单 JSON 抽取；从本轮 PDF/XLSX 同票材料归集为 OMS 可消费的终态 JSON，不生成 Excel。
 ---
 
 # Tecan 境外供应链抽取
 
-只处理本轮显式 artifact。最终必须调用 `finalize_tecan_overseas_recognition`；它的返回值就是 `run.result`，自然语言只作简短摘要。
+只用于 DK 或用户明确的 Tecan 境外供应链请求。渠道公共的材料批处理、单票归集、12NC 补齐和结构化终态由 runtime workflow 提示规定。
 
-## 材料与流程
+## Tecan 识别规则
 
-1. 将 PDF 一次传给 `parse_documents`；将全部 XLSX 一次传给 `inspect_supply_chain_workbooks`，再读取各 `result_path`。
-2. 依据内容动态识别商业发票、运单、装箱单、订单/合同和主数据，不按文件名或固定数量猜测。
-3. 用运单号、发票号、PO/DN 与买卖/收发货关系归集同票。材料无法唯一归票或混入多票时使用 `input_problems`，但仍提交已确认的 `data`；无法安全形成商品行时 `items: []`。
-4. 发票行按上传顺序、再按原行顺序保留；同 12NC 默认不合并，只去掉同一业务行的重复副本。多发票/多运单以英文逗号稳定连接。
-5. 对已确认的唯一 12NC 必须批量调用 `lookup_philips_wgq_master_data` 查询共享 Oracle（DK 不传 `tracking_artifact`）；返回值只补稳定字段的 `null`，不得覆盖本票交易/运输事实。禁止按名称相似或多候选猜测。数量、金额、重量只在同一商品行、同币种内按可复核规则计算；冲突或舍入歧义为 `input_problems`。
-6. ZIP/DOCX/图片不读取；在 `problems` 说明。其它材料足以确认同票时继续。
+1. 按内容识别商业发票、运单、装箱单、订单/合同和主数据；DK 不传 `tracking_artifact`。
+2. 用运单号、发票号、PO/DN 与买卖/收发货关系归集同票。
+3. 多发票/多运单以英文逗号稳定连接；发票行保持上传和原行顺序。
+4. 共享主数据只补稳定字段的 `null`，不得覆盖本票交易/运输事实。
 
-## 终态规则
+## Tecan header 与字段裁决
 
-- `success`：没有未解决缺失。已解决冲突、候选失败、无关文件不降级。
-- `partial_success`：核心商品事实（票次、料号、数量、单位、币种、可确认金额）已确认，补充字段缺失在 `problems` 明确列出。
-- `input_problems`：票次或核心商品事实无法确认；正式字段只放已证实值，未裁决候选仅写入 `problems`。
-- 不输出 `shipment`、Excel、候选列表或审计明细。
+`header`：`po`、`dn`、`original_waybill_number`、`buyer`、`seller`、`shipper`、`consignee`、`payment_terms`、`contract_number`、`invoice_number`、`invoice_date`、`trade_terms`、`port_of_departure`、`port_of_arrival`。
 
-字段和格式见 [references/fields.md](references/fields.md)。正常路径只调用终态工具，不在文本重复 JSON。
+字段和格式见 [references/fields.md](references/fields.md)。无 workflow 的明确 Tecan 请求仍调用 `finalize_tecan_overseas_recognition` 提交终态；DK workflow 使用自身结构化 schema。

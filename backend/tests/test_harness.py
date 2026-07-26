@@ -21,22 +21,20 @@ from pydantic import BaseModel
 from runtime.agent import (
     BACKEND_ENV_PATH,
     DeepAgentsBrainFactory,
+)
+from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
+from runtime.middleware import (
     NoProgressLoop,
     NoProgressMiddleware,
     StructuredOutputCompatibility,
     StructuredOutputRecovery,
     ToolTelemetry,
-)
-from runtime.execution import ARTIFACT_REFERENCE_HINT, HarnessRuntime
-from runtime.middleware import (
-    EMPTY_DATA_SHELL_HINT,
-    PHILIPS_MINIMAL_DATA_SKELETON,
-    is_empty_recognition_data_shell,
-    philips_structured_output_error_message,
+    is_empty_channel_data_shell,
     runtime_middlewares,
 )
 from runtime.observability import (
     assistant_message_payload,
+    is_assistant_message,
     is_subagent_message,
     model_usage,
     thinking_delta,
@@ -44,10 +42,12 @@ from runtime.observability import (
 from runtime.resources import RUNTIME_AGENTS_PATH, AgentResources, ResourceConfig
 from runtime.tools import ToolCatalog
 from skills.philips_wgq_inbound_recognition.schema import WAG_WORKFLOW, PhilipsWgqRecognitionResult
-from skills.tecan_import.schema import DK_WORKFLOW
+from skills.tecan_import.schema import DK_WORKFLOW, TecanOverseasRecognitionResult
+from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 from tests.test_support import (
     FakeBrainFactory,
     _recognition_result,
+    _tecan_recognition_result,
     artifact_block,
     messages_json,
     text_block,
@@ -59,6 +59,8 @@ def run() -> None:
     assert BACKEND_ENV_PATH == Path(__file__).resolve().parents[1] / ".env"
     assert is_subagent_message((AIMessageChunk(content="hidden"), {"lc_agent_name": "tecan-extractor-a"}))
     assert not is_subagent_message((AIMessageChunk(content="shown"), {"lc_agent_name": "dsagents-main"}))
+    assert is_assistant_message((AIMessageChunk(content="shown"), {}))
+    assert not is_assistant_message((ToolMessage(content="hidden", tool_call_id="tool-1"), {}))
     assert thinking_delta((AIMessageChunk(content=[{"type": "thinking", "thinking": "plan"}]), {})) == "plan"
     _check_model_usage_helper()
     assert assistant_message_payload(
@@ -78,7 +80,7 @@ def run() -> None:
     }
     _check_structured_output_integration()
     _check_structured_output_recovery()
-    _check_empty_data_shell_coaching()
+    _check_empty_data_shell_recovery()
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         _check_model_env_loading(tmp)
@@ -107,7 +109,7 @@ def _check_model_env_loading(tmp: str) -> None:
         with patch("runtime.agent.create_deep_agent", return_value=object()) as create:
             factory.create(
                 resources=SimpleNamespace(backend=object(), checkpointer=object(), store=object()),
-                middleware=[],
+                middleware=runtime_middlewares(structured_schema=PhilipsWgqRecognitionResult),
                 tools=[],
                 workflow=WAG_WORKFLOW,
             )
@@ -193,7 +195,7 @@ def _check_structured_output_integration() -> None:
 
 def _check_structured_output_recovery() -> None:
     """Text JSON without schema tool_call is recovered; validation failures retry."""
-    recovery = StructuredOutputRecovery(max_retries=2)
+    recovery = StructuredOutputRecovery(PhilipsWgqRecognitionResult, max_retries=2)
     payload = _recognition_result("success")
     payload["problems"] = [
         {
@@ -268,7 +270,8 @@ def _check_structured_output_recovery() -> None:
     assert "JSON" in no_json["messages"][0].content
 
     # Invalid schema JSON: also jump_to model with validation error.
-    bad_payload = {"outcome": "input_problems", "data": {"not": "allowed"}, "problems": []}
+    bad_payload = _recognition_result("success")
+    bad_payload["outcome"] = "not-an-outcome"
     bad_fenced = "```json\n" + json.dumps(bad_payload) + "\n```"
     invalid = recovery.after_model(
         {"messages": [AIMessage(content=bad_fenced)], "structured_recovery_attempts": 0},
@@ -277,9 +280,8 @@ def _check_structured_output_recovery() -> None:
     assert invalid is not None
     assert invalid["jump_to"] == "model"
     assert invalid["structured_recovery_attempts"] == 1
-    assert "validation" in invalid["messages"][0].content.lower() or "Issue:" in (
-        invalid["messages"][0].content
-    )
+    assert "结构化输出被拒绝" in invalid["messages"][0].content
+    assert "问题：" in invalid["messages"][0].content
 
     # Exhausted retries: exit graph (jump_to end) so ToolStrategy does not loop.
     exhausted = recovery.after_model(
@@ -352,7 +354,7 @@ def _check_structured_output_recovery() -> None:
     retry_model = _RetryThenOkModel()
     agent = create_agent(
         model=retry_model,
-        middleware=[StructuredOutputRecovery(max_retries=2)],
+        middleware=[StructuredOutputRecovery(PhilipsWgqRecognitionResult, max_retries=2)],
         response_format=ToolStrategy(PhilipsWgqRecognitionResult),
     )
     e2e = agent.invoke({"messages": [HumanMessage(content="recognize")]})
@@ -391,7 +393,7 @@ def _check_structured_output_recovery() -> None:
     always_bad = _AlwaysBadModel()
     fail_agent = create_agent(
         model=always_bad,
-        middleware=[StructuredOutputRecovery(max_retries=2)],
+        middleware=[StructuredOutputRecovery(PhilipsWgqRecognitionResult, max_retries=2)],
         response_format=ToolStrategy(PhilipsWgqRecognitionResult),
     )
     failed = fail_agent.invoke({"messages": [HumanMessage(content="recognize")]})
@@ -400,131 +402,55 @@ def _check_structured_output_recovery() -> None:
     assert always_bad.calls == 3
 
 
-def _check_empty_data_shell_coaching() -> None:
-    """Empty data:{} shells get a specific correction, not only generic parse text."""
-    assert is_empty_recognition_data_shell(
-        {"outcome": "success", "data": {}, "problems": []}
-    )
-    assert is_empty_recognition_data_shell(
-        {
-            "outcome": "partial_success",
-            "data": {"header": {}, "items": []},
-            "problems": [
-                {
-                    "source": "pdf",
-                    "location": "header",
-                    "issue": "x",
-                    "action": "y",
-                }
-            ],
-        }
-    )
-    input_problem = _recognition_result("input problems")
-    assert not is_empty_recognition_data_shell(input_problem)
-    assert not is_empty_recognition_data_shell(_recognition_result("success"))
+def _check_empty_data_shell_recovery() -> None:
+    empty_shell = {"outcome": "success", "data": {}, "problems": []}
+    assert is_empty_channel_data_shell(empty_shell)
+    assert is_empty_channel_data_shell({**empty_shell, "outcome": "input_problems"})
+    assert not is_empty_channel_data_shell(_recognition_result("input problems"))
 
-    class _FakeStructuredValidationError(Exception):
-        def __init__(self, tool_name: str, ai_message: AIMessage) -> None:
-            self.tool_name = tool_name
-            self.ai_message = ai_message
-            super().__init__(
-                f"Failed to parse structured output for tool '{tool_name}': "
-                "data.header Field required"
-            )
-
-    empty_ai = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "id": "struct-empty-1",
-                "name": "PhilipsWgqRecognitionResult",
-                "args": {"outcome": "success", "data": {}, "problems": []},
-                "type": "tool_call",
-            }
-        ],
-    )
-    empty_err = philips_structured_output_error_message(
-        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", empty_ai)
-    )
-    assert "data 不能是 {}" in empty_err
-    assert "header" in empty_err
-    assert "请修正后重试" in empty_err
-    assert "```json" in empty_err
-    assert "original_waybill_number" in empty_err
-    assert "product_id" in empty_err
-
-    other_ai = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "id": "struct-other-1",
-                "name": "PhilipsWgqRecognitionResult",
-                "args": {
-                    "outcome": "input_problems",
-                    "data": {"not": "allowed"},
-                    "problems": [],
-                },
-                "type": "tool_call",
-            }
-        ],
-    )
-    other_err = philips_structured_output_error_message(
-        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", other_ai)
-    )
-    assert "Failed to parse structured output" in other_err
-
-    recovery = StructuredOutputRecovery(max_retries=2)
-    empty_text = (
-        "done\n```json\n"
-        + json.dumps(
-            {"outcome": "success", "data": {}, "problems": []},
-            ensure_ascii=False,
+    for schema, payload in (
+        (PhilipsWgqRecognitionResult, _recognition_result("success")),
+        (TecanOverseasRecognitionResult, _tecan_recognition_result()),
+    ):
+        recovery = StructuredOutputRecovery(schema, max_retries=2)
+        text = "```json\n" + json.dumps(empty_shell, ensure_ascii=False) + "\n```"
+        retry = recovery.after_model(
+            {"messages": [AIMessage(content=text)], "structured_recovery_attempts": 0},
+            None,
         )
-        + "\n```\n"
-    )
-    text_retry = recovery.after_model(
-        {"messages": [AIMessage(content=empty_text)], "structured_recovery_attempts": 0},
-        None,
-    )
-    assert text_retry is not None
-    assert text_retry["jump_to"] == "model"
-    assert text_retry["structured_recovery_attempts"] == 1
-    assert EMPTY_DATA_SHELL_HINT in text_retry["messages"][0].content
-    assert "data" in text_retry["messages"][0].content
+        assert retry is not None
+        assert retry["jump_to"] == "model"
+        assert retry["structured_recovery_attempts"] == 1
+        assert "data" in retry["messages"][0].content
 
-    # After ToolStrategy rejects empty shell, last message is ToolMessage — coach again.
-    tool_error_state = {
-        "messages": [
-            empty_ai,
-            ToolMessage(
-                content=empty_err,
-                tool_call_id="struct-empty-1",
-                name="PhilipsWgqRecognitionResult",
-            ),
-        ],
-        "structured_recovery_attempts": 0,
-    }
+        exhausted = recovery.after_model(
+            {"messages": [AIMessage(content=text)], "structured_recovery_attempts": 2},
+            None,
+        )
+        assert exhausted is not None
+        assert exhausted["jump_to"] == "end"
+        fallback = exhausted["structured_response"]
+        assert isinstance(fallback, schema)
+        assert fallback.outcome == "input_problems"
+        assert fallback.data.items == []
+        assert all(value is None for value in fallback.data.header.model_dump().values())
+        assert fallback.problems[0].source == "runtime"
 
-    # A valid text payload on the same AIMessage wins over the rejected empty
-    # tool args. This mirrors the MiniMax dual-channel response seen in production.
-    valid_text_payload = _recognition_result("success")
-    valid_text_payload["problems"] = [
-        {
-            "source": "pdf",
-            "location": "header",
-            "issue": "recovered from paired text",
-            "action": "keep recognized values",
-        }
-    ]
+        valid = recovery.after_model(
+            {"messages": [AIMessage(content="```json\n" + json.dumps(payload) + "\n```")]},
+            None,
+        )
+        assert valid is not None
+        assert isinstance(valid["structured_response"], schema)
+
+    recovery = StructuredOutputRecovery(PhilipsWgqRecognitionResult, max_retries=2)
     paired_ai = AIMessage(
-        content="done\n```json\n"
-        + json.dumps(valid_text_payload, ensure_ascii=False)
-        + "\n```",
+        content="```json\n" + json.dumps(_recognition_result("success")) + "\n```",
         tool_calls=[
             {
                 "id": "struct-empty-text-1",
                 "name": "PhilipsWgqRecognitionResult",
-                "args": {"outcome": "success", "data": {}, "problems": []},
+                "args": empty_shell,
                 "type": "tool_call",
             }
         ],
@@ -534,137 +460,84 @@ def _check_empty_data_shell_coaching() -> None:
             "messages": [
                 paired_ai,
                 ToolMessage(
-                    content=empty_err,
+                    content="schema validation failed",
                     tool_call_id="struct-empty-text-1",
                     name="PhilipsWgqRecognitionResult",
                 ),
-            ],
-            "structured_recovery_attempts": 1,
+            ]
         },
         None,
     )
     assert paired is not None
     assert paired["jump_to"] == "end"
-    assert paired["structured_recovery_attempts"] == 0
-    assert paired["structured_response"].data is not None
     assert paired["structured_response"].data.header.original_waybill_number == "9198153694"
-
-    # Matching by call ID prevents unrelated historical JSON from being recovered.
     assert (
         recovery.after_model(
             {
                 "messages": [
                     paired_ai,
                     ToolMessage(
-                        content=empty_err,
+                        content="schema validation failed",
                         tool_call_id="other-call",
                         name="PhilipsWgqRecognitionResult",
                     ),
-                ],
+                ]
             },
             None,
         )
         is None
     )
 
-    tool_retry = recovery.after_model(tool_error_state, None)
-    assert tool_retry is not None
-    assert tool_retry["jump_to"] == "model"
-    assert tool_retry["structured_recovery_attempts"] == 1
-    assert "data 不能是 {}" in tool_retry["messages"][0].content
-    assert '"data": {}' in tool_retry["messages"][0].content or "data: {}" in (
-        tool_retry["messages"][0].content
-    )
-    # Empty-shell coaching must include the minimal legal shape and tool-first guidance.
-    coach = tool_retry["messages"][0].content
-    assert "```json" in coach
-    assert "header" in coach and "original_waybill_number" in coach
-    assert "product_id" in coach
-    assert "只调用结构化工具" in coach
-    assert "只补 problems" in coach or "只改 problems" in EMPTY_DATA_SHELL_HINT
-    # Skeleton itself is a valid all-null recovery payload.
-    assert PhilipsWgqRecognitionResult.model_validate(PHILIPS_MINIMAL_DATA_SKELETON)
+    class _AlwaysEmptyShellModel(BaseChatModel):
+        calls: int = 0
 
-    # Exhausted empty-shell retries: legal all-null data skeleton, not run failure.
-    exhausted = recovery.after_model(
-        {**tool_error_state, "structured_recovery_attempts": 2},
-        None,
-    )
-    assert exhausted is not None
-    assert exhausted.get("jump_to") == "end"
-    fallback = exhausted["structured_response"]
-    assert isinstance(fallback, PhilipsWgqRecognitionResult)
-    assert fallback.outcome == "partial_success"
-    assert fallback.data is not None
-    assert fallback.data.header.original_waybill_number is None
-    assert len(fallback.data.items) == 1
-    assert fallback.data.items[0].product_id is None
-    assert any(
-        p.source == "runtime" and "empty data shell" in p.issue
-        for p in fallback.problems
-    )
+        @property
+        def _llm_type(self) -> str:
+            return "test-empty-structured-shell"
 
-    # Exhausted empty shell that already had model problems: keep them + runtime note.
-    shell_with_problems = {
-        "outcome": "success",
-        "data": {},
-        "problems": [
-            {
-                "source": "PDF",
-                "location": "AWB",
-                "issue": "weight mismatch note",
-                "action": "use AWB weight",
-            }
-        ],
-    }
-    shell_ai = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "id": "struct-empty-2",
-                "name": "PhilipsWgqRecognitionResult",
-                "args": shell_with_problems,
-                "type": "tool_call",
-            }
-        ],
-    )
-    shell_err = philips_structured_output_error_message(
-        _FakeStructuredValidationError("PhilipsWgqRecognitionResult", shell_ai)
-    )
-    exhausted_keep = recovery.after_model(
-        {
-            "messages": [
-                shell_ai,
-                ToolMessage(
-                    content=shell_err,
-                    tool_call_id="struct-empty-2",
-                    name="PhilipsWgqRecognitionResult",
-                ),
-            ],
-            "structured_recovery_attempts": 2,
-        },
-        None,
-    )
-    assert exhausted_keep is not None
-    keep = exhausted_keep["structured_response"]
-    assert isinstance(keep, PhilipsWgqRecognitionResult)
-    assert any(p.issue == "weight mismatch note" for p in keep.problems)
-    assert any(p.source == "runtime" for p in keep.problems)
+        def _generate(
+            self,
+            messages: list[Any],
+            stop: list[str] | None = None,
+            run_manager: Any = None,
+            **kwargs: Any,
+        ) -> Any:
+            raise AssertionError("the ToolStrategy-bound model must be invoked")
 
-    # Text empty-shell path also falls back after budget is exhausted.
-    text_exhausted = recovery.after_model(
-        {
-            "messages": [AIMessage(content=empty_text)],
-            "structured_recovery_attempts": 2,
-        },
-        None,
+        def bind_tools(self, tools: list[Any], **kwargs: Any) -> RunnableLambda:
+            del kwargs
+            tool_name = getattr(tools[-1], "name", None)
+            assert isinstance(tool_name, str)
+
+            def reply(_input: Any) -> AIMessage:
+                self.calls += 1
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": f"empty-shell-{self.calls}",
+                            "name": tool_name,
+                            "args": empty_shell,
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+
+            return RunnableLambda(reply)
+
+    empty_shell_model = _AlwaysEmptyShellModel()
+    empty_shell_agent = create_agent(
+        model=empty_shell_model,
+        middleware=[StructuredOutputRecovery(PhilipsWgqRecognitionResult, max_retries=2)],
+        response_format=ToolStrategy(PhilipsWgqRecognitionResult),
     )
-    assert text_exhausted is not None
-    assert text_exhausted.get("jump_to") == "end"
-    assert isinstance(
-        text_exhausted["structured_response"], PhilipsWgqRecognitionResult
-    )
-    assert text_exhausted["structured_response"].data is not None
+    empty_shell_result = empty_shell_agent.invoke(
+        {"messages": [HumanMessage(content="recognize")]}
+    )["structured_response"]
+    assert empty_shell_model.calls == 3
+    assert empty_shell_result.outcome == "input_problems"
+    assert empty_shell_result.data.items == []
+    assert empty_shell_result.problems[0].source == "runtime"
 
 
 def _check_tool_telemetry_middleware() -> None:
@@ -683,7 +556,7 @@ def _check_tool_telemetry_middleware() -> None:
     assert emitted[0]["agent_name"] == "agent"
     assert emitted[0]["args"] == {"value": 1}
     assert "duration_ms" in emitted[1]
-    assert "result" in emitted[1]
+    assert "result" not in emitted[1]
 
     emitted = []
     with patch("runtime.middleware.get_stream_writer", return_value=emitted.append):
@@ -906,6 +779,9 @@ def _check_harness(tmp: str) -> None:
         assert "subagent secret" not in "".join(
             event.payload["content"] for event in raw_events if event.event_type == "text_delta"
         )
+        assert "tool result must stay private" not in "".join(
+            event.payload["content"] for event in raw_events if event.event_type == "text_delta"
+        )
         agg = resources.runs.aggregate_model_usage("run-h1")
         assert agg["model_calls"] == 2
         assert agg["input_tokens"] == 1000 + 200
@@ -968,7 +844,18 @@ def _check_harness(tmp: str) -> None:
         assert workflow_snapshot.status == "succeeded"
         assert workflow_snapshot.workflow == WAG_WORKFLOW
         assert workflow_snapshot.result["data"]["header"]["original_waybill_number"] == "9198153694"
+        assert workflow_snapshot.reply == "渠道识别完成，结果已写入 run.result。"
         assert workflow_events[-1].payload["result"] == workflow_snapshot.result
+        assert "tool result must stay private" not in workflow_snapshot.reply
+        assert not any(
+            event.event_type in {"thinking", "text_delta", "assistant_message"}
+            for event in workflow_events
+        )
+        assert PhilipsWgqRecognitionResult.__name__ not in [
+            event.payload["name"]
+            for event in workflow_events
+            if event.event_type == "tool_execution"
+        ]
 
         input_problem_messages = [user_message(text_block("input problems"))]
         resources.runs.create_run(
@@ -1006,6 +893,77 @@ def _check_harness(tmp: str) -> None:
         missing_snapshot = resources.runs.get_run("run-missing-structured")
         assert missing_snapshot.status == "failed"
         assert "structured_response missing" in missing_snapshot.error
+
+        dk_messages = [user_message(text_block("workflow success"))]
+        resources.runs.create_run(
+            "run-dk-workflow",
+            "thread-dk-workflow",
+            messages_json(dk_messages),
+            workflow=DK_WORKFLOW,
+        )
+        list(
+            harness.execute_run(
+                dk_messages,
+                "thread-dk-workflow",
+                "run-dk-workflow",
+                workflow=DK_WORKFLOW,
+            )
+        )
+        dk_snapshot = resources.runs.get_run("run-dk-workflow")
+        assert dk_snapshot.status == "succeeded"
+        assert dk_snapshot.result["data"]["header"]["po"] == "PO123"
+        assert dk_snapshot.reply == "渠道识别完成，结果已写入 run.result。"
+        assert "tool result must stay private" not in dk_snapshot.reply
+        assert not any(
+            event.event_type in {"thinking", "text_delta", "assistant_message"}
+            for event in resources.runs.get_run_events("run-dk-workflow")
+        )
+        assert TecanOverseasRecognitionResult.__name__ not in [
+            event.payload["name"]
+            for event in resources.runs.get_run_events("run-dk-workflow")
+            if event.event_type == "tool_execution"
+        ]
+        assert FINALIZE_TECAN_RESULT_TOOL not in [
+            event.payload["name"]
+            for event in resources.runs.get_run_events("run-dk-workflow")
+            if event.event_type == "tool_execution"
+        ]
+
+        dk_problem_messages = [user_message(text_block("input problems"))]
+        resources.runs.create_run(
+            "run-dk-input-problems",
+            "thread-dk-input-problems",
+            messages_json(dk_problem_messages),
+            workflow=DK_WORKFLOW,
+        )
+        list(
+            harness.execute_run(
+                dk_problem_messages,
+                "thread-dk-input-problems",
+                "run-dk-input-problems",
+                workflow=DK_WORKFLOW,
+            )
+        )
+        assert resources.runs.get_run("run-dk-input-problems").result["outcome"] == "input_problems"
+
+        missing_dk_messages = [user_message(text_block("missing structured"))]
+        resources.runs.create_run(
+            "run-dk-missing-structured",
+            "thread-dk-missing-structured",
+            messages_json(missing_dk_messages),
+            workflow=DK_WORKFLOW,
+        )
+        list(
+            harness.execute_run(
+                missing_dk_messages,
+                "thread-dk-missing-structured",
+                "run-dk-missing-structured",
+                workflow=DK_WORKFLOW,
+            )
+        )
+        assert "structured_response missing for DK" in resources.runs.get_run(
+            "run-dk-missing-structured"
+        ).error
 
 
 if __name__ == "__main__":

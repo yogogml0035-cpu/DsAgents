@@ -26,9 +26,9 @@ backend 测试统一放在 `backend/tests/test_*.py`，以可执行 assert 脚�
 
 业务工作流改动至少覆盖 `test_workflow_setup`、对应 Philips/Tecan 业务脚本，并复跑 `test_tools`、`test_run_ledger`、`test_harness`、`test_api`。
 
-改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：WGQ / DK 均用 **denylist**（不是业务-only allowlist）。WGQ 工具名集合须**含** `parse_documents` / `extract_archives`、`inspect_supply_chain_workbooks` 与共享 12NC lookup，**不含** `finalize_tecan_overseas_recognition`；DK 保留共享工具、`lookup_philips_wgq_master_data` 和 finalizer。禁止 allowlist 导致共享材料工具从模型工具表消失。Tecan 终态仅为 finalizer JSON，不生成 Excel。
+改 workflow 工具收窄逻辑时务必跑 `python -m tests.test_workflow_setup`：WGQ / DK 均用同一 **denylist**（不是业务-only allowlist），工具名集合均须含 `parse_documents` / `extract_archives` / `inspect_supply_chain_workbooks` / `lookup_philips_wgq_master_data`，且不含 `finalize_tecan_overseas_recognition`。禁止 allowlist 导致共享材料工具从模型工具表消失。Tecan finalizer 仅保留给无 workflow 的明确请求，不生成 Excel。
 
-改 WGQ `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON，否则用 `EMPTY_DATA_SHELL_HINT` / `PHILIPS_MINIMAL_DATA_SKELETON`；**空壳耗尽**得到 all-null `partial_success` skeleton（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。DK/普通 run 传 `structured_schema=None`，DK 终态由 finalizer 工具校验。
+改 workflow `StructuredOutputRecovery` / `after_model` / `jump_to` / 空 data 壳纠错时务必跑 `python -m tests.test_harness`，确认：WGQ / DK 均传各自 schema，重试次数封顶（约 `1 + max_retries` 次模型调用）；耗尽时 `jump_to: "end"`（禁止只返回 `None`）；空壳路径以 `tool_call_id` 精确匹配同回合 AI 文本 JSON；**空壳耗尽**得到当前 schema 的 all-null `input_problems` + runtime problem（可 `succeeded`），**其它失败模式**耗尽后无 `structured_response`（可 `failed`）。普通 run 传 `structured_schema=None`。
 
 `python -m tests.test_run_ledger` — run ledger 事件存储、中国时区本地时间戳、状态机与 usage 聚合的本地 assert 脚本。
 
@@ -58,15 +58,16 @@ $env:DSAGENTS_RUN_REAL_PHILIPS_WGQ_TEST="1"
 python -m tests.test_real_philips_wgq_inbound_recognition
 
 # 只验收 UPS 普货测试用例一的两个 PDF（不上传 Tracking）
-# 默认流式打印 thinking / text_delta / tool_execution / tool_progress / assistant_message
+# 默认流式打印工具、进度和用量；WGQ / DK 不输出中间 thinking/text，终态读取 result
 # 可选：$env:DSAGENTS_PHILIPS_WGQ_UPS_CASE_DIR="<UPS 样例目录>"
 # 可选：$env:DSAGENTS_REAL_PHILIPS_WGQ_POLL_SECONDS="0.2"
 python -m tests.test_real_philips_wgq_ups
 ```
 
-MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）：
+MiniMax prompt-cache 基线（无开关，直接 `-m` 执行；非发布门禁）。默认验证本机 `http://127.0.0.1:8500`，可设置 `DSAGENTS_API_BASE_URL`（兼容 `DSAGENTS_BASE_URL`）指向其他目标；脚本会打印该地址，任一 run 非 `succeeded` 时失败并带出终态原始事件：
 
 ```powershell
+$env:DSAGENTS_API_BASE_URL="http://127.0.0.1:8500"
 python -m tests.test_minimax_cache_baseline
 ```
 

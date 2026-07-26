@@ -29,7 +29,10 @@ import time
 import urllib.error
 import urllib.request
 
-BASE_URL = os.getenv("DSAGENTS_BASE_URL", "http://10.11.148.97:8500")
+BASE_URL = os.getenv(
+    "DSAGENTS_API_BASE_URL",
+    os.getenv("DSAGENTS_BASE_URL", "http://127.0.0.1:8500"),
+)
 # >=512 tokens of stable prefix, repeated so the provider has enough cacheable
 # content. Kept identical across both turns so the prefix is byte-stable.
 STABLE_PREFIX = (
@@ -39,6 +42,7 @@ TIMEOUT_SECONDS = 120
 
 
 def run() -> None:
+    print(f"base_url: {BASE_URL}")
     session, turn1 = _run_first_turn()
     turn2 = _run_turn(session, "Turn 2: 你是谁")
     _report(session, turn1, turn2)
@@ -60,7 +64,12 @@ def _run_turn(session_id: str, prompt: str) -> dict:
 
 def _finish_turn(run_id: str, prompt: str) -> dict:
     payload = _poll(run_id)
-    reply = payload["run"].get("reply") or ""
+    run = payload["run"]
+    assert run["status"] == "succeeded", (
+        f"run {run_id} {run['status']}: {run.get('error')}; "
+        f"terminal event: {(payload.get('events') or [{}])[-1].get('raw')!r}"
+    )
+    reply = run.get("reply") or ""
     usage = payload.get("usage")
     if usage is None:
         print(f"[{prompt[:40]}...] run {run_id} returned no usage", file=sys.stderr)

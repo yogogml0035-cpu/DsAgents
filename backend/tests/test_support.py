@@ -9,7 +9,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW
+from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
+from skills.tecan_import import DK_WORKFLOW, TecanOverseasRecognitionResult
 from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
 
 
@@ -88,12 +89,13 @@ class FakeBrain:
             self.control.started.set()
             assert self.control.release.wait(timeout=5), "hold run was never released"
         reply = f"echo[{len(history)}]: {text}"
+        finalizer_call = self.workflow is None and text == "tecan final"
         tool_call = {
             "id": f"call-{thread_id}-{len(history)}",
-            "name": FINALIZE_TECAN_RESULT_TOOL if text == "tecan final" else "read_file",
+            "name": FINALIZE_TECAN_RESULT_TOOL if finalizer_call else "read_file",
             "args": (
                 {"result": _tecan_recognition_result()}
-                if text == "tecan final"
+                if finalizer_call
                 else {"file_path": "/artifacts/uploads/demo.jpg"}
             ),
         }
@@ -111,7 +113,48 @@ class FakeBrain:
                 }
             },
         }
-        if text == "tecan final":
+        workflow_schema = {
+            WAG_WORKFLOW: PhilipsWgqRecognitionResult,
+            DK_WORKFLOW: TecanOverseasRecognitionResult,
+        }.get(self.workflow)
+        if workflow_schema is not None:
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="",
+                                id=f"assistant-schema-{thread_id}-{len(history)}",
+                                tool_calls=[
+                                    {
+                                        "id": f"schema-{thread_id}-{len(history)}",
+                                        "name": workflow_schema.__name__,
+                                        "args": _recognition_result(text)
+                                        if self.workflow == WAG_WORKFLOW
+                                        else _tecan_recognition_result(text),
+                                    }
+                                ],
+                            )
+                        ]
+                    }
+                },
+            }
+        # A messages-mode tool result must not be projected as assistant text.
+        yield {
+            "type": "messages",
+            "ns": (),
+            "data": (
+                ToolMessage(
+                    content="tool result must stay private",
+                    tool_call_id=tool_call["id"],
+                    name=tool_call["name"],
+                ),
+                {"langgraph_node": "tools"},
+            ),
+        }
+        if finalizer_call:
             yield {
                 "type": "updates",
                 "ns": (),
@@ -128,11 +171,19 @@ class FakeBrain:
                     }
                 },
             }
-        if self.workflow == WAG_WORKFLOW and "missing structured" not in text:
+        if self.workflow in {WAG_WORKFLOW, DK_WORKFLOW} and "missing structured" not in text:
             yield {
                 "type": "updates",
                 "ns": (),
-                "data": {"agent": {"structured_response": _recognition_result(text)}},
+                "data": {
+                    "agent": {
+                        "structured_response": (
+                            _recognition_result(text)
+                            if self.workflow == WAG_WORKFLOW
+                            else _tecan_recognition_result(text)
+                        )
+                    }
+                },
             }
         # 5. custom chunk: parse_documents progress -> tool_progress
         yield {"type": "custom", "ns": (), "data": {"name": "parse_documents", "status": "started"}}
@@ -332,8 +383,8 @@ def _recognition_result(text: str) -> dict[str, Any]:
     }
 
 
-def _tecan_recognition_result() -> dict[str, Any]:
-    return {
+def _tecan_recognition_result(text: str = "") -> dict[str, Any]:
+    result = {
         "outcome": "success",
         "data": {
             "header": {
@@ -383,3 +434,17 @@ def _tecan_recognition_result() -> dict[str, Any]:
         },
         "problems": [],
     }
+    if "input problems" in text:
+        result.update(
+            outcome="input_problems",
+            data={"header": {key: None for key in result["data"]["header"]}, "items": []},
+            problems=[
+                {
+                    "source": "batch",
+                    "location": "shipment",
+                    "issue": "检测到多个真实票次",
+                    "action": "拆分批次后重试",
+                }
+            ],
+        )
+    return result

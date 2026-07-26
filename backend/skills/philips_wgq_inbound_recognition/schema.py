@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import field_validator, model_validator
 
 from skills.channel_contract import (
     ContractModel,
@@ -68,33 +68,7 @@ class PhilipsWgqRecognitionResult(ContractModel):
 
     @model_validator(mode="after")
     def validate_outcome(self) -> Self:
-        if self.outcome == "partial_success" and _is_runtime_recovery_skeleton(self):
-            return self
         return validate_channel_outcome(self)
-
-
-def _is_runtime_recovery_skeleton(result: PhilipsWgqRecognitionResult) -> bool:
-    return (
-        any(
-            problem.source == "runtime"
-            and problem.location == "structured_response"
-            and problem.issue
-            in {
-                "minimal recovery shape",
-                "model kept submitting empty data shell after recovery retries",
-            }
-            for problem in result.problems
-        )
-        and _all_null(result.data)
-    )
-
-
-def _all_null(value: Any) -> bool:
-    if isinstance(value, BaseModel):
-        return all(_all_null(getattr(value, name)) for name in type(value).model_fields)
-    if isinstance(value, list):
-        return bool(value) and all(_all_null(item) for item in value)
-    return value is None
 
 
 __all__ = [

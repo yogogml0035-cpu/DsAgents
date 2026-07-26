@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from integrations.artifacts import resolve_artifact_path, write_json_artifact
+from skills.channel_contract import finalize_channel_result
 from skills.tecan_import.schema import TecanOverseasRecognitionResult
 
 
@@ -50,8 +51,11 @@ def inspect_supply_chain_workbooks(file_paths: list[str]) -> dict[str, Any]:
 
 def finalize_tecan_overseas_recognition(result: TecanOverseasRecognitionResult) -> str:
     """校验并返回 Tecan 最终业务 JSON；不写 Excel 或候选 artifact。"""
-    validated = TecanOverseasRecognitionResult.model_validate(result)
-    return json.dumps(validated.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        finalize_channel_result(TecanOverseasRecognitionResult, result),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _workbook_payload(path: Path, artifact: str) -> dict[str, Any]:

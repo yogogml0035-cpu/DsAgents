@@ -11,6 +11,7 @@ from runtime.middleware import NoProgressLoop, runtime_middlewares
 from runtime.resources import AgentResources
 from runtime.runs import RunEvent
 from runtime.tools import ToolCatalog
+from skills.channel_contract import finalize_channel_result
 from skills.philips_wgq_inbound_recognition import WAG_WORKFLOW, PhilipsWgqRecognitionResult
 from skills.tecan_import.schema import DK_WORKFLOW, TecanOverseasRecognitionResult
 from skills.tecan_import.scripts.tools import FINALIZE_TECAN_RESULT_TOOL
@@ -20,6 +21,11 @@ ARTIFACT_REFERENCE_HINT = (
     "已上传 artifact：{path}。图片/媒体请用 read_file；"
     "需要结构化抽取的文档请用 parse_documents。"
 )
+
+_WORKFLOW_SCHEMAS = {
+    WAG_WORKFLOW: PhilipsWgqRecognitionResult,
+    DK_WORKFLOW: TecanOverseasRecognitionResult,
+}
 
 
 class HarnessRuntime:
@@ -47,6 +53,7 @@ class HarnessRuntime:
         result: dict[str, Any] | None = None
         structured_response: Any = None
         tecan_response: TecanOverseasRecognitionResult | None = None
+        workflow_schema = _WORKFLOW_SCHEMAS.get(workflow)
         normalized_messages = _normalize_messages(messages)
         yield self.resources.runs.emit_run_status(run_id, "running")
         control = RunControl()
@@ -56,7 +63,7 @@ class HarnessRuntime:
                 resources=self.resources,
                 middleware=runtime_middlewares(
                     memory_backend=self.resources.backend,
-                    structured_schema=PhilipsWgqRecognitionResult if workflow == WAG_WORKFLOW else None,
+                    structured_schema=workflow_schema,
                 ),
                 tools=self.tools.as_list(),
                 workflow=workflow,
@@ -88,6 +95,14 @@ class HarnessRuntime:
                             run_id, "model_usage", usage, raw=chunk
                         )
                     if observability.is_subagent_message(data):
+                        continue
+                    # ToolMessage chunks carry raw tool results and ToolStrategy
+                    # validation errors. They are model context, not assistant text.
+                    if not observability.is_assistant_message(data):
+                        continue
+                    # Channel workflows expose their validated result only at
+                    # completion; intermediate model narration is not a client reply.
+                    if workflow_schema is not None:
                         continue
                     thinking = observability.thinking_delta(data)
                     if thinking:
@@ -121,23 +136,27 @@ class HarnessRuntime:
                     if finalized_tecan is not None:
                         tecan_response = finalized_tecan
                     for event_type, payload in _update_events(data):
+                        if workflow_schema is not None:
+                            if event_type == "assistant_message":
+                                continue
+                            # ToolStrategy arguments are intermediate business
+                            # drafts; the validated copy belongs only in run.result.
+                            if (
+                                event_type == "tool_execution"
+                                and payload.get("name") == workflow_schema.__name__
+                            ):
+                                continue
                         if event_type == "assistant_message" and payload.get("text"):
                             assistant_text = payload["text"]
                         yield self.resources.runs.emit_run_event(
                             run_id, event_type, payload, raw=chunk
                         )
-            if workflow == WAG_WORKFLOW:
+            if workflow_schema is not None:
                 if structured_response is None:
-                    raise ValueError("structured_response missing for WGQ")
-                result = PhilipsWgqRecognitionResult.model_validate(structured_response).model_dump(
-                    mode="json",
-                )
-            elif workflow == DK_WORKFLOW:
-                if tecan_response is None:
-                    raise ValueError("Tecan finalizer result missing for DK")
-                result = tecan_response.model_dump(mode="json")
+                    raise ValueError(f"structured_response missing for {workflow}")
+                result = finalize_channel_result(workflow_schema, structured_response)
             elif tecan_response is not None:
-                result = tecan_response.model_dump(mode="json")
+                result = finalize_channel_result(TecanOverseasRecognitionResult, tecan_response)
         except GraphDrained:
             yield self.resources.runs.emit_run_status(
                 run_id, "cancelled", error="run cancelled", raw={"status": "cancelled"}
@@ -162,7 +181,9 @@ class HarnessRuntime:
         finally:
             self.run_controls.pop(run_id, None)
 
-        if not assistant_text and text_parts:
+        if workflow_schema is not None:
+            assistant_text = "渠道识别完成，结果已写入 run.result。"
+        elif not assistant_text and text_parts:
             assistant_text = "".join(text_parts)
         yield self.resources.runs.emit_run_status(
             run_id,

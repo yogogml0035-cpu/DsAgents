@@ -28,12 +28,6 @@ from typing_extensions import NotRequired
 from runtime import observability
 from runtime.observability import MAIN_AGENT_NAME
 from runtime.resources import RUNTIME_AGENTS_PATH
-from skills.philips_wgq_inbound_recognition import PhilipsWgqRecognitionResult
-from skills.philips_wgq_inbound_recognition.schema import (
-    OrderHeader,
-    OrderItem,
-    RecognitionData,
-)
 
 
 NO_PROGRESS_WINDOW = 3
@@ -65,9 +59,7 @@ RUNTIME_MEMORY_SYSTEM_PROMPT = """\
 
 __all__ = [
     "DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES",
-    "EMPTY_DATA_SHELL_HINT",
     "NO_PROGRESS_WINDOW",
-    "PHILIPS_MINIMAL_DATA_SKELETON",
     "RUNTIME_MEMORY_SYSTEM_PROMPT",
     "NoProgressLoop",
     "NoProgressMiddleware",
@@ -75,45 +67,14 @@ __all__ = [
     "StructuredOutputRecovery",
     "StructuredOutputRecoveryState",
     "ToolTelemetry",
-    "is_empty_recognition_data_shell",
-    "philips_structured_output_error_message",
+    "is_empty_channel_data_shell",
     "runtime_middlewares",
 ]
 
 
-def _null_fields(model_cls: type[BaseModel]) -> dict[str, None]:
-    return {name: None for name in model_cls.model_fields}
-
-
-# 最小合法 data 骨架：从 schema 字段推导，全 null；仅形状提示，不编造业务值。
-PHILIPS_MINIMAL_DATA_SKELETON: dict[str, Any] = PhilipsWgqRecognitionResult(
-    outcome="partial_success",
-    data=RecognitionData(
-        header=OrderHeader(**_null_fields(OrderHeader)),
-        items=[OrderItem(**_null_fields(OrderItem))],
-    ),
-    problems=[
-        {
-            "source": "runtime",
-            "location": "structured_response",
-            "issue": "minimal recovery shape",
-            "action": "replace nulls with confirmed document values",
-        }
-    ],
-).model_dump(mode="json")
-
-# 模型提交 success/partial 却 data:{} 或缺 header/items 时的共享纠错文案。
-# 供 ToolStrategy handle_errors 与 recovery 重试使用。
-EMPTY_DATA_SHELL_HINT = (
-    "PhilipsWgqRecognitionResult 无效：data 不能是 {}，也不能省略 header/items。"
-    "outcome 为 success 或 partial_success 时，请用结构化工具重新提交完整嵌套对象："
-    "header（全部固定英文字段）、"
-    "items（非空数组，每项为完整商品对象）。未知值填 null。"
-    "outcome 为 input_problems 时，data 仍须含完整 header 与 items（可为空数组），且至少一条 problem。"
-    "不要编造业务值；复用已从 PDF 与主数据查询得到的字段。禁止重复提交相同的空 data 壳。"
-    "只补 problems 而 data 仍为 {} 不算修正。"
-    "正常路径只调用结构化工具提交完整结果，不要在助手文本重复业务 JSON，以免两个输出通道分叉。"
-    "仅在无法形成有效工具调用时，才输出一个完整 ```json``` 作为后备；文本仍须通过 schema 校验。"
+_EMPTY_DATA_SHELL_HINT = (
+    "结构化结果的 data 不能为空，必须包含完整 header 与 items。"
+    "success/partial_success 需要非空 items；input_problems 可以使用空 items，但仍需完整 header 和问题说明。"
 )
 
 _FENCED_JSON = re.compile(
@@ -177,7 +138,6 @@ class ToolTelemetry(AgentMiddleware):
                 "agent_name": agent_name,
                 "status": "completed",
                 "duration_ms": int((time.monotonic() - started_at) * 1000),
-                "result": str(result)[:200],
             },
         )
         return result
@@ -227,41 +187,27 @@ class StructuredOutputCompatibility(AgentMiddleware):
 class StructuredOutputRecovery(AgentMiddleware):
     """Recover ToolStrategy structured_response from plain-text JSON.
 
-    MiniMax and similar models sometimes finish with a fenced JSON body instead
-    of calling the schema tool. Harness only accepts ``structured_response`` from
-    stream updates, so this middleware parses the latest AI text, validates it
-    against the configured schema, and writes ``structured_response`` into state.
+    Some models finish with fenced JSON instead of calling the configured schema
+    tool. This node-style ``after_model`` hook validates that text and writes the
+    configured schema instance to ``structured_response``.
 
     On parse/validation failure, append a correction HumanMessage and
     ``jump_to: "model"`` up to ``max_retries`` times (default 2). Exhausted
-    non-shell failures use ``jump_to: "end"`` so the agent graph exits without
-    an infinite ToolStrategy re-generation loop; the harness then fails with
-    ``structured_response missing``.
-
-    Also intercepts empty ``data: {}`` structured tool attempts (ToolStrategy
-    validation failures that only produce a generic ToolMessage). If the
-    matching AIMessage already contains a schema-valid text JSON, recover that
-    result directly. Otherwise append a specific correction (with minimal
-    legal data skeleton) and jump back to the model (bounded by the same retry
-    budget).
-
-    When empty-shell retries are exhausted on the Philips schema, emit a
-    schema-valid all-null ``data`` skeleton (not ``data: {}`` / not ``data:
-    null``) plus a runtime problem, so the run can still return JSON. Does not
-    invent business field values. Other failure modes still exit without
-    structured_response.
+    non-shell failures explicitly ``jump_to: "end"`` so ToolStrategy cannot
+    loop forever. Exhausted empty data shells become an all-null
+    ``input_problems`` result for either channel schema.
     """
 
     state_schema = StructuredOutputRecoveryState
 
     def __init__(
         self,
-        schema: type[BaseModel] | None = None,
+        schema: type[BaseModel],
         *,
         max_retries: int = DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES,
     ) -> None:
         super().__init__()
-        self.schema = schema or PhilipsWgqRecognitionResult
+        self.schema = schema
         if max_retries < 0:
             raise ValueError("max_retries must be >= 0")
         self.max_retries = max_retries
@@ -290,7 +236,7 @@ class StructuredOutputRecovery(AgentMiddleware):
             if empty_shell is not None:
                 return self._retry_or_give_up(
                     state,
-                    reason=EMPTY_DATA_SHELL_HINT,
+                    reason=_EMPTY_DATA_SHELL_HINT,
                     model_text=json.dumps(empty_shell, ensure_ascii=False, default=str),
                     empty_shell=True,
                 )
@@ -311,27 +257,20 @@ class StructuredOutputRecovery(AgentMiddleware):
 
         payload = _extract_json_object(text)
         if payload is not None:
-            if is_empty_recognition_data_shell(payload):
+            if is_empty_channel_data_shell(payload):
                 return self._retry_or_give_up(
                     state,
-                    reason=EMPTY_DATA_SHELL_HINT,
+                    reason=_EMPTY_DATA_SHELL_HINT,
                     model_text=text,
                     empty_shell=True,
                 )
             try:
                 validated = self.schema.model_validate(payload)
             except ValidationError as exc:
-                reason = _format_validation_error(exc)
-                # Only success/partial empty shells get skeleton fallback; other
-                # validation failures (e.g. input_problems with illegal data) do not.
-                empty_shell = is_empty_recognition_data_shell(payload)
-                if empty_shell or _validation_indicates_empty_data(exc):
-                    reason = f"{EMPTY_DATA_SHELL_HINT}\n\nValidator detail:\n{reason}"
                 return self._retry_or_give_up(
                     state,
-                    reason=reason,
+                    reason=_format_validation_error(exc),
                     model_text=text,
-                    empty_shell=empty_shell,
                 )
             return {
                 "structured_response": validated,
@@ -359,12 +298,9 @@ class StructuredOutputRecovery(AgentMiddleware):
             # Critical: with ToolStrategy and no tools, create_agent's
             # model_to_model edge re-enters the model whenever structured_response
             # is missing. Returning None would infinite-loop; jump to end instead.
-            # Empty-shell exhaustion on Philips: prefer a legal all-null skeleton
-            # over run-level structured_response missing.
-            if empty_shell and self.schema is PhilipsWgqRecognitionResult:
-                rejected = _payload_dict_from_text(model_text)
+            if empty_shell:
                 return {
-                    "structured_response": _empty_shell_fallback_result(rejected),
+                    "structured_response": _empty_shell_fallback_result(self.schema),
                     "jump_to": "end",
                     "structured_recovery_attempts": attempts,
                 }
@@ -377,6 +313,7 @@ class StructuredOutputRecovery(AgentMiddleware):
                         reason=reason,
                         model_text=model_text,
                         schema_name=schema_name,
+                        empty_shell=empty_shell,
                     )
                 )
             ],
@@ -388,7 +325,7 @@ class StructuredOutputRecovery(AgentMiddleware):
 def runtime_middlewares(
     *,
     memory_backend: Any | None = None,
-    structured_schema: type[BaseModel] | None = PhilipsWgqRecognitionResult,
+    structured_schema: type[BaseModel] | None = None,
 ) -> list[AgentMiddleware]:
     """Return fresh middleware instances for each agent graph.
 
@@ -531,138 +468,50 @@ _EMPTY_SHELL_FALLBACK_PROBLEM: dict[str, str] = {
     "source": "runtime",
     "location": "structured_response",
     "issue": "model kept submitting empty data shell after recovery retries",
-    "action": "returned schema-valid all-null skeleton so run can complete",
+    "action": "returned schema-valid all-null input_problems result",
 }
 
 
-def _payload_dict_from_text(text: str) -> dict[str, Any] | None:
-    """Best-effort parse of rejected tool args or fenced JSON text."""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return _extract_json_object(raw)
-    return parsed if isinstance(parsed, dict) else None
+def _empty_shell_fallback_result(schema: type[BaseModel]) -> BaseModel:
+    data_model = schema.model_fields["data"].annotation
+    if not isinstance(data_model, type) or not issubclass(data_model, BaseModel):
+        raise TypeError(f"{schema.__name__} data must be a Pydantic model")
+    header_model = data_model.model_fields["header"].annotation
+    if not isinstance(header_model, type) or not issubclass(header_model, BaseModel):
+        raise TypeError(f"{schema.__name__} data.header must be a Pydantic model")
+    return schema.model_validate(
+        {
+            "outcome": "input_problems",
+            "data": {"header": {name: None for name in header_model.model_fields}, "items": []},
+            "problems": [dict(_EMPTY_SHELL_FALLBACK_PROBLEM)],
+        }
+    )
 
 
-def _empty_shell_fallback_result(
-    rejected: dict[str, Any] | None,
-) -> PhilipsWgqRecognitionResult:
-    """Build a legal Philips result after empty-shell retries are exhausted.
-
-    Uses full nested ``data`` with null fields (not ``data: {}`` / not
-    ``data: null``). Keeps model ``problems`` when shape-valid; always appends a
-    runtime degradation problem. Does not invent business field values.
-    """
-    problems: list[dict[str, str]] = []
-    if isinstance(rejected, dict):
-        raw_problems = rejected.get("problems")
-        if isinstance(raw_problems, list):
-            for item in raw_problems:
-                if not isinstance(item, dict):
-                    continue
-                source = item.get("source")
-                location = item.get("location")
-                issue = item.get("issue")
-                action = item.get("action")
-                if all(isinstance(v, str) and v for v in (source, location, issue, action)):
-                    problems.append(
-                        {
-                            "source": source,
-                            "location": location,
-                            "issue": issue,
-                            "action": action,
-                        }
-                    )
-    problems.append(dict(_EMPTY_SHELL_FALLBACK_PROBLEM))
-    payload = {
-        **PHILIPS_MINIMAL_DATA_SKELETON,
-        # partial_success: structure is returnable but values were not filled.
-        "outcome": "partial_success",
-        "problems": problems,
-    }
-    return PhilipsWgqRecognitionResult.model_validate(payload)
-
-
-def is_empty_recognition_data_shell(payload: Any) -> bool:
-    """True when payload claims success/partial but data is {} or missing nested keys.
-
-    Does not invent values. ``input_problems`` is not an empty-data shell.
-    """
+def is_empty_channel_data_shell(payload: Any) -> bool:
+    """True when a channel result omits the required ``data`` shape."""
     if not isinstance(payload, dict):
         return False
     outcome = payload.get("outcome")
-    if outcome not in {"success", "partial_success"}:
-        return False
     data = payload.get("data")
-    if data is None:
+    if data is None or data == {}:
         return True
     if not isinstance(data, dict):
         return False
-    if data == {}:
-        return True
-    # Partial shells: missing any required nested section.
     for key in ("header", "items"):
         if key not in data:
             return True
     header = data.get("header")
     items = data.get("items")
-    if isinstance(header, dict) and header == {}:
+    if not isinstance(header, dict) or not header:
         return True
-    if items == [] or items is None:
+    if items is None:
+        return True
+    if outcome in {"success", "partial_success"} and (
+        not isinstance(items, list) or not items
+    ):
         return True
     return False
-
-
-def _validation_indicates_empty_data(exc: ValidationError) -> bool:
-    """Heuristic: pydantic reported missing data.header/items on empty dict."""
-    text = str(exc)
-    missing = ("data.header" in text, "data.items" in text)
-    if sum(1 for hit in missing if hit) >= 2:
-        return True
-    return "input_value={}" in text and "data" in text.lower()
-
-
-def philips_structured_output_error_message(exc: Exception) -> str:
-    """ToolStrategy handle_errors callback for PhilipsWgqRecognitionResult.
-
-    Returns a specific empty-data coaching message when the failed tool args are
-    an empty shell; otherwise the default LangChain-style fix prompt.
-    """
-    args = _structured_validation_error_args(exc)
-    if args is not None and is_empty_recognition_data_shell(args):
-        skeleton = json.dumps(
-            PHILIPS_MINIMAL_DATA_SKELETON,
-            ensure_ascii=False,
-            indent=2,
-        )
-        return (
-            f"错误：{EMPTY_DATA_SHELL_HINT}\n"
-            "最小合法形状（把 null 换成真实值；多行复制 items 元素）：\n"
-            f"```json\n{skeleton}\n```\n"
-            "请修正后重试。"
-        )
-    # 其他 schema 问题仍回传原始解析错误。
-    return f"错误：{exc}\n请修正后重试。"
-
-
-def _structured_validation_error_args(exc: Exception) -> dict[str, Any] | None:
-    """Best-effort extract of rejected tool args from StructuredOutputValidationError."""
-    ai_message = getattr(exc, "ai_message", None)
-    if ai_message is None:
-        return None
-    tool_name = getattr(exc, "tool_name", None)
-    for tool_call in observability.tool_calls_of(ai_message):
-        if not isinstance(tool_call, dict):
-            continue
-        if tool_name is not None and tool_call.get("name") != tool_name:
-            continue
-        args = tool_call.get("args")
-        if isinstance(args, dict):
-            return args
-    return None
 
 
 def _schema_tool_name(schema: type[BaseModel]) -> str:
@@ -703,7 +552,7 @@ def _rejected_empty_structured_call(
             ):
                 continue
             args = tool_call.get("args")
-            if isinstance(args, dict) and is_empty_recognition_data_shell(args):
+            if isinstance(args, dict) and is_empty_channel_data_shell(args):
                 return message, args
             return None
     return None
@@ -766,30 +615,16 @@ def _build_recovery_retry_message(
     reason: str,
     model_text: str,
     schema_name: str,
+    empty_shell: bool,
 ) -> str:
     snippet = model_text.strip()
     if len(snippet) > _RECOVERY_MODEL_SNIPPET_CHARS:
         snippet = snippet[:_RECOVERY_MODEL_SNIPPET_CHARS] + "\n...[truncated]"
-    empty_shell = (
-        "data 不能是 {}" in reason
-        or "data must not be {}" in reason
-        or "data: {}" in reason
-    )
     if empty_shell:
-        skeleton = json.dumps(
-            PHILIPS_MINIMAL_DATA_SKELETON,
-            ensure_ascii=False,
-            indent=2,
-        )
         lead = (
-            f"结构化输出被拒绝：`{schema_name}` 使用了空的 `data` 壳。"
-            "请只调用结构化工具，并在 args 中提交完整 data.header / 非空 data.items"
-            "（未知 null）。正常路径不要在助手文本重复业务 JSON；"
-            "仅无法形成有效工具调用时才输出一个完整 ```json``` 作为后备。"
-            "不要编造业务值；复用 PDF 与主数据已识别字段。禁止再次提交 data: {}；"
-            "只补 problems 不算修正。\n\n"
-            f"最小合法形状（把 null 换成真实值；多行复制 items 元素）：\n"
-            f"```json\n{skeleton}\n```\n\n"
+            f"结构化输出被拒绝：`{schema_name}` 的 data 为空或不完整。"
+            "请重新提交完整 data.header 和 items；未知字段填 null。"
+            "input_problems 可以使用空 items，但必须保留完整 header 和至少一个 problem。\n\n"
         )
     else:
         lead = (

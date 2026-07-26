@@ -1,6 +1,7 @@
 # CONVENTIONS — backend 编码与质量约定
 
-> Analysis Date: 2026-07-22。以 `backend/` 源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
+> Analysis Date: 2026-07-25。以 `backend/` 权威源码为准；根级 `AGENTS.md` / `docs/conventions.md` 仅作交叉验证。禁止读 `.env` 值。
 
 ## 1. 源码布局与模块边界
 
@@ -48,7 +49,7 @@
 
 - `requires-python = ">=3.11,<4.0"`；使用 `str | None`、`list[...]` 等 3.10+ 语法，不写 `Optional`/`List` 旧式别名（除非第三方 API 要求）。
 
-### typing.Protocol **只**用于 Brain
+### typing.Protocol **只**用于 Brain / BrainFactory
 
 ```python
 # runtime/agent.py — 唯一 Protocol 用途
@@ -121,8 +122,8 @@ def default_tool_catalog() -> ToolCatalog:
 - 最终业务 JSON **只**写 `run.result`；不得从 `reply`、thinking、候选 tool 文本或 Excel 推断正式结果。
 - 同票渠道抽取在**单一 run** 内完成材料归集与终态裁决；不新建消息表、任务状态表、跨 run 中间态或生产业务 SubAgent。
 - run 状态机：`queued` → `running` → `succeeded` | `failed` | `cancelled`；取消路径 `queued` → `cancelled` 或 `running` → `cancelling` → `cancelled`。
-- 时间戳统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS JSONL）。
-- 大 payload 可外置到 `run_events_dir` artifact，ledger 存路径（`SqliteRunLedger.max_inline_bytes`）。
+- 时间戳统一 **UTC+8** 本地 `YYYY-MM-DD HH:MM:SS`（ledger 与 OMS JSONL；`timezone(timedelta(hours=8))`，无夏令时）。
+- 大 payload 可外置到 `run_events_dir` artifact，ledger 存路径（`SqliteRunLedger.max_inline_bytes`，默认 262144）。
 
 ## 6. HTTP 与注入点
 
@@ -131,13 +132,12 @@ def default_tool_catalog() -> ToolCatalog:
 - 程序内入口：`AgentResources` + `create_harness(...).execute_run(...)`；`create_app(harness_factory=...)` 便于测试注入 FakeBrain。
 - OMS 旁路：`create_run` 成功后 best-effort 写 JSONL（`runtime/oms_log.py`，默认 `backend/log/oms_log.log`）；失败吞掉，不阻塞已创建 run；**非** `run_events`、无查询 API。
 
-## 7. 错误处理模式
+## 7. 错误处理与 `input_problems` 约定
 
 | 场景 | 层 | 行为 |
 |------|----|------|
-| 业务 `input_problems` | 渠道 schema / finalizer | 合法 `run.result`，status **`succeeded`** |
-| 缺 Philips `structured_response` | Harness（WGQ） | `ValueError` → status `failed` |
-| DK 缺 Tecan finalizer 终态 | Harness（DK） | `ValueError` → status `failed` |
+| 业务 `input_problems` | 渠道 schema | 合法 `run.result`，status **`succeeded`** |
+| workflow 缺 `structured_response` | Harness（WGQ / DK） | `ValueError("structured_response missing for <workflow>")` → status `failed` |
 | `NoProgressLoop`（同 tool+args 连续 `NO_PROGRESS_WINDOW=3`） | middleware → Harness | status `failed`，error 文本携带原因 |
 | 其它 Exception | Harness | status `failed`，`error` 文本 + raw repr |
 | `GraphDrained`（cancel） | Harness | status `cancelled` |
@@ -155,14 +155,21 @@ def default_tool_catalog() -> ToolCatalog:
 
 - **HTTP**：校验请求、投影状态码与 JSON body；不在 API 层做业务字段裁决。
 - **工具**：返回可序列化内容或明确错误字符串；MinerU 通过 custom stream 发进度。
-- **run 事件**：状态变更与内容流写入 `run_events`；业务问题统一 outcome `input_problems`，不是新事件类型。
+- **run 事件**：状态变更与内容流写入 `run_events`；业务问题统一 outcome `input_problems`，**不是**新事件类型。
 - 真实模型/工具/图异常 → Harness 投影 `failed`；协作 cancel → `cancelled`。
+
+### `input_problems` 硬规则
+
+- 渠道终态 `outcome == "input_problems"` 时：`data` 仍须完整 `header` + 已证实 `items`（可为 `[]`）+ `problems` 至少一条（`source` / `location` / `issue` / `action`）。
+- run.status 仍为 **`succeeded`**；业务问题不通过 `error` 字段或失败状态表达。
+- `success` / `partial_success` 与 `input_problems` 的升降级由 `validate_channel_outcome`（`skills/channel_contract.py`）裁决。
 
 ## 8. 日志与可观测性
 
 - **主路径不是 stdlib logging**：对外可观测性是 **7 类 run 事件**（§10）+ GET 轮询。
-- `runtime/observability.py`：纯函数，从 langgraph stream chunk 提取 thinking / text_delta / model_usage / assistant_message；**无 I/O、不改 run 状态**。
-- `ToolTelemetry`：`wrap_tool_call` → `get_stream_writer()` custom payload → Harness 映射为 `tool_execution`。
+- `runtime/observability.py`：纯函数，从 langgraph stream chunk 提取 thinking / text_delta / model_usage / assistant_message；`messages` 流仅 assistant chunk 可投影文本，ToolMessage 内容不泄漏；**无 I/O、不改 run 状态**。
+- WGQ / DK：共享 Harness 不投影中间 `thinking` / `text_delta` / `assistant_message`，终态 `reply` 固定为完成摘要；客户端只从 `run.result` 读取业务 JSON。
+- `ToolTelemetry`：`wrap_tool_call` → `get_stream_writer()` custom payload → Harness 映射为 `tool_execution`；完成事件只含名称、scope 与耗时，不复制工具返回内容。WGQ / DK 另不投影 ToolStrategy schema 草稿。
 - MinerU 工具：custom 进度 → `tool_progress`（仅 `parse_documents` / `extract_archives`）。
 - **model_usage**：在 subagent 文本过滤**之前**提取，subagent 文本不外泄但 **usage 仍记账**；模型名常量 `MAIN_AGENT_MODEL`（当前 `MiniMax-M3`）。
 - API usage 计价：趋势估算（`api.py` 中 `_PRICING_TIERS`），最终账单以供应商为准。
@@ -181,13 +188,13 @@ def default_tool_catalog() -> ToolCatalog:
 WGQ / DK 在 `DeepAgentsBrainFactory.create` 均用 **denylist** 排除**其他业务**工具：
 
 ```python
-_WAG_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
-_DK_EXCLUDED_TOOLS = frozenset()
-# 两渠道均保留 parse_documents / extract_archives /
-# lookup_philips_wgq_master_data / inspect_supply_chain_workbooks；DK 另保留 finalizer
+_WORKFLOW_EXCLUDED_TOOLS = frozenset({"finalize_tecan_overseas_recognition"})
+# WGQ / DK 都保留 parse_documents / extract_archives /
+# lookup_philips_wgq_master_data / inspect_supply_chain_workbooks
 ```
 
 - **禁止**业务-only allowlist（避免共享 MinerU / XLSX 工具从模型工具表消失，导致 `/memories/AGENTS.md` ZIP 指引失效）。
+- Tecan finalizer 仍在静态目录中，但只供无 workflow 的明确 Tecan 请求；两个 workflow 都从工具表排除它。
 - 验证：`python -m tests.test_workflow_setup`（工具名集合断言）。
 
 ## 10. 事件模型（固定 7 类）
@@ -208,26 +215,26 @@ Harness / ledger 对外事件类型仅：
 
 ## 11. Skill 单目录约定
 
-每个业务 Skill 只保留一个下划线命名、可 import 的包，并在 `pyproject.toml` `[tool.setuptools.package-data]` 按包打包资源：
+每个业务 Skill 只保留一个下划线命名、可 import 的包，并在 `pyproject.toml` `[tool.setuptools.package-data]` 按包打包资源；运行时以同一目录的连字符别名满足 Agent Skills `name` 与目录一致的要求：
 
 | 路径模式 | 内容 |
 |----------|------|
 | `skills/<snake_case_name>/` | `SKILL.md`（建议 ≤100 行）、按需 `references/*.md`、`schema.py`、`scripts/tools.py`、`__init__.py` |
-| 虚拟挂载 | `/skills/<snake_case_name>/`（**不用**连字符目录名） |
+| 虚拟挂载 | `/skills/<kebab-case-name>/`（必须与 `SKILL.md` 的 `name` 一致） |
 
 当前 Skill：
 
 | 包 | workflow | 终态路径 |
 |----|----------|----------|
 | `philips_wgq_inbound_recognition` | `WGQ` | `ToolStrategy(PhilipsWgqRecognitionResult)` + `structured_response` |
-| `tecan_import` | `DK` | `finalize_tecan_overseas_recognition` 工具返回值 |
+| `tecan_import` | `DK` | `ToolStrategy(TecanOverseasRecognitionResult)` + `structured_response` |
 
 - 不做 Skill 目录自动发现；`skills: [SKILLS_SOURCE]` 固定 `/skills/`。
 - 新增 Skill：新建包 → 更新 `package-data` → 静态注册工具 → 更新 denylist（若跨业务互斥）→ 同步 codebase 文档与测试。
 - Tecan **不**携带 Excel 模板或生成器；XLSX inspection 写中间 JSON artifact 供 Agent 读取，不是 OMS 合同。
 - 渠道 Skill 材料边界：解析 PDF（`parse_documents`）与 XLSX（`inspect_supply_chain_workbooks`）；ZIP/DOCX/图片内容不解析，材料足够时写入 `problems` 后继续。
 
-## 12. 渠道 JSON 合同模式
+## 12. 渠道 JSON 合同要点
 
 共用层：`skills/channel_contract.py`。
 
@@ -260,11 +267,10 @@ Harness / ledger 对外事件类型仅：
 
 ### Philips vs Tecan 终态路径
 
-- **WGQ**：`ToolStrategy(PhilipsWgqRecognitionResult)` + stream `updates` 中的 `structured_response`；缺失则 run `failed`（`structured_response missing for WGQ`）。
-- **DK**：`finalize_tecan_overseas_recognition` 工具返回校验后的 JSON；Harness 从对应 `ToolMessage` 投影到 `run.result`；缺失则 run `failed`；无 `response_format` / 无 Philips recovery。
-- 普通 run：`structured_schema=None`，不强制按 Philips schema 恢复；若仍调用 Tecan finalizer 可投影 result。
+- **WGQ / DK**：各自 `ToolStrategy(schema)` 将结果写入 stream `updates` 的 `structured_response`；Harness 用 `finalize_channel_result(schema, response)` 再校验并 `model_dump(mode="json")` 到 `run.result`；缺失则 `structured_response missing for <workflow>` 失败。
+- 普通 run：`structured_schema=None`，不强制结构化终态；若调用 Tecan finalizer，Harness 仍从指定 ToolMessage 读取并复用 `finalize_channel_result` 投影 result。
 
-## 13. Middleware 模式
+## 13. Middleware 与 StructuredOutputRecovery 规则
 
 - 横切能力集中在 `runtime/middleware.py`；**不要**把 Philips/Tecan 字段业务裁决塞进全局 middleware。
 - `runtime_middlewares(memory_backend=..., structured_schema=...)` 每次构图返回**新实例**列表。
@@ -276,25 +282,35 @@ Harness / ledger 对外事件类型仅：
   4. `StructuredOutputCompatibility`（ToolStrategy 请求关闭 thinking）
   5. 可选 `MemoryMiddleware`（主 Agent 挂 `/memories/AGENTS.md`）
 
-- Harness 对 WGQ 传 `structured_schema=PhilipsWgqRecognitionResult`；DK / 普通 run 传 `None`。
-- `DeepAgentsBrainFactory` 在 WGQ 路径若缺少 Compatibility/Recovery 会补装；Recovery `insert(0, ...)`。
+- Harness 对 WGQ / DK 分别传 `PhilipsWgqRecognitionResult` / `TecanOverseasRecognitionResult`；普通 run 传 `None`。
+- `DeepAgentsBrainFactory` 只消费已装配的 middleware；不再维护 workflow 专属补装分支。
 
 ### StructuredOutputRecovery（硬约束）
 
 - class-based `after_model` + state 扩展 `structured_recovery_attempts`。
 - **`@hook_config(can_jump_to=["model", "end"])` 必须含 `"end"`**。
-- 失败重试：`jump_to: "model"`，默认 `max_retries=2`（约 `1 + max_retries` 次模型调用量级）。
+- 失败重试：`jump_to: "model"`，默认 `max_retries=2`（`DEFAULT_STRUCTURED_RECOVERY_MAX_RETRIES`；约 `1 + max_retries` 次模型调用量级）。
 - 耗尽时必须 **`jump_to: "end"`**，**禁止**只返回 `None`（否则 ToolStrategy 可能无限 model→model）。
-- 空 data 壳（`success`/`partial_success` 且 `data:{}` 或缺 header/items）：
+- 空 data 壳（`data:{}`、缺 header/items，或 success/partial_success 的空 items）：
   - 优先同回合 `tool_call_id` 匹配 AI 文本合法 JSON 恢复；
-  - 否则 `EMPTY_DATA_SHELL_HINT` + 可选 `PHILIPS_MINIMAL_DATA_SKELETON` 纠错；
-  - 空壳耗尽 → all-null nested data + `partial_success` + runtime problem（可 `succeeded`）；
+  - 否则以完整 header / items 规则纠错；
+  - 空壳耗尽 → 当前 schema 的 all-null nested data + `input_problems` + runtime problem（可 `succeeded`）；
   - **其它**失败耗尽 → 无 `structured_response`（可 `failed`）。
-- `input_problems` **不**视为 empty-data shell。
-- Philips schema 对 runtime recovery skeleton 有 validator 豁免路径（空壳 fallback）。
+- `input_problems` 若仍缺完整 data 形状，同样视为 empty-data shell。
+- 不保留 Philips 专属 skeleton validator 豁免。
 - 验证：`python -m tests.test_harness`。
 
-## 14. 禁止重新引入
+## 14. 时间戳约定
+
+| 写入点 | 格式 | 时区 |
+|--------|------|------|
+| `SqliteRunLedger`（`created_at` / `updated_at` / 事件） | `YYYY-MM-DD HH:MM:SS` | UTC+8 固定偏移（`timezone(timedelta(hours=8))`） |
+| OMS JSONL（`runtime/oms_log.py`） | 同上 | 同上 |
+
+- 不使用 UTC `Z` 后缀、不使用 ISO 带偏移字符串作为 ledger/OMS 权威格式。
+- 文档与断言可用正则或样例匹配该格式；测试见 `tests.test_run_ledger`。
+
+## 15. 禁止重新引入
 
 | 禁止项 | 原因 |
 |--------|------|
@@ -309,19 +325,20 @@ Harness / ledger 对外事件类型仅：
 | Protocol 滥用（工具/资源） | 仅 Brain 形状可插拔 |
 | 动态 Skill/工具扫描 | 静态 package-data + ToolCatalog |
 
-## 15. 文档与变更同步
+## 16. 文档与变更同步
 
 - 改 backend 代码后：先同步 `backend/.planning/codebase/` 事实文档，再按影响更新根级 `ARCHITECTURE.md` / `INTERFACES.md` / `coding_maps/SYSTEM_MAP.md`。
 - 文档 diff 至少：`git diff --check`（仓库根目录）。
 - 验证命令与门禁见同目录 `TESTING.md` 与根级 `docs/commands.md`。
 
-## 16. 快速自检清单（编码时）
+## 17. 快速自检清单（编码时）
 
 - [ ] 未新增 Protocol（除非 Brain 形状变更）
 - [ ] 新工具已静态注册，且 WGQ / DK denylist 仍只排除其他业务工具
 - [ ] 业务终态只进 `run.result`；`input_problems` 仍 `succeeded`
 - [ ] 事件类型落在 7 类之内
-- [ ] Skill 单目录 + `package-data`；虚拟路径用下划线名
+- [ ] Skill 单目录 + `package-data`；虚拟路径用连字符名
 - [ ] `StructuredOutputRecovery` 的 `can_jump_to` 含 `end`，耗尽显式 `jump_to: "end"`
+- [ ] 时间戳为 UTC+8 `YYYY-MM-DD HH:MM:SS`
 - [ ] 无 SSE / session API / 生产业务 SubAgent
 - [ ] 对应 `python -m tests.*` 已跑通

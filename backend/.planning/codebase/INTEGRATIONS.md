@@ -1,6 +1,7 @@
 # INTEGRATIONS — backend 外部集成事实
 
-> Analysis Date: 2026-07-22
+> Analysis Date: 2026-07-25
+> last_mapped_commit: 79f97d239243d0513de93f10224eef470fffd83c
 > 范围：`backend/` 源码中的出站/入站边界。
 > **不**记录密钥、`.env` 值或私有连接串；仅环境变量**名**与行为。
 
@@ -50,7 +51,7 @@
 | 文件 | `backend/runtime/agent.py`（`BACKEND_ENV_PATH = backend/.env`） |
 | 依赖链 | `langchain-anthropic` → `anthropic` SDK；经 `httpx` 出站 |
 | 注入点 | 可向 `DeepAgentsBrainFactory(model=...)` 注入假模型（测试） |
-| 运行时用途 | 主 Agent 推理、工具调用、WGQ `ToolStrategy` 结构化提交、DK finalizer 终态 |
+| 运行时用途 | 主 Agent 推理、工具调用、WGQ / DK `ToolStrategy` 结构化提交 |
 | 用量标签 | `runtime.observability.MAIN_AGENT_MODEL = "MiniMax-M3"` 写入每条 `model_usage` |
 | API 估价 | `api._usage_summary` 对可计价模型（`MiniMax-M3`）按档估算 CNY；未知模型则金额为 null |
 
@@ -156,9 +157,9 @@
 | 工具 | `lookup_philips_wgq_master_data` |
 | 文件 | `backend/skills/philips_wgq_inbound_recognition/scripts/tools.py` |
 | 驱动 | `import oracledb`（延迟导入） |
-| 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)` |
-| Thick | 优先 `ORACLE_CLIENT_LIB_DIR`；Windows 未设置时使用随仓库 `backend/.oracle/instantclient/instantclient_19_31`，再 `init_oracle_client(lib_dir=...)` 一次 |
-| 查询 | 按 `product_id`（12NC）查 `od.chda` 等，补齐中文品名/规格/原产国/HS/单位等 **稳定字段** |
+| 连接 | `oracledb.connect(user=..., password=..., dsn=..., tcp_connect_timeout=...)`；`connection.call_timeout` 毫秒 |
+| Thick | 优先 `ORACLE_CLIENT_LIB_DIR`；Windows（`os.name == "nt"`）未设置时，若 `backend/.oracle/instantclient/instantclient_19_31/oci.dll` 存在则使用该路径，再 `init_oracle_client(lib_dir=...)` 一次 |
+| 查询 | 按 `product_id`（12NC）查 `od.chda` 等，补齐中文品名/规格/原产国/HS/单位等 **稳定字段**（`ORACLE_FIELDS`） |
 | 优先级 | Tracking XLSX 合格行优先；Oracle **只填仍为 null 的 ORACLE_FIELDS** |
 | 不覆盖 | 数量、价格、金额、运单号等本票事实 |
 
@@ -176,7 +177,7 @@
 | 上传 | `POST /upload` → `artifacts/uploads/`，文件名 `make_timestamped_name` |
 | 虚拟路径 | `/artifacts/uploads/...`、`/artifacts/downloads/...` |
 | 解析 | `integrations.artifacts.resolve_artifact_path`：禁止 `..`；默认只接受 `/artifacts/...`（MinerU 解析允许 local） |
-| 写 JSON | `write_json_artifact` → downloads 下唯一路径 |
+| 写 JSON | `write_json_artifact` → downloads 下唯一路径（`unique_download_path` + touch 占位） |
 | Agent 视图 | `FilesystemBackend(root_dir=artifacts_dir, virtual_mode=True)` 挂到 `/artifacts/` 与 `/large_tool_results/` |
 | 权限 | `FilesystemPermission` deny write `/skills/**` |
 
@@ -190,7 +191,7 @@
 | `extract_archives` | ZIP artifact | `downloads/<zip-stem>/` 展开 |
 | `inspect_supply_chain_workbooks` | `.xlsx` | `tecan_workbook_*.json` |
 | `lookup_philips_wgq_master_data` | WGQ 可读 Tracking `.xlsx`；DK 无 artifact 输入 | 不写 artifact（返回 dict） |
-| `finalize_tecan_overseas_recognition` | 无 | 返回 JSON 字符串（由 harness 投影 `run.result`） |
+| `finalize_tecan_overseas_recognition` | 无 | 仅普通 Tecan 请求返回 JSON 字符串（由 harness 兼容投影 `run.result`） |
 
 ---
 
@@ -203,7 +204,7 @@
 | 触发 | `api.post_run` 在 `create_run` **成功之后**、`append_run_created_log(...)` |
 | 语义 | best-effort；`except Exception: pass`，**永不**因 OMS 失败而回滚 run |
 | 格式 | 一行一个 JSON：`event=run_created`、`created_at`、`run_id`、`session_id`、`workflow`、`files[{name,path}]` |
-| `files` | 仅从请求 messages 的 `type=artifact` 块抽取 |
+| `files` | 仅从请求 messages 的 `type=artifact` 块抽取（`extract_run_files`；保序、不去重） |
 | 非目标 | **不是** `run_events`；**无**查询 API；**不**写 prompt/thinking/tool raw/`run.result` |
 | 时区 | 与 ledger 相同 UTC+8 `YYYY-MM-DD HH:MM:SS` |
 
@@ -243,7 +244,7 @@
 | 工具遥测 | `ToolTelemetry` middleware 经 `get_stream_writer` 发 started/completed/error + `duration_ms` |
 | 进度 | MinerU / extract_archives custom payload → `tool_progress` |
 | 查询 | `GET /runs/{run_id}` 返回 events、`latest_content_event`（排除 status/model_usage）、`usage` 汇总 |
-| 用量汇总 | `aggregate_model_usage` + API 层 cache hit rate / 分档 CNY 估价（仅 `MiniMax-M3` 可计价） |
+| 用量汇总 | `aggregate_model_usage` + API 层 cache hit rate / 分档 CNY 估价（仅 `MiniMax-M3` 可计价；`PRICING_AS_OF = "2026-07-12"`） |
 | 主 Agent 名 | `MAIN_AGENT_NAME = "dsagents-main"`；子 Agent 文本默认不投影，但 usage 仍记录 |
 | OMS | 旁路 JSONL 索引，**独立于** run_events |
 | LangSmith | 仅作为依赖链存在；本仓库**未**显式配置/接线 LangSmith tracing |
@@ -266,23 +267,23 @@
 | 项 | 事实 |
 |----|------|
 | HTTP 触发 | `POST /runs` body `workflow: "WGQ"` |
-| Skill 资源 | `/skills/philips_wgq_inbound_recognition/SKILL.md` |
+| Skill 资源 | `/skills/philips-wgq-inbound-recognition/SKILL.md` |
 | 货代版式 | `references/freight-forwarders.md`（DHL、DSV、FedEx、UPS、康捷空） |
 | 终态 schema | `PhilipsWgqRecognitionResult`（`skills/philips_wgq_inbound_recognition`） |
-| 投影 | ToolStrategy `structured_response` → `run.result` |
+| 投影 | ToolStrategy `structured_response` → 共享 `finalize_channel_result` → `run.result` |
 | 主数据 | Tracking XLSX + 可选 Oracle |
 | 工具 denylist | 去掉 `finalize_tecan_overseas_recognition` |
-| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（WGQ 专用；`can_jump_to` 须含 `"end"`） |
+| 恢复 | `StructuredOutputRecovery` / `StructuredOutputCompatibility`（workflow 共用；`can_jump_to` 须含 `"end"`） |
 
 ### Tecan 境外
 
 | 项 | 事实 |
 |----|------|
 | HTTP 触发 | `POST /runs` body `workflow: "DK"`；通用 run 的明确 Skill 请求仍可使用 finalizer |
-| Skill 资源 | `/skills/tecan_import/SKILL.md` + `references/` |
-| 终态 | `finalize_tecan_overseas_recognition` → `TecanOverseasRecognitionResult` → harness 捕获 ToolMessage → `run.result` |
+| Skill 资源 | `/skills/tecan-import/SKILL.md` + `references/` |
+| 终态 | `ToolStrategy(TecanOverseasRecognitionResult)` → `structured_response` → 共享 `finalize_channel_result` → `run.result` |
 | 主数据 | 确认唯一 12NC 后调用 `lookup_philips_wgq_master_data`（不传 Tracking），只补稳定字段 |
-| 工具 denylist | 当前为空；保留共享工具、共享 12NC lookup 与 finalizer |
+| 工具 denylist | 去掉 `finalize_tecan_overseas_recognition`；保留共享工具与共享 12NC lookup |
 | XLSX | `inspect_supply_chain_workbooks` 只读转 JSON；**不**写 Excel 模板 |
 
 两渠道 `items[]` 共用完整 24 字段合同；未知 `null`；无 `shipment`/Excel 噪声进最终 JSON。`input_problems` 仍为 run `succeeded`（业务 outcome，非传输失败）。
